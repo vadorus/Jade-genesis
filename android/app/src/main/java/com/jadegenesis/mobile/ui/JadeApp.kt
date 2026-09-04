@@ -108,8 +108,8 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                 )
 
                 Text(
-                    "Adaptive Distributed Core Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.5"),
+                    "Adaptive Learning Core Prototype " +
+                        (state.selfModel?.identity?.version ?: "0.0.6"),
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -393,7 +393,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                         }
 
                         Text(
-                            "Task Router : adaptatif 0.0.5",
+                            "Task Router : adaptatif 0.0.6",
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
@@ -403,10 +403,10 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                             "Le choix par tâche combine ressources, capacité requise et historique mesuré."
                         )
                         Text(
-                            "Liste blanche : genesis_probe, text_analysis. Aucune commande système arbitraire."
+                            "Liste blanche : genesis_probe, text_analysis, memory_consolidation. Aucune commande système arbitraire."
                         )
                         Text(
-                            "Historique local : ${state.taskHistory.size} tâche(s) chargée(s)."
+                            "Historique local : ${state.taskHistory.size} tâche(s). File active : ${state.pendingTasks}."
                         )
 
                         Spacer(Modifier.height(8.dp))
@@ -449,6 +449,24 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                             Text("Analyser sur le meilleur nœud")
                         }
 
+                        Spacer(Modifier.height(8.dp))
+
+                        Button(
+                            onClick = {
+                                vm.runMemoryConsolidation()
+                            },
+                            enabled =
+                                !state.taskBusy &&
+                                    state.memoryCount > 0,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Consolider ma mémoire")
+                        }
+
+                        Text(
+                            "La consolidation crée une connaissance traçable sans supprimer les mémoires sources."
+                        )
+
                         if (state.taskMessage.isNotBlank()) {
                             Spacer(Modifier.height(6.dp))
                             Text(state.taskMessage)
@@ -489,6 +507,20 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                             }
 
                             Text("Résultat : ${result.output.take(220)}")
+                        }
+
+                        if (state.taskQueue.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "File de tâches :",
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            state.taskQueue.take(4).forEach { queued ->
+                                Text(
+                                    "• ${queued.taskKind} — ${queued.status} — " +
+                                        (queued.selectedNodeName ?: "en attente")
+                                )
+                            }
                         }
 
                         if (state.taskHistory.isNotEmpty()) {

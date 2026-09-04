@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Jade Genesis Distributed Node Runtime 0.0.5
+Jade Genesis Distributed Node Runtime 0.0.6
 
 Dependency-free development runtime for Windows/Linux/macOS.
 It exposes:
 - GET /health: authenticated node profile
 - POST /task: authenticated allow-listed distributed tasks
 
-Allowed tasks in V0.0.5:
+Allowed tasks in V0.0.6:
 - genesis_probe: bounded SHA-256 compute probe
 - text_analysis: deterministic text metrics + digest
+- memory_consolidation: deterministic memory dedupe/contradiction signals
 
 It never executes arbitrary shell/system commands.
 """
@@ -35,15 +36,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-PROTOCOL = "jade-genesis-node/0.0.5"
-VERSION = "0.0.5"
+PROTOCOL = "jade-genesis-node/0.0.6"
+VERSION = "0.0.6"
 DEFAULT_PORT = 8765
-MAX_BODY_BYTES = 96 * 1024
-MAX_PAYLOAD_CHARS = 16_384
+MAX_BODY_BYTES = 192 * 1024
+MAX_PAYLOAD_CHARS = 48_000
 MAX_ITERATIONS = 100_000
 CONFIG_DIR = Path.home() / ".jade-genesis"
 CONFIG_PATH = CONFIG_DIR / "node-agent.json"
-ALLOWED_TASKS = ("genesis_probe", "text_analysis")
+ALLOWED_TASKS = ("genesis_probe", "text_analysis", "memory_consolidation")
 
 
 def round_gb(value: int | float) -> float:
@@ -218,8 +219,11 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
             "hardware_profile",
             "task_execution_v1",
             "task_execution_v2",
+            "task_execution_v3",
             "genesis_probe",
             "text_analysis",
+            "memory_consolidation",
+            "task_queue_v1",
         ],
         "timestamp": int(time.time() * 1000),
     }
@@ -261,6 +265,172 @@ def run_text_analysis(payload: str) -> tuple[str, int]:
     return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(duration_ms)
 
 
+
+MEMORY_STOP_WORDS = {
+    "le", "la", "les", "un", "une", "des", "de", "du",
+    "et", "ou", "a", "à", "au", "aux", "en", "dans",
+    "sur", "pour", "par", "avec", "que", "qui", "je",
+    "tu", "il", "elle", "nous", "vous", "ils", "elles",
+    "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa",
+    "ses", "ce", "cet", "cette", "ces", "est", "sont",
+    "être", "etre", "ai", "as", "avons", "avez", "ont",
+}
+NEGATION_WORDS = {
+    "ne", "n", "pas", "jamais", "aucun", "aucune",
+    "non", "plus", "sans",
+}
+
+
+def tokenize(text: str) -> list[str]:
+    return [
+        match.group(0).lower()
+        for match in re.finditer(
+            r"[^\W_]+(?:['’\-][^\W_]+)*|\d+",
+            text,
+            re.UNICODE,
+        )
+    ]
+
+
+def normalize_memory(text: str) -> str:
+    return " ".join(tokenize(text))
+
+
+def semantic_tokens(text: str) -> set[str]:
+    normalized = []
+    for token in tokenize(text):
+        if token.startswith("n'") or token.startswith("n’"):
+            token = token[2:]
+        normalized.append(token)
+    return {
+        token
+        for token in normalized
+        if token
+        and token not in MEMORY_STOP_WORDS
+        and token not in NEGATION_WORDS
+    }
+
+
+def has_negation(text: str) -> bool:
+    lowered = " " + text.lower()
+    return (
+        " n'" in lowered
+        or " n’" in lowered
+        or any(token in NEGATION_WORDS for token in tokenize(text))
+    )
+
+
+def count_potential_contradictions(memories: list[dict[str, Any]]) -> int:
+    count = 0
+    for left_index, left in enumerate(memories):
+        left_content = str(left.get("content", ""))
+        left_tokens = semantic_tokens(left_content)
+        if len(left_tokens) < 2:
+            continue
+
+        for right in memories[left_index + 1:]:
+            right_content = str(right.get("content", ""))
+            right_tokens = semantic_tokens(right_content)
+            if len(right_tokens) < 2:
+                continue
+
+            union = left_tokens | right_tokens
+            if not union:
+                continue
+            similarity = len(left_tokens & right_tokens) / len(union)
+            if (
+                similarity >= 0.6
+                and has_negation(left_content) != has_negation(right_content)
+            ):
+                count += 1
+    return count
+
+
+def run_memory_consolidation(payload: str) -> tuple[str, int]:
+    started = time.perf_counter_ns()
+    try:
+        request = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError("invalid_memory_payload") from exc
+
+    memories_raw = request.get("memories")
+    if not isinstance(memories_raw, list) or not memories_raw:
+        raise ValueError("empty_memory_batch")
+    if len(memories_raw) > 24:
+        raise ValueError("too_many_memories")
+
+    memories: list[dict[str, Any]] = []
+    for item in memories_raw:
+        if not isinstance(item, dict):
+            raise ValueError("invalid_memory_item")
+        memories.append(
+            {
+                "id": str(item.get("id", "")),
+                "type": str(item.get("type", "UNKNOWN")),
+                "content": str(item.get("content", "")),
+            }
+        )
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for memory in memories:
+        normalized = normalize_memory(memory["content"])
+        if normalized:
+            groups.setdefault(normalized, []).append(memory)
+
+    duplicate_groups = sum(1 for group in groups.values() if len(group) > 1)
+    duplicate_items = sum(
+        len(group) - 1
+        for group in groups.values()
+        if len(group) > 1
+    )
+
+    type_counts = Counter(memory["type"] for memory in memories)
+    term_counts = Counter(
+        token
+        for memory in memories
+        for token in tokenize(memory["content"])
+        if token not in MEMORY_STOP_WORDS
+    )
+    top_terms = sorted(
+        term_counts.items(),
+        key=lambda item: (-item[1], item[0]),
+    )[:6]
+    top_terms_text = ",".join(
+        f"{word}:{count}"
+        for word, count in top_terms
+    )
+
+    contradictions = count_potential_contradictions(memories)
+    unique_count = len(groups)
+    summary = (
+        f"{len(memories)} mémoire(s) examinée(s), "
+        f"{unique_count} contenu(s) unique(s), "
+        f"{duplicate_groups} groupe(s) de doublons, "
+        f"{contradictions} contradiction(s) potentielle(s)."
+    )
+    if top_terms_text:
+        summary += f" Thèmes dominants : {top_terms_text}."
+
+    result = {
+        "input_count": len(memories),
+        "unique_count": unique_count,
+        "duplicate_groups": duplicate_groups,
+        "duplicate_items": duplicate_items,
+        "potential_contradictions": contradictions,
+        "type_counts": dict(sorted(type_counts.items())),
+        "top_terms": top_terms_text,
+        "summary": summary,
+        "input_sha256": hashlib.sha256(
+            payload.encode("utf-8")
+        ).hexdigest(),
+    }
+    duration_ms = (time.perf_counter_ns() - started) // 1_000_000
+    return (
+        json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+        int(duration_ms),
+    )
+
+
 def execute_allowlisted_task(
     task_kind: str,
     payload: str,
@@ -273,6 +443,9 @@ def execute_allowlisted_task(
 
     if task_kind == "text_analysis":
         return run_text_analysis(payload)
+
+    if task_kind == "memory_consolidation":
+        return run_memory_consolidation(payload)
 
     raise ValueError("unsupported_task")
 
@@ -437,13 +610,57 @@ def self_test() -> int:
         print(f"SELF-TEST FAILED: unique_words={analysis}", file=sys.stderr)
         return 1
 
-    print("JADE NODE RUNTIME 0.0.5 SELF-TEST OK")
+    memory_payload = json.dumps(
+        {
+            "identity_id": "JG-self-test",
+            "memories": [
+                {
+                    "id": "1",
+                    "type": "FACT",
+                    "content": "Jade utilise le PC.",
+                },
+                {
+                    "id": "2",
+                    "type": "FACT",
+                    "content": "Jade utilise le PC.",
+                },
+                {
+                    "id": "3",
+                    "type": "OBSERVATION",
+                    "content": "Jade n'utilise pas le PC.",
+                },
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    consolidation_raw, _ = run_memory_consolidation(memory_payload)
+    consolidation = json.loads(consolidation_raw)
+    if consolidation.get("input_count") != 3:
+        print(
+            f"SELF-TEST FAILED: memory_count={consolidation}",
+            file=sys.stderr,
+        )
+        return 1
+    if consolidation.get("duplicate_groups") != 1:
+        print(
+            f"SELF-TEST FAILED: duplicate_groups={consolidation}",
+            file=sys.stderr,
+        )
+        return 1
+    if consolidation.get("input_sha256") != hashlib.sha256(
+        memory_payload.encode("utf-8")
+    ).hexdigest():
+        print("SELF-TEST FAILED: memory_digest", file=sys.stderr)
+        return 1
+
+    print("JADE NODE RUNTIME 0.0.6 SELF-TEST OK")
     return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Jade Genesis Distributed Node Runtime 0.0.5"
+        description="Jade Genesis Distributed Node Runtime 0.0.6"
     )
     parser.add_argument(
         "--port",
@@ -477,7 +694,7 @@ def main() -> int:
     ip = local_ip()
 
     print()
-    print("JADE GENESIS — DISTRIBUTED NODE RUNTIME 0.0.5")
+    print("JADE GENESIS — DISTRIBUTED NODE RUNTIME 0.0.6")
     print("=" * 49)
     print(f"Node ID : {config['node_id']}")
     print(f"IP LAN  : {ip}")
@@ -490,7 +707,7 @@ def main() -> int:
     print(f"  Jeton = {config['token']}")
     print()
     print("Endpoints : GET /health, POST /task")
-    print("Tâches autorisées : genesis_probe, text_analysis")
+    print("Tâches autorisées : genesis_probe, text_analysis, memory_consolidation")
     print("Aucune commande système arbitraire n'est exposée.")
     print("Ctrl+C pour arrêter.")
     print()

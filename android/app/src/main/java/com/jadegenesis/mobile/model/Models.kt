@@ -66,10 +66,17 @@ enum class TaskWorkload {
     HEAVY
 }
 
+enum class QueueTaskStatus {
+    PENDING,
+    RUNNING,
+    COMPLETED,
+    FAILED
+}
+
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.0.5",
+    val version: String = "0.0.6",
     val createdAt: Long
 )
 
@@ -189,6 +196,29 @@ data class DistributedTaskResult(
     val attempts: List<TaskAttempt>,
     val startedAt: Long,
     val completedAt: Long
+)
+
+data class QueuedTaskSnapshot(
+    val taskId: String,
+    val taskKind: String,
+    val workload: TaskWorkload,
+    val status: QueueTaskStatus,
+    val selectedNodeName: String? = null,
+    val attempts: Int = 0,
+    val error: String? = null,
+    val queuedAt: Long,
+    val updatedAt: Long
+)
+
+data class MemoryConsolidationSummary(
+    val inputCount: Int,
+    val uniqueCount: Int,
+    val duplicateGroups: Int,
+    val duplicateItems: Int,
+    val potentialContradictions: Int,
+    val topTerms: String,
+    val summary: String,
+    val inputSha256: String
 )
 
 data class Capability(

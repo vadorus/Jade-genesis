@@ -29,10 +29,11 @@ class NodeManager(
 
     companion object {
         private const val KEY_REMOTE_NODES = "remote_nodes_v1"
-        private const val PROTOCOL = "jade-genesis-node/0.0.5"
-        private const val LEGACY_PROTOCOL = "jade-genesis-node/0.0.4"
+        private const val PROTOCOL = "jade-genesis-node/0.0.6"
+        private const val LEGACY_PROTOCOL_005 = "jade-genesis-node/0.0.5"
+        private const val LEGACY_PROTOCOL_004 = "jade-genesis-node/0.0.4"
         private const val DEFAULT_PORT = 8765
-        private const val MAX_PAYLOAD_CHARS = 16_384
+        private const val MAX_PAYLOAD_CHARS = 48_000
     }
 
     private data class StoredNode(
@@ -97,8 +98,11 @@ class NodeManager(
             "prototype_brain",
             "task_execution_v1",
             "task_execution_v2",
+            "task_execution_v3",
             "genesis_probe",
-            "text_analysis"
+            "text_analysis",
+            "memory_consolidation",
+            "task_queue_v1"
         ),
         lastSeenAt = System.currentTimeMillis()
     )
@@ -211,7 +215,7 @@ class NodeManager(
                 compareByDescending<GenesisNode> {
                     "compute" in it.capabilities
                 }.thenByDescending {
-                    "task_execution_v2" in it.capabilities
+                    "task_execution_v3" in it.capabilities
                 }.thenByDescending {
                     it.ramAvailableGb
                 }.thenByDescending {
@@ -246,8 +250,8 @@ class NodeManager(
         if (node.status != NodeStatus.ONLINE) {
             error("Le nœud ${node.name} n'est pas en ligne.")
         }
-        if ("task_execution_v2" !in node.capabilities) {
-            error("Le nœud ${node.name} n'annonce pas task_execution_v2.")
+        if ("task_execution_v3" !in node.capabilities) {
+            error("Le nœud ${node.name} n'annonce pas task_execution_v3.")
         }
         if (request.requiredCapability !in node.capabilities) {
             error(
@@ -268,7 +272,7 @@ class NodeManager(
         val readTimeoutMs = when (request.workload) {
             TaskWorkload.LIGHT -> 8_000
             TaskWorkload.MEDIUM -> 15_000
-            TaskWorkload.HEAVY -> 30_000
+            TaskWorkload.HEAVY -> 45_000
         }
 
         val connection = (
@@ -406,7 +410,11 @@ class NodeManager(
                     val json = JSONObject(body)
                     val protocol = json.optString("protocol")
 
-                    if (protocol != PROTOCOL && protocol != LEGACY_PROTOCOL) {
+                    if (
+                        protocol != PROTOCOL &&
+                        protocol != LEGACY_PROTOCOL_005 &&
+                        protocol != LEGACY_PROTOCOL_004
+                    ) {
                         return@withContext node.copy(
                             status = NodeStatus.ERROR,
                             protocol = protocol,

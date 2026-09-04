@@ -7,6 +7,7 @@ import com.jadegenesis.mobile.core.JadeCore
 import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.NodeStatus
+import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.SelfModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,7 +18,9 @@ private data class RefreshBundle(
     val self: SelfModel,
     val memories: List<MemorySnapshot>,
     val memoryCount: Int,
-    val taskHistory: List<DistributedTaskResult>
+    val taskHistory: List<DistributedTaskResult>,
+    val taskQueue: List<QueuedTaskSnapshot>,
+    val pendingTasks: Int
 )
 
 data class JadeUiState(
@@ -30,6 +33,8 @@ data class JadeUiState(
     val taskMessage: String = "",
     val lastTaskResult: DistributedTaskResult? = null,
     val taskHistory: List<DistributedTaskResult> = emptyList(),
+    val taskQueue: List<QueuedTaskSnapshot> = emptyList(),
+    val pendingTasks: Int = 0,
     val memories: List<MemorySnapshot> = emptyList(),
     val memoryCount: Int = 0,
     val error: String? = null
@@ -53,7 +58,9 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     self = core.initialize(),
                     memories = core.latestMemories(),
                     memoryCount = core.memoryCount(),
-                    taskHistory = core.recentTaskHistory()
+                    taskHistory = core.recentTaskHistory(),
+                    taskQueue = core.recentTaskQueue(),
+                    pendingTasks = core.pendingTaskCount()
                 )
             }.onSuccess { bundle ->
                 _state.value = _state.value.copy(
@@ -62,6 +69,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     memories = bundle.memories,
                     memoryCount = bundle.memoryCount,
                     taskHistory = bundle.taskHistory,
+                    taskQueue = bundle.taskQueue,
+                    pendingTasks = bundle.pendingTasks,
                     lastTaskResult = bundle.taskHistory.firstOrNull(),
                     error = null
                 )
@@ -91,7 +100,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(
                     nodeBusy = false,
                     selfModel = self,
-                    nodeMessage = "Nœuds rafraîchis : $online distant(s) en ligne.",
+                    nodeMessage =
+                        "Nœuds rafraîchis : $online distant(s) en ligne.",
                     error = null
                 )
             }.onFailure { e ->
@@ -128,7 +138,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     nodeBusy = false,
                     selfModel = self,
                     nodeMessage = if (node.status == NodeStatus.ONLINE) {
-                        "${node.name} est en ligne (${node.protocol.ifBlank { "protocole inconnu" }})."
+                        "${node.name} est en ligne " +
+                            "(${node.protocol.ifBlank { "protocole inconnu" }})."
                     } else {
                         "${node.name} enregistré, mais pas joignable : " +
                             "${node.lastError ?: node.status.name}"
@@ -147,7 +158,9 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runDistributedProbe() {
         viewModelScope.launch {
-            beginTask("Le Task Router classe les nœuds pour genesis_probe…")
+            beginTask(
+                "La file reçoit genesis_probe puis le Task Router classe les nœuds…"
+            )
 
             runCatching {
                 core.runDistributedProbe()
@@ -169,10 +182,28 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            beginTask("Le Task Router classe les nœuds pour text_analysis…")
+            beginTask(
+                "La file reçoit text_analysis puis Jade choisit le meilleur nœud…"
+            )
 
             runCatching {
                 core.runDistributedTextAnalysis(clean)
+            }.onSuccess { result ->
+                finishTask(result)
+            }.onFailure { e ->
+                failTask(e)
+            }
+        }
+    }
+
+    fun runMemoryConsolidation() {
+        viewModelScope.launch {
+            beginTask(
+                "Jade prépare un lot de mémoire, le place dans la file et choisit un nœud…"
+            )
+
+            runCatching {
+                core.runMemoryConsolidation()
             }.onSuccess { result ->
                 finishTask(result)
             }.onFailure { e ->
@@ -212,6 +243,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     memories = core.latestMemories(),
                     memoryCount = core.memoryCount(),
                     taskHistory = core.recentTaskHistory(),
+                    taskQueue = core.recentTaskQueue(),
+                    pendingTasks = core.pendingTaskCount(),
                     error = null
                 )
             } catch (e: Exception) {
@@ -233,17 +266,32 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun finishTask(result: DistributedTaskResult) {
         val self = core.selfModel()
         val history = core.recentTaskHistory()
+        val queue = core.recentTaskQueue()
+        val memories = core.latestMemories()
+        val memoryCount = core.memoryCount()
+
         _state.value = _state.value.copy(
             taskBusy = false,
             selfModel = self,
             lastTaskResult = result,
             taskHistory = history,
+            taskQueue = queue,
+            pendingTasks = core.pendingTaskCount(),
+            memories = memories,
+            memoryCount = memoryCount,
             taskMessage = buildString {
                 append(
-                    "Tâche ${result.taskKind} exécutée sur ${result.executedNodeName}."
+                    "Tâche ${result.taskKind} exécutée sur " +
+                        "${result.executedNodeName}."
                 )
                 if (result.fallbackUsed) {
                     append(" Fallback utilisé.")
+                }
+                if (
+                    result.success &&
+                    result.taskKind == "memory_consolidation"
+                ) {
+                    append(" Une connaissance consolidée a été ajoutée à ma mémoire.")
                 }
             },
             error = null
@@ -254,6 +302,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(
             taskBusy = false,
             taskMessage = "",
+            taskQueue = core.recentTaskQueue(),
+            pendingTasks = core.pendingTaskCount(),
             error = e.message ?: e.toString()
         )
     }

@@ -14,14 +14,18 @@ import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.GenesisNode
 import com.jadegenesis.mobile.model.JadeIdentity
 import com.jadegenesis.mobile.model.MemorySnapshot
+import com.jadegenesis.mobile.model.MemoryType
+import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
 import com.jadegenesis.mobile.task.TaskLedger
+import com.jadegenesis.mobile.task.TaskQueue
 import com.jadegenesis.mobile.task.TaskRouter
 import com.jadegenesis.mobile.tools.ToolObservation
 import com.jadegenesis.mobile.tools.ToolRegistry
+import org.json.JSONObject
 
 class JadeCore(
     context: Context,
@@ -39,9 +43,11 @@ class JadeCore(
     private val brainRouter = BrainRouter(brainBackends)
     private val nodeManager = NodeManager(appContext, profiler)
     private val taskLedger = TaskLedger(appContext)
+    private val taskQueue = TaskQueue(appContext)
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
-        ledger = taskLedger
+        ledger = taskLedger,
+        queue = taskQueue
     )
 
     private var identity: JadeIdentity? = null
@@ -121,8 +127,62 @@ class JadeCore(
         )
     }
 
-    fun recentTaskHistory(limit: Int = 12): List<DistributedTaskResult> =
+    suspend fun runMemoryConsolidation(): DistributedTaskResult {
+        val activeIdentity = activeIdentity()
+        val device = profiler.capture()
+        val resourceBudget = resourceGovernor.evaluate(device)
+        val sourceMemories = memory.latest(24)
+
+        val result = taskRouter.runMemoryConsolidation(
+            identityId = activeIdentity.jadeId,
+            memories = sourceMemories,
+            device = device,
+            budget = resourceBudget
+        )
+
+        if (result.success) {
+            val json = JSONObject(result.output)
+            val summary = json
+                .optString("summary")
+                .trim()
+                .ifBlank {
+                    "Consolidation terminée sans résumé textuel."
+                }
+            val duplicateGroups = json.optInt("duplicate_groups", 0)
+            val contradictions =
+                json.optInt("potential_contradictions", 0)
+
+            memory.remember(
+                type = MemoryType.KNOWLEDGE,
+                content = buildString {
+                    append("Consolidation mémoire 0.0.6 : ")
+                    append(summary)
+                    append(
+                        " Doublons groupés : $duplicateGroups. " +
+                            "Contradictions potentielles : $contradictions."
+                    )
+                },
+                source = "JADE_CONSOLIDATION_0.0.6",
+                confidence = 0.85,
+                originNode = result.executedNodeId
+            )
+        }
+
+        return result
+    }
+
+    fun recentTaskHistory(
+        limit: Int = 12
+    ): List<DistributedTaskResult> =
         taskLedger.recent(limit)
+
+    fun recentTaskQueue(
+        limit: Int = 12
+    ): List<QueuedTaskSnapshot> =
+        taskQueue.recent(limit)
+
+    fun pendingTaskCount(): Int =
+        taskQueue.pendingCount()
 
     suspend fun rememberUserFact(content: String) {
         memory.rememberUserFact(content, profiler.nodeId())

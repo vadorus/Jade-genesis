@@ -38,14 +38,20 @@ class SelfModelBuilder {
         val onlineTaskNode = knownNodes.any {
             it.kind != NodeKind.PHONE &&
                 it.status == NodeStatus.ONLINE &&
-                "task_execution_v2" in it.capabilities
+                "task_execution_v3" in it.capabilities
         }
         val onlineGenericTaskNode = knownNodes.any {
             it.kind != NodeKind.PHONE &&
                 it.status == NodeStatus.ONLINE &&
-                "task_execution_v2" in it.capabilities &&
+                "task_execution_v3" in it.capabilities &&
                 "text_analysis" in it.capabilities &&
                 "genesis_probe" in it.capabilities
+        }
+        val onlineConsolidationNode = knownNodes.any {
+            it.kind != NodeKind.PHONE &&
+                it.status == NodeStatus.ONLINE &&
+                "task_execution_v3" in it.capabilities &&
+                "memory_consolidation" in it.capabilities
         }
 
         val capabilities = listOf(
@@ -71,20 +77,26 @@ class SelfModelBuilder {
             Capability(
                 "node_manager",
                 true,
-                "NodeManager 0.0.5",
-                "Registre les nœuds, mesure leur disponibilité, protocole et capacités."
+                "NodeManager 0.0.6",
+                "Registre les nœuds, mesure disponibilité, protocole, ressources et capacités."
             ),
             Capability(
                 "task_router",
                 true,
-                "AdaptiveTaskRouter 0.0.5",
-                "Classe les nœuds par ressources, charge et historique mesuré, puis essaie les alternatives si nécessaire."
+                "AdaptiveTaskRouter 0.0.6",
+                "Classe les nœuds par ressources, charge et historique mesuré, puis essaie les alternatives."
             ),
             Capability(
                 "task_ledger",
                 true,
-                "TaskLedger 0.0.5",
-                "Conserve les résultats, durées, échecs et fallbacks pour améliorer le routage futur."
+                "TaskLedger 0.0.6",
+                "Conserve résultats, durées, échecs et fallbacks pour améliorer le routage futur."
+            ),
+            Capability(
+                "task_queue",
+                true,
+                "PersistentTaskQueue 0.0.6",
+                "Conserve l'état PENDING/RUNNING/COMPLETED/FAILED des tâches distribuées et récupère les exécutions interrompues."
             ),
             Capability(
                 "adaptive_routing",
@@ -93,24 +105,43 @@ class SelfModelBuilder {
                 "Le routage utilise réellement les succès, échecs et durées précédemment mesurés."
             ),
             Capability(
+                "memory_consolidation",
+                true,
+                if (onlineConsolidationNode) {
+                    "DistributedMemoryConsolidation"
+                } else {
+                    "LocalMemoryConsolidation"
+                },
+                "Analyse un lot de mémoire, détecte doublons et contradictions potentielles puis stocke une connaissance consolidée."
+            ),
+            Capability(
                 "distributed_execution",
                 onlineTaskNode,
                 if (onlineTaskNode) {
-                    "TaskRouter_remote_ready_v2"
+                    "TaskRouter_remote_ready_v3"
                 } else {
                     "TaskRouter_local_fallback_only"
                 },
-                "La 0.0.5 possède un protocole générique de tâches autorisées et un fallback multi-nœuds."
+                "La 0.0.6 utilise un protocole de tâches v3 avec queue persistante et fallback multi-nœuds."
             ),
             Capability(
                 "generic_task_runtime",
                 onlineGenericTaskNode,
                 if (onlineGenericTaskNode) {
-                    "NodeRuntime_0.0.5"
+                    "NodeRuntime_0.0.6"
                 } else {
                     "NodeRuntime_upgrade_required"
                 },
-                "Tâches actuellement autorisées : genesis_probe et text_analysis."
+                "Tâches autorisées : genesis_probe, text_analysis et memory_consolidation."
+            ),
+            Capability(
+                "distributed_memory_consolidation",
+                onlineConsolidationNode,
+                if (onlineConsolidationNode) {
+                    "NodeRuntime_memory_consolidation_ready"
+                } else {
+                    "local_only_until_remote_upgrade"
+                }
             ),
             Capability(
                 "generative_ai",
@@ -145,8 +176,10 @@ class SelfModelBuilder {
 
         val limits = mutableListOf(
             "Aucun modèle génératif n'est encore connecté.",
-            "Le runtime 0.0.5 reste sur une liste blanche : genesis_probe et text_analysis uniquement ; aucune commande système arbitraire n'est exposée.",
-            "L'adaptation 0.0.5 concerne le routage mesurable des tâches ; Jade ne réécrit pas encore seule son code ni ses poids de modèle.",
+            "La consolidation 0.0.6 est déterministe et heuristique : une contradiction détectée est un signal à vérifier, pas une vérité automatiquement tranchée.",
+            "Le runtime reste sur une liste blanche : genesis_probe, text_analysis et memory_consolidation uniquement ; aucune commande système arbitraire n'est exposée.",
+            "La file persistante 0.0.6 suit et récupère l'état des tâches, mais l'ordonnancement autonome en arrière-plan viendra plus tard.",
+            "Jade ne réécrit pas encore seule son code ni les poids d'un modèle.",
             "Le lien LAN de développement utilise HTTP local avec un jeton de Node Runtime ; le chiffrement et l'appairage renforcé viendront plus tard.",
             "Le budget mémoire est une recommandation de fonctionnement sûr, pas une limite physique absolue d'Android.",
             "Caméra et micro seront ajoutés dans une étape ultérieure."

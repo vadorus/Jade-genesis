@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Jade Genesis PC Node Agent 0.0.3
+Jade Genesis Distributed Node Runtime 0.0.4
 
-Dependency-free development agent for Windows/Linux/macOS.
-It exposes only a read-only /health endpoint. It does NOT execute
-remote tasks in V0.0.3.
+Dependency-free development runtime for Windows/Linux/macOS.
+It exposes:
+- GET /health: authenticated node profile
+- POST /task: authenticated, bounded genesis_probe task only
+
+It does NOT execute arbitrary commands in V0.0.4.
 """
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import hmac
 import json
 import os
@@ -25,9 +29,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-PROTOCOL = "jade-genesis-node/0.0.3"
-VERSION = "0.0.3"
+PROTOCOL = "jade-genesis-node/0.0.4"
+VERSION = "0.0.4"
 DEFAULT_PORT = 8765
+MAX_BODY_BYTES = 64 * 1024
+MAX_PAYLOAD_CHARS = 4096
+MAX_ITERATIONS = 100_000
 CONFIG_DIR = Path.home() / ".jade-genesis"
 CONFIG_PATH = CONFIG_DIR / "node-agent.json"
 
@@ -198,43 +205,45 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
         "ram_available_gb": round_gb(available_ram) if available_ram else 0.0,
         "storage_free_gb": round_gb(storage_free) if storage_free else 0.0,
         "capabilities": [
-            "node_agent",
+            "node_runtime",
             "compute",
             "python_runtime",
             "hardware_profile",
+            "task_execution_v1",
+            "genesis_probe",
         ],
         "timestamp": int(time.time() * 1000),
     }
+
+
+def run_genesis_probe(payload: str, iterations: int) -> tuple[str, int]:
+    started = time.perf_counter_ns()
+    data = payload.encode("utf-8")
+
+    for _ in range(iterations):
+        data = hashlib.sha256(data).digest()
+
+    duration_ms = (time.perf_counter_ns() - started) // 1_000_000
+    return data.hex(), int(duration_ms)
 
 
 def make_handler(config: dict[str, Any]):
     class JadeNodeHandler(BaseHTTPRequestHandler):
         server_version = f"JadeGenesisNode/{VERSION}"
 
-        def do_GET(self) -> None:
-            if self.path != "/health":
-                self.send_error(404)
-                return
-
+        def _authorized(self) -> bool:
             supplied = self.headers.get("X-Jade-Token", "")
             expected = str(config["token"])
+            return hmac.compare_digest(supplied, expected)
 
-            if not hmac.compare_digest(supplied, expected):
-                self.send_response(401)
-                self.send_header(
-                    "Content-Type",
-                    "application/json; charset=utf-8",
-                )
-                self.end_headers()
-                self.wfile.write(b'{"error":"unauthorized"}')
-                return
-
+        def _send_json(self, status: int, body: dict[str, Any]) -> None:
             payload = json.dumps(
-                health_payload(config),
+                body,
                 ensure_ascii=False,
+                separators=(",", ":"),
             ).encode("utf-8")
 
-            self.send_response(200)
+            self.send_response(status)
             self.send_header(
                 "Content-Type",
                 "application/json; charset=utf-8",
@@ -242,6 +251,117 @@ def make_handler(config: dict[str, Any]):
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+
+        def _reject_if_unauthorized(self) -> bool:
+            if self._authorized():
+                return False
+            self._send_json(401, {"error": "unauthorized"})
+            return True
+
+        def do_GET(self) -> None:
+            if self.path != "/health":
+                self._send_json(404, {"error": "not_found"})
+                return
+
+            if self._reject_if_unauthorized():
+                return
+
+            self._send_json(200, health_payload(config))
+
+        def do_POST(self) -> None:
+            if self.path != "/task":
+                self._send_json(404, {"error": "not_found"})
+                return
+
+            if self._reject_if_unauthorized():
+                return
+
+            raw_length = self.headers.get("Content-Length", "")
+            try:
+                content_length = int(raw_length)
+            except ValueError:
+                self._send_json(411, {"error": "content_length_required"})
+                return
+
+            if content_length <= 0 or content_length > MAX_BODY_BYTES:
+                self._send_json(413, {"error": "request_too_large"})
+                return
+
+            try:
+                raw = self.rfile.read(content_length)
+                request = json.loads(raw.decode("utf-8"))
+            except Exception:
+                self._send_json(400, {"error": "invalid_json"})
+                return
+
+            if request.get("protocol") != PROTOCOL:
+                self._send_json(
+                    409,
+                    {
+                        "error": "protocol_mismatch",
+                        "protocol": PROTOCOL,
+                    },
+                )
+                return
+
+            task_id = str(request.get("task_id", "")).strip()
+            task_kind = str(request.get("task_kind", "")).strip()
+            payload = str(request.get("payload", ""))
+
+            try:
+                iterations = int(request.get("iterations", 0))
+            except (TypeError, ValueError):
+                iterations = 0
+
+            if not task_id or len(task_id) > 120:
+                self._send_json(400, {"error": "invalid_task_id"})
+                return
+
+            if task_kind != "genesis_probe":
+                self._send_json(
+                    400,
+                    {
+                        "error": "unsupported_task",
+                        "allowed": ["genesis_probe"],
+                    },
+                )
+                return
+
+            if len(payload) > MAX_PAYLOAD_CHARS:
+                self._send_json(413, {"error": "payload_too_large"})
+                return
+
+            if not (1 <= iterations <= MAX_ITERATIONS):
+                self._send_json(
+                    400,
+                    {
+                        "error": "iterations_out_of_range",
+                        "max": MAX_ITERATIONS,
+                    },
+                )
+                return
+
+            result, duration_ms = run_genesis_probe(
+                payload=payload,
+                iterations=iterations,
+            )
+
+            self._send_json(
+                200,
+                {
+                    "protocol": PROTOCOL,
+                    "agent_version": VERSION,
+                    "task_id": task_id,
+                    "task_kind": task_kind,
+                    "success": True,
+                    "node_id": config["node_id"],
+                    "node_name": f"PC — {socket.gethostname() or 'home'}",
+                    "result": result,
+                    "iterations": iterations,
+                    "duration_ms": duration_ms,
+                    "completed_at": int(time.time() * 1000),
+                },
+            )
 
         def log_message(self, fmt: str, *args: Any) -> None:
             print(
@@ -254,7 +374,7 @@ def make_handler(config: dict[str, Any]):
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Jade Genesis PC Node Agent 0.0.3"
+        description="Jade Genesis Distributed Node Runtime 0.0.4"
     )
     parser.add_argument(
         "--port",
@@ -280,8 +400,8 @@ def main() -> int:
     ip = local_ip()
 
     print()
-    print("JADE GENESIS — PC NODE AGENT 0.0.3")
-    print("=" * 42)
+    print("JADE GENESIS — DISTRIBUTED NODE RUNTIME 0.0.4")
+    print("=" * 49)
     print(f"Node ID : {config['node_id']}")
     print(f"IP LAN  : {ip}")
     print(f"Port    : {port}")
@@ -292,8 +412,9 @@ def main() -> int:
     print(f"  Port  = {port}")
     print(f"  Jeton = {config['token']}")
     print()
-    print("V0.0.3 expose uniquement /health.")
-    print("Aucune tâche distante ne peut encore être exécutée.")
+    print("Endpoints : GET /health, POST /task")
+    print("Tâche autorisée : genesis_probe uniquement.")
+    print("Aucune commande système arbitraire n'est exposée.")
     print("Ctrl+C pour arrêter.")
     print()
 
@@ -305,7 +426,7 @@ def main() -> int:
         server.daemon_threads = True
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nArrêt du Node Agent.")
+        print("\nArrêt du Distributed Node Runtime.")
     except OSError as exc:
         print(f"Erreur réseau : {exc}", file=sys.stderr)
         return 1

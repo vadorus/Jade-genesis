@@ -1,0 +1,2 @@
+com.jadegenesis.mobile
+style Theme_JadeGenesis

@@ -6,6 +6,7 @@ import com.jadegenesis.mobile.model.DeviceProfile
 import com.jadegenesis.mobile.model.GenesisNode
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
+import com.jadegenesis.mobile.model.NodeTaskResponse
 import com.jadegenesis.mobile.model.ResourceBudget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,7 +27,7 @@ class NodeManager(
 
     companion object {
         private const val KEY_REMOTE_NODES = "remote_nodes_v1"
-        private const val PROTOCOL = "jade-genesis-node/0.0.3"
+        private const val PROTOCOL = "jade-genesis-node/0.0.4"
         private const val DEFAULT_PORT = 8765
     }
 
@@ -86,7 +87,9 @@ class NodeManager(
             "memory",
             "device_inspection",
             "resource_governor",
-            "prototype_brain"
+            "prototype_brain",
+            "task_execution_v1",
+            "genesis_probe"
         ),
         lastSeenAt = System.currentTimeMillis()
     )
@@ -198,6 +201,8 @@ class NodeManager(
                 compareByDescending<GenesisNode> {
                     "compute" in it.capabilities
                 }.thenByDescending {
+                    "task_execution_v1" in it.capabilities
+                }.thenByDescending {
                     it.ramAvailableGb
                 }
             )
@@ -207,6 +212,109 @@ class NodeManager(
         } else {
             local ?: onlineRemote.firstOrNull()
         }
+    }
+
+    suspend fun executeGenesisProbe(
+        nodeId: String,
+        taskId: String,
+        payload: String,
+        iterations: Int
+    ): NodeTaskResponse = withContext(Dispatchers.IO) {
+        require(payload.length <= 4096) {
+            "Charge de test trop grande."
+        }
+        require(iterations in 1..100_000) {
+            "Nombre d'itérations hors limites."
+        }
+
+        val node = loadStoredNodes().firstOrNull {
+            it.nodeId == nodeId
+        } ?: error("Nœud distant inconnu : $nodeId")
+
+        if ("task_execution_v1" !in node.capabilities) {
+            error("Le nœud ${node.name} n'annonce pas task_execution_v1.")
+        }
+        if ("genesis_probe" !in node.capabilities) {
+            error("Le nœud ${node.name} ne sait pas exécuter genesis_probe.")
+        }
+
+        val requestBody = JSONObject().apply {
+            put("protocol", PROTOCOL)
+            put("task_id", taskId)
+            put("task_kind", "genesis_probe")
+            put("payload", payload)
+            put("iterations", iterations)
+        }.toString().toByteArray(Charsets.UTF_8)
+
+        val connection = (
+            URL("http://${node.host}:${node.port}/task")
+                .openConnection() as HttpURLConnection
+            ).apply {
+            requestMethod = "POST"
+            connectTimeout = 2200
+            readTimeout = 12_000
+            useCaches = false
+            doOutput = true
+            setRequestProperty("X-Jade-Token", node.token)
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty(
+                "Content-Type",
+                "application/json; charset=utf-8"
+            )
+            setFixedLengthStreamingMode(requestBody.size)
+        }
+
+        connection.outputStream.use {
+            it.write(requestBody)
+        }
+
+        val responseCode = connection.responseCode
+        val body = if (responseCode in 200..299) {
+            connection.inputStream
+        } else {
+            connection.errorStream
+        }?.bufferedReader(Charsets.UTF_8)
+            ?.use { it.readText() }
+            .orEmpty()
+
+        connection.disconnect()
+
+        if (responseCode != HttpURLConnection.HTTP_OK) {
+            val details = runCatching {
+                JSONObject(body).optString("error")
+            }.getOrNull().orEmpty()
+
+            error(
+                if (details.isNotBlank()) {
+                    "Node Agent HTTP $responseCode : $details"
+                } else {
+                    "Node Agent HTTP $responseCode"
+                }
+            )
+        }
+
+        val json = JSONObject(body)
+        val protocol = json.optString("protocol")
+        if (protocol != PROTOCOL) {
+            error("Réponse de tâche avec protocole incompatible : $protocol")
+        }
+        if (!json.optBoolean("success", false)) {
+            error(json.optString("error", "Échec de la tâche distante."))
+        }
+
+        val returnedTaskId = json.optString("task_id")
+        if (returnedTaskId != taskId) {
+            error("Le Node Agent a renvoyé un autre identifiant de tâche.")
+        }
+
+        NodeTaskResponse(
+            taskId = taskId,
+            nodeId = json.optString("node_id", node.nodeId),
+            nodeName = json.optString("node_name", node.name)
+                .ifBlank { node.name },
+            output = json.getString("result"),
+            durationMs = json.optLong("duration_ms", 0L)
+        )
     }
 
     private fun currentPublicNode(node: StoredNode): GenesisNode {

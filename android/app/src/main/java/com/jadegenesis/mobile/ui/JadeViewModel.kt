@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jadegenesis.mobile.core.JadeCore
+import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.SelfModel
@@ -15,9 +16,12 @@ import kotlinx.coroutines.launch
 data class JadeUiState(
     val loading: Boolean = true,
     val nodeBusy: Boolean = false,
+    val taskBusy: Boolean = false,
     val selfModel: SelfModel? = null,
     val response: String = "",
     val nodeMessage: String = "",
+    val taskMessage: String = "",
+    val lastTaskResult: DistributedTaskResult? = null,
     val memories: List<MemorySnapshot> = emptyList(),
     val memoryCount: Int = 0,
     val error: String? = null
@@ -123,6 +127,42 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(
                     nodeBusy = false,
                     nodeMessage = "",
+                    error = e.message ?: e.toString()
+                )
+            }
+        }
+    }
+
+    fun runDistributedProbe() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                taskBusy = true,
+                taskMessage = "Le Task Router choisit un nœud…",
+                error = null
+            )
+
+            runCatching {
+                core.runDistributedProbe()
+            }.onSuccess { result ->
+                val self = core.selfModel()
+                _state.value = _state.value.copy(
+                    taskBusy = false,
+                    selfModel = self,
+                    lastTaskResult = result,
+                    taskMessage = buildString {
+                        append(
+                            "Tâche ${result.taskKind} exécutée sur ${result.executedNodeName}."
+                        )
+                        if (result.fallbackUsed) {
+                            append(" Fallback local utilisé.")
+                        }
+                    },
+                    error = null
+                )
+            }.onFailure { e ->
+                _state.value = _state.value.copy(
+                    taskBusy = false,
+                    taskMessage = "",
                     error = e.message ?: e.toString()
                 )
             }

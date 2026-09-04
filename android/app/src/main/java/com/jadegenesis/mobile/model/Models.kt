@@ -32,10 +32,30 @@ enum class BrainResourceClass {
     HEAVY
 }
 
+enum class NodeKind {
+    PHONE,
+    PC,
+    VPS,
+    UNKNOWN
+}
+
+enum class NodeStatus {
+    LOCAL,
+    ONLINE,
+    OFFLINE,
+    UNKNOWN,
+    ERROR
+}
+
+enum class TaskExecutionLocation {
+    LOCAL,
+    REMOTE
+}
+
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.0.2",
+    val version: String = "0.0.4",
     val createdAt: Long
 )
 
@@ -90,6 +110,48 @@ data class BrainInfo(
     val details: String = ""
 )
 
+data class GenesisNode(
+    val nodeId: String,
+    val name: String,
+    val kind: NodeKind,
+    val status: NodeStatus,
+    val host: String = "",
+    val port: Int = 0,
+    val osName: String = "",
+    val cpuName: String = "",
+    val cpuCores: Int = 0,
+    val ramTotalGb: Double = 0.0,
+    val ramAvailableGb: Double = 0.0,
+    val storageFreeGb: Double = 0.0,
+    val capabilities: List<String> = emptyList(),
+    val lastSeenAt: Long = 0L,
+    val lastError: String? = null
+)
+
+data class NodeTaskResponse(
+    val taskId: String,
+    val nodeId: String,
+    val nodeName: String,
+    val output: String,
+    val durationMs: Long
+)
+
+data class DistributedTaskResult(
+    val taskId: String,
+    val taskKind: String,
+    val requestedNodeId: String?,
+    val requestedNodeName: String?,
+    val executedNodeId: String,
+    val executedNodeName: String,
+    val executionLocation: TaskExecutionLocation,
+    val success: Boolean,
+    val output: String,
+    val durationMs: Long,
+    val fallbackUsed: Boolean,
+    val fallbackReason: String? = null,
+    val completedAt: Long
+)
+
 data class Capability(
     val name: String,
     val available: Boolean,
@@ -103,6 +165,8 @@ data class SelfModel(
     val device: DeviceProfile,
     val resourceBudget: ResourceBudget,
     val activeBrain: BrainInfo,
+    val knownNodes: List<GenesisNode>,
+    val preferredComputeNodeId: String?,
     val capabilities: List<Capability>,
     val knownLimits: List<String>
 )

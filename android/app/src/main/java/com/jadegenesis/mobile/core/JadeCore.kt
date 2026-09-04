@@ -10,11 +10,9 @@ import com.jadegenesis.mobile.memory.JadeDatabase
 import com.jadegenesis.mobile.memory.MemoryStore
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainInfo
-import com.jadegenesis.mobile.model.GenesisNode
 import com.jadegenesis.mobile.model.JadeIdentity
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.SelfModel
-import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
 import com.jadegenesis.mobile.tools.ToolObservation
@@ -29,12 +27,9 @@ class JadeCore(
     private val profiler = DeviceProfiler(appContext)
     private val resourceGovernor = ResourceGovernor()
     private val tools = ToolRegistry(profiler)
-    private val memory = MemoryStore(
-        JadeDatabase.get(appContext).memoryDao()
-    )
+    private val memory = MemoryStore(JadeDatabase.get(appContext).memoryDao())
     private val selfModelBuilder = SelfModelBuilder()
     private val brainRouter = BrainRouter(brainBackends)
-    private val nodeManager = NodeManager(appContext, profiler)
 
     private var identity: JadeIdentity? = null
 
@@ -48,23 +43,13 @@ class JadeCore(
     fun brainInfos(): List<BrainInfo> = brainRouter.allInfos()
 
     suspend fun selfModel(): SelfModel {
-        val activeIdentity = identity ?: identityManager
-            .loadOrCreate()
-            .also {
-                identity = it
-            }
+        val activeIdentity = identity ?: identityManager.loadOrCreate().also {
+            identity = it
+        }
 
         val device = profiler.capture()
         val resourceBudget = resourceGovernor.evaluate(device)
         val activeBrain = brainRouter.activeInfo(resourceBudget)
-        val nodes = nodeManager.nodes(
-            device = device,
-            refreshRemote = false
-        )
-        val preferredNode = nodeManager.preferredComputeNode(
-            nodes = nodes,
-            budget = resourceBudget
-        )
 
         return selfModelBuilder.build(
             identity = activeIdentity,
@@ -72,25 +57,8 @@ class JadeCore(
             device = device,
             resourceBudget = resourceBudget,
             activeBrain = activeBrain,
-            knownNodes = nodes,
-            preferredComputeNodeId = preferredNode?.nodeId,
             toolNames = tools.names()
         )
-    }
-
-    suspend fun registerPcNode(
-        host: String,
-        port: Int,
-        token: String
-    ): GenesisNode = nodeManager.registerPcNode(
-        host = host,
-        port = port,
-        token = token
-    )
-
-    suspend fun refreshNodes(): SelfModel {
-        nodeManager.refreshRemoteNodes()
-        return selfModel()
     }
 
     suspend fun rememberUserFact(content: String) {

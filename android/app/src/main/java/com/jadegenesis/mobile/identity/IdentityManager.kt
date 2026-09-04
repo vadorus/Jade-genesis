@@ -21,7 +21,7 @@ class IdentityManager(private val context: Context) {
     }
 
     private companion object {
-        const val CURRENT_VERSION = "0.0.2"
+        const val CURRENT_VERSION = "0.0.3"
     }
 
     suspend fun loadOrCreate(): JadeIdentity {
@@ -33,8 +33,7 @@ class IdentityManager(private val context: Context) {
                 jadeId = existingId,
                 name = current[Keys.NAME] ?: "Jade Genesis",
                 version = CURRENT_VERSION,
-                createdAt =
-                    current[Keys.CREATED_AT] ?: System.currentTimeMillis()
+                createdAt = current[Keys.CREATED_AT] ?: System.currentTimeMillis()
             )
 
             if (current[Keys.VERSION] != CURRENT_VERSION) {

@@ -1,5 +1,9 @@
 package com.jadegenesis.mobile.ui
 
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +15,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -27,14 +32,46 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jadegenesis.mobile.model.NodeKind
+import com.jadegenesis.mobile.model.NodeStatus
+
+private const val LOCAL_NETWORK_PERMISSION =
+    "android.permission.ACCESS_LOCAL_NETWORK"
 
 @Composable
 fun JadeApp(vm: JadeViewModel = viewModel()) {
     val state by vm.state.collectAsState()
+    val context = LocalContext.current
+
     var input by remember { mutableStateOf("") }
+    var pcHost by remember { mutableStateOf("") }
+    var pcPort by remember { mutableStateOf("8765") }
+    var pcToken by remember { mutableStateOf("") }
+
+    val needsLocalNetworkPermission = Build.VERSION.SDK_INT >= 37
+
+    var localNetworkGranted by remember {
+        mutableStateOf(
+            !needsLocalNetworkPermission ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    LOCAL_NETWORK_PERMISSION
+                ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val localNetworkLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        localNetworkGranted = granted
+    }
 
     MaterialTheme {
         Surface(
@@ -67,7 +104,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                 Text(
                     "Android Core Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.2"),
+                        (state.selfModel?.identity?.version ?: "0.0.3"),
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -78,7 +115,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                         Text(self.identity.name)
                         Text("Version ${self.identity.version}")
                         Text("ID : ${self.identity.jadeId}")
-                        Text("Nœud : ${self.nodeId}")
+                        Text("Nœud actuel : ${self.nodeId}")
                         Text("Brain : ${self.activeBrain.displayName}")
                     }
 
@@ -116,7 +153,6 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                     InfoCard("Resource Governor") {
                         val r = self.resourceBudget
-
                         Text(
                             "Mode : ${r.mode}",
                             fontWeight = FontWeight.SemiBold
@@ -154,6 +190,182 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                         r.reasons.forEach {
                             Text("• $it")
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    InfoCard("Node Manager") {
+                        val preferred = self.knownNodes.firstOrNull {
+                            it.nodeId == self.preferredComputeNodeId
+                        }
+
+                        Text(
+                            "Nœuds connus : ${self.knownNodes.size}",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Nœud de calcul préféré : " +
+                                (preferred?.name ?: "aucun")
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        self.knownNodes.forEach { node ->
+                            val symbol = when (node.status) {
+                                NodeStatus.LOCAL -> "●"
+                                NodeStatus.ONLINE -> "✓"
+                                NodeStatus.OFFLINE -> "○"
+                                NodeStatus.ERROR -> "!"
+                                NodeStatus.UNKNOWN -> "?"
+                            }
+
+                            Text(
+                                "$symbol ${node.name} — ${node.kind} / ${node.status}",
+                                fontWeight = if (
+                                    node.nodeId == self.preferredComputeNodeId
+                                ) {
+                                    FontWeight.SemiBold
+                                } else {
+                                    FontWeight.Normal
+                                }
+                            )
+
+                            if (node.kind != NodeKind.PHONE) {
+                                Text("  ${node.host}:${node.port}")
+                            }
+
+                            if (node.cpuCores > 0) {
+                                Text(
+                                    "  CPU : ${node.cpuCores} cœurs" +
+                                        if (node.cpuName.isNotBlank()) {
+                                            " — ${node.cpuName}"
+                                        } else {
+                                            ""
+                                        }
+                                )
+                            }
+
+                            if (node.ramTotalGb > 0.0) {
+                                Text(
+                                    "  RAM : ${node.ramAvailableGb} / " +
+                                        "${node.ramTotalGb} Go libres/total"
+                                )
+                            }
+
+                            node.lastError
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    Text("  Erreur : $it")
+                                }
+
+                            Spacer(Modifier.height(5.dp))
+                        }
+
+                        if (
+                            needsLocalNetworkPermission &&
+                            !localNetworkGranted
+                        ) {
+                            Text(
+                                "Android 17 bloque le LAN tant que Jade " +
+                                    "n'a pas l'autorisation Réseau local."
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Button(
+                                onClick = {
+                                    localNetworkLauncher.launch(
+                                        LOCAL_NETWORK_PERMISSION
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Autoriser le réseau local")
+                            }
+                        } else {
+                            Text("Réseau local : autorisé")
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = pcHost,
+                            onValueChange = { pcHost = it },
+                            label = { Text("IP du PC") },
+                            placeholder = { Text("Ex : 192.168.1.25") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        OutlinedTextField(
+                            value = pcPort,
+                            onValueChange = { value ->
+                                pcPort = value
+                                    .filter { it.isDigit() }
+                                    .take(5)
+                            },
+                            label = { Text("Port") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number
+                            )
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        OutlinedTextField(
+                            value = pcToken,
+                            onValueChange = { pcToken = it },
+                            label = { Text("Jeton du Node Agent") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation =
+                                PasswordVisualTransformation()
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Button(
+                            onClick = {
+                                vm.registerPcNode(
+                                    host = pcHost.trim(),
+                                    port = pcPort.toIntOrNull() ?: 8765,
+                                    token = pcToken.trim()
+                                )
+                            },
+                            enabled =
+                                !state.nodeBusy &&
+                                    localNetworkGranted &&
+                                    pcHost.isNotBlank() &&
+                                    pcToken.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                if (state.nodeBusy) {
+                                    "Test en cours…"
+                                } else {
+                                    "Enregistrer + tester le PC"
+                                }
+                            )
+                        }
+
+                        Spacer(Modifier.height(6.dp))
+
+                        Button(
+                            onClick = { vm.refreshNodes() },
+                            enabled =
+                                !state.nodeBusy &&
+                                    localNetworkGranted,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Rafraîchir les nœuds")
+                        }
+
+                        if (state.nodeMessage.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(state.nodeMessage)
                         }
                     }
 
@@ -202,6 +414,19 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Évaluer mes ressources")
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        vm.send(
+                            "Quels nœuds connais-tu et lequel préfères-tu ?"
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Évaluer mes nœuds")
                 }
 
                 Spacer(Modifier.height(12.dp))

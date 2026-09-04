@@ -21,14 +21,39 @@ jobs:
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: 14742923
+          packages: >-
+            platform-tools
+            platforms;android-CinnamonBun
+            build-tools;37.0.0
 
-      - name: Install Android SDK 37
+      - name: Prepare Android 17 SDK
         run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-37"
-          sdkmanager "build-tools;36.0.0"
+          echo "===== Installed Android platforms ====="
+          ls -la "$ANDROID_SDK_ROOT/platforms"
+
+          if [ -d "$ANDROID_SDK_ROOT/platforms/android-CinnamonBun" ]; then
+            echo "Android 17 CinnamonBun SDK found"
+          else
+            echo "ERROR: Android CinnamonBun SDK not found"
+            exit 1
+          fi
+
+          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
+            ln -s \
+              "$ANDROID_SDK_ROOT/platforms/android-CinnamonBun" \
+              "$ANDROID_SDK_ROOT/platforms/android-37"
+          fi
+
+          echo "===== Android 37 platform ====="
+          ls -la "$ANDROID_SDK_ROOT/platforms/android-37"
+
+          if [ ! -f "$ANDROID_SDK_ROOT/platforms/android-37/android.jar" ]; then
+            echo "ERROR: android.jar for API 37 not found"
+            exit 1
+          fi
 
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
@@ -48,60 +73,69 @@ jobs:
 
           project = Path("jade-genesis-android-0.0.1")
           app_gradle = project / "app" / "build.gradle.kts"
-          root_gradle = project / "build.gradle.kts"
+
+          if not app_gradle.exists():
+              raise SystemExit(
+                  "ERROR: app/build.gradle.kts not found"
+              )
 
           text = app_gradle.read_text(encoding="utf-8")
 
-          # Android 17 / API 37 pour les dépendances AndroidX récentes.
+          # Android 17 / API 37
           text = re.sub(
-              r'compileSdk\s*=\s*\d+',
+              r'compileSdk\s*=\s*[0-9]+',
               'compileSdk = 37',
               text,
               count=1
           )
 
-          # On garde targetSdk 36 pour le moment.
+          # On conserve targetSdk 36 pour cette V0.1.
           text = re.sub(
-              r'targetSdk\s*=\s*\d+',
+              r'targetSdk\s*=\s*[0-9]+',
               'targetSdk = 36',
               text,
               count=1
           )
 
-          # AGP 9 utilise Kotlin intégré.
+          # AGP 9 intègre Kotlin.
           text = re.sub(
-              r'(?m)^\s*id\("org\.jetbrains\.kotlin\.android"\)\s*\n?',
+              r'(?m)^\s*id"org\.jetbrains\.kotlin\.android"\s*\n?',
               '',
               text
           )
 
-          # Ancienne configuration Kotlin incompatible avec AGP 9.
+          # Suppression de l'ancienne configuration Kotlin.
           text = re.sub(
               r'(?ms)^\s*kotlinOptions\s*\{\s*.*?^\s*\}\s*\n?',
               '',
               text
           )
 
-          app_gradle.write_text(text, encoding="utf-8")
+          app_gradle.write_text(
+              text,
+              encoding="utf-8"
+          )
 
-          # API 37 nécessite AGP 9.1.1 minimum.
-          if root_gradle.exists():
-              root_text = root_gradle.read_text(encoding="utf-8")
-
-              root_text = re.sub(
-                  r'(id\("com\.android\.application"\)\s+version\s+")[^"]+(")',
-                  r'\g<1>9.1.1\2',
-                  root_text
-              )
-
-              root_gradle.write_text(root_text, encoding="utf-8")
-
-          print("===== app/build.gradle.kts =====")
-          print(app_gradle.read_text(encoding="utf-8"))
-
-          print("===== build.gradle.kts =====")
-          print(root_gradle.read_text(encoding="utf-8"))
+          print("===== Final app/build.gradle.kts =====")
+          print(text)
           PY
+
+      - name: Verify build environment
+        run: |
+          echo "===== Java ====="
+          java -version
+
+          echo "===== Gradle ====="
+          gradle --version
+
+          echo "===== Android SDK ====="
+          echo "$ANDROID_SDK_ROOT"
+
+          echo "===== Platforms ====="
+          ls -la "$ANDROID_SDK_ROOT/platforms"
+
+          echo "===== Build Tools ====="
+          ls -la "$ANDROID_SDK_ROOT/build-tools"
 
       - name: Build Android APK
         run: |
@@ -110,9 +144,5 @@ jobs:
             :app:assembleDebug \
             --stacktrace
 
-      - name: Upload Jade Genesis APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Jade-Genesis-Android-0.0.1
-          path: jade-genesis-android-0.0.1/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+      - name: Verify APK
+        run: |

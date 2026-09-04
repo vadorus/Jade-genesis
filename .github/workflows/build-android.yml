@@ -20,40 +20,125 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK tools
         uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: 14742923
-          packages: >-
-            platform-tools
-            platforms;android-CinnamonBun
-            build-tools;37.0.0
+          packages: platform-tools
 
-      - name: Prepare Android 17 SDK
+      - name: Install Android 17 SDK
+        shell: bash
         run: |
-          echo "===== Installed Android platforms ====="
-          ls -la "$ANDROID_SDK_ROOT/platforms"
+          set -euo pipefail
 
-          if [ -d "$ANDROID_SDK_ROOT/platforms/android-CinnamonBun" ]; then
-            echo "Android 17 CinnamonBun SDK found"
-          else
-            echo "ERROR: Android CinnamonBun SDK not found"
+          echo "===== Accept Android licenses ====="
+          yes | sdkmanager --licenses >/dev/null || true
+
+          echo "===== Search Android 17 packages ====="
+
+          SDK_LIST="$(sdkmanager --list --channel=3)"
+
+          printf '%s\n' "$SDK_LIST" \
+            | grep -E 'platforms;android-|build-tools;' \
+            | tail -n 100 \
+            || true
+
+          PLATFORM_PACKAGE="$(
+            printf '%s\n' "$SDK_LIST" |
+            awk -F'|' '
+              /^[[:space:]]*platforms;android-/ {
+                pkg=$1
+
+                gsub(
+                  /^[[:space:]]+|[[:space:]]+$/,
+                  "",
+                  pkg
+                )
+
+                if (
+                  pkg ~ /^platforms;android-37/ ||
+                  $0 ~ /Cinnamon/
+                ) {
+                  print pkg
+                  exit
+                }
+              }
+            '
+          )"
+
+          if [ -z "$PLATFORM_PACKAGE" ]; then
+            echo "ERROR: Android 17 platform not found"
+
+            echo "===== Available Android platforms ====="
+
+            printf '%s\n' "$SDK_LIST" \
+              | grep 'platforms;android-' \
+              || true
+
             exit 1
           fi
 
-          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
+          echo "Android 17 package found:"
+          echo "$PLATFORM_PACKAGE"
+
+          echo "===== Install Android 17 ====="
+
+          sdkmanager \
+            "$PLATFORM_PACKAGE" \
+            "platform-tools" \
+            "build-tools;36.0.0" \
+            --channel=3
+
+          echo "===== Installed platforms ====="
+
+          ls -la "$ANDROID_SDK_ROOT/platforms"
+
+          if [ ! -f \
+            "$ANDROID_SDK_ROOT/platforms/android-37/android.jar" \
+          ]; then
+
+            echo "android-37 directory not found."
+            echo "Searching Android 17 android.jar..."
+
+            ANDROID17_JAR="$(
+              find "$ANDROID_SDK_ROOT/platforms" \
+                -maxdepth 2 \
+                -type f \
+                -name android.jar \
+                | grep -E 'android-(37|Cinnamon)' \
+                | head -n 1 \
+                || true
+            )"
+
+            if [ -z "$ANDROID17_JAR" ]; then
+              echo "ERROR: Android 17 android.jar not found"
+
+              find "$ANDROID_SDK_ROOT/platforms" \
+                -maxdepth 2 \
+                -type f \
+                -name android.jar \
+                -print
+
+              exit 1
+            fi
+
+            ANDROID17_DIR="$(dirname "$ANDROID17_JAR")"
+
+            echo "Android 17 directory:"
+            echo "$ANDROID17_DIR"
+
             ln -s \
-              "$ANDROID_SDK_ROOT/platforms/android-CinnamonBun" \
+              "$ANDROID17_DIR" \
               "$ANDROID_SDK_ROOT/platforms/android-37"
           fi
 
-          echo "===== Android 37 platform ====="
-          ls -la "$ANDROID_SDK_ROOT/platforms/android-37"
+          echo "===== Verify API 37 ====="
 
-          if [ ! -f "$ANDROID_SDK_ROOT/platforms/android-37/android.jar" ]; then
-            echo "ERROR: android.jar for API 37 not found"
-            exit 1
-          fi
+          test -f \
+            "$ANDROID_SDK_ROOT/platforms/android-37/android.jar"
+
+          ls -la \
+            "$ANDROID_SDK_ROOT/platforms/android-37"
 
       - name: Set up Gradle 9.6
         uses: gradle/actions/setup-gradle@v4
@@ -61,67 +146,214 @@ jobs:
           gradle-version: "9.6.0"
 
       - name: Extract Android project
+        shell: bash
         run: |
+          set -euo pipefail
+
           rm -rf jade-genesis-android-0.0.1
-          unzip -o jade-genesis-android-0.0.1.zip
+
+          unzip \
+            -o \
+            jade-genesis-android-0.0.1.zip
+
+          echo "===== Android project ====="
+
+          find \
+            jade-genesis-android-0.0.1 \
+            -maxdepth 2 \
+            -type f \
+            -print
 
       - name: Patch Android project
+        shell: bash
         run: |
+          set -euo pipefail
+
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          project = Path("jade-genesis-android-0.0.1")
-          app_gradle = project / "app" / "build.gradle.kts"
+          project = Path(
+              "jade-genesis-android-0.0.1"
+          )
+
+          root_gradle = (
+              project /
+              "build.gradle.kts"
+          )
+
+          app_gradle = (
+              project /
+              "app" /
+              "build.gradle.kts"
+          )
+
+          gradle_properties = (
+              project /
+              "gradle.properties"
+          )
 
           if not app_gradle.exists():
               raise SystemExit(
                   "ERROR: app/build.gradle.kts not found"
               )
 
-          text = app_gradle.read_text(encoding="utf-8")
+          # ---------------------------------
+          # Root build.gradle.kts
+          # ---------------------------------
 
-          # Android 17 / API 37
-          text = re.sub(
-              r'compileSdk\s*=\s*[0-9]+',
-              'compileSdk = 37',
-              text,
-              count=1
-          )
+          if root_gradle.exists():
 
-          # On conserve targetSdk 36 pour cette V0.1.
-          text = re.sub(
-              r'targetSdk\s*=\s*[0-9]+',
-              'targetSdk = 36',
-              text,
-              count=1
-          )
+              root = root_gradle.read_text(
+                  encoding="utf-8"
+              )
 
-          # AGP 9 intègre Kotlin.
-          text = re.sub(
-              r'(?m)^\s*id"org\.jetbrains\.kotlin\.android"\s*\n?',
-              '',
-              text
-          )
+              root = re.sub(
+                  r'id\("com\.android\.application"\)'
+                  r'\s+version\s+"[^"]+"',
+                  'id("com.android.application") '
+                  'version "9.4.0"',
+                  root
+              )
 
-          # Suppression de l'ancienne configuration Kotlin.
-          text = re.sub(
-              r'(?ms)^\s*kotlinOptions\s*\{\s*.*?^\s*\}\s*\n?',
-              '',
-              text
-          )
+              root = re.sub(
+                  r'(?m)^'
+                  r'\s*id\('
+                  r'"org\.jetbrains\.kotlin\.android"'
+                  r'\)'
+                  r'.*\n?',
+                  '',
+                  root
+              )
 
-          app_gradle.write_text(
-              text,
+              root_gradle.write_text(
+                  root,
+                  encoding="utf-8"
+              )
+
+          # ---------------------------------
+          # app/build.gradle.kts
+          # ---------------------------------
+
+          app = app_gradle.read_text(
               encoding="utf-8"
           )
 
-          print("===== Final app/build.gradle.kts =====")
-          print(text)
+          app = re.sub(
+              r'compileSdk\s*=\s*\d+',
+              'compileSdk = 37',
+              app,
+              count=1
+          )
+
+          app = re.sub(
+              r'targetSdk\s*=\s*\d+',
+              'targetSdk = 36',
+              app,
+              count=1
+          )
+
+          # AGP 9 has built-in Kotlin.
+          app = re.sub(
+              r'(?m)^'
+              r'\s*id\('
+              r'"org\.jetbrains\.kotlin\.android"'
+              r'\)'
+              r'\s*\n?',
+              '',
+              app
+          )
+
+          # Remove old Kotlin Android DSL.
+          app = re.sub(
+              r'(?ms)^'
+              r'\s*kotlinOptions\s*\{'
+              r'.*?'
+              r'^\s*\}'
+              r'\s*\n?',
+              '',
+              app
+          )
+
+          app_gradle.write_text(
+              app,
+              encoding="utf-8"
+          )
+
+          # ---------------------------------
+          # gradle.properties
+          # ---------------------------------
+
+          if gradle_properties.exists():
+
+              props = gradle_properties.read_text(
+                  encoding="utf-8"
+              )
+
+              if "android.builtInKotlin=" in props:
+
+                  props = re.sub(
+                      r'(?m)^'
+                      r'android\.builtInKotlin=.*$',
+                      'android.builtInKotlin=true',
+                      props
+                  )
+
+              else:
+
+                  props += (
+                      "\n"
+                      "android.builtInKotlin=true"
+                      "\n"
+                  )
+
+              gradle_properties.write_text(
+                  props,
+                  encoding="utf-8"
+              )
+
+          # ---------------------------------
+          # Display final configuration
+          # ---------------------------------
+
+          print(
+              "===== ROOT build.gradle.kts ====="
+          )
+
+          if root_gradle.exists():
+              print(
+                  root_gradle.read_text(
+                      encoding="utf-8"
+                  )
+              )
+
+          print(
+              "===== APP build.gradle.kts ====="
+          )
+
+          print(
+              app_gradle.read_text(
+                  encoding="utf-8"
+              )
+          )
+
+          print(
+              "===== gradle.properties ====="
+          )
+
+          if gradle_properties.exists():
+              print(
+                  gradle_properties.read_text(
+                      encoding="utf-8"
+                  )
+              )
           PY
 
       - name: Verify build environment
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "===== Java ====="
           java -version
 
@@ -131,18 +363,53 @@ jobs:
           echo "===== Android SDK ====="
           echo "$ANDROID_SDK_ROOT"
 
-          echo "===== Platforms ====="
+          echo "===== Android platforms ====="
           ls -la "$ANDROID_SDK_ROOT/platforms"
 
-          echo "===== Build Tools ====="
-          ls -la "$ANDROID_SDK_ROOT/build-tools"
+          echo "===== Android API 37 ====="
+          test -f \
+            "$ANDROID_SDK_ROOT/platforms/android-37/android.jar"
 
       - name: Build Android APK
+        shell: bash
         run: |
+          set -euo pipefail
+
           gradle \
             -p jade-genesis-android-0.0.1 \
             :app:assembleDebug \
-            --stacktrace
+            --stacktrace \
+            --info
 
       - name: Verify APK
+        shell: bash
         run: |
+          set -euo pipefail
+
+          echo "===== Generated APK ====="
+
+          find \
+            jade-genesis-android-0.0.1/app/build/outputs \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK_COUNT="$(
+            find \
+              jade-genesis-android-0.0.1/app/build/outputs \
+              -type f \
+              -name "*.apk" \
+              | wc -l
+          )"
+
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: No APK generated"
+            exit 1
+          fi
+
+      - name: Upload Jade Genesis APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jade-Genesis-Android-0.0.1
+          path: jade-genesis-android-0.0.1/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

@@ -23,11 +23,11 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 36
+      - name: Install Android SDK 37
         run: |
           yes | sdkmanager --licenses || true
           sdkmanager "platform-tools"
-          sdkmanager "platforms;android-36"
+          sdkmanager "platforms;android-37"
           sdkmanager "build-tools;36.0.0"
 
       - name: Set up Gradle 9.6
@@ -37,54 +37,70 @@ jobs:
 
       - name: Extract Android project
         run: |
+          rm -rf jade-genesis-android-0.0.1
           unzip -o jade-genesis-android-0.0.1.zip
 
-      - name: Patch Android project for AGP 9
+      - name: Patch Android project
         run: |
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          path = Path(
-              "jade-genesis-android-0.0.1/app/build.gradle.kts"
+          project = Path("jade-genesis-android-0.0.1")
+          app_gradle = project / "app" / "build.gradle.kts"
+          root_gradle = project / "build.gradle.kts"
+
+          text = app_gradle.read_text(encoding="utf-8")
+
+          # Android 17 / API 37 pour les dépendances AndroidX récentes.
+          text = re.sub(
+              r'compileSdk\s*=\s*\d+',
+              'compileSdk = 37',
+              text,
+              count=1
           )
 
-          text = path.read_text(encoding="utf-8")
-
-          # Android SDK 37 -> 36
-          text = text.replace(
-              "compileSdk = 37",
-              "compileSdk = 36"
+          # On garde targetSdk 36 pour le moment.
+          text = re.sub(
+              r'targetSdk\s*=\s*\d+',
+              'targetSdk = 36',
+              text,
+              count=1
           )
 
-          text = text.replace(
-              "targetSdk = 37",
-              "targetSdk = 36"
-          )
-
-          # AGP 9 possède désormais le support Kotlin intégré.
-          # On retire donc l'ancien plugin Kotlin Android.
+          # AGP 9 utilise Kotlin intégré.
           text = re.sub(
               r'(?m)^\s*id\("org\.jetbrains\.kotlin\.android"\)\s*\n?',
               '',
               text
           )
 
-          # Suppression de l'ancien bloc :
-          #
-          # kotlinOptions {
-          #     jvmTarget = "17"
-          # }
+          # Ancienne configuration Kotlin incompatible avec AGP 9.
           text = re.sub(
               r'(?ms)^\s*kotlinOptions\s*\{\s*.*?^\s*\}\s*\n?',
               '',
               text
           )
 
-          path.write_text(text, encoding="utf-8")
+          app_gradle.write_text(text, encoding="utf-8")
 
-          print("===== build.gradle.kts après correction =====")
-          print(text)
+          # API 37 nécessite AGP 9.1.1 minimum.
+          if root_gradle.exists():
+              root_text = root_gradle.read_text(encoding="utf-8")
+
+              root_text = re.sub(
+                  r'(id\("com\.android\.application"\)\s+version\s+")[^"]+(")',
+                  r'\g<1>9.1.1\2',
+                  root_text
+              )
+
+              root_gradle.write_text(root_text, encoding="utf-8")
+
+          print("===== app/build.gradle.kts =====")
+          print(app_gradle.read_text(encoding="utf-8"))
+
+          print("===== build.gradle.kts =====")
+          print(root_gradle.read_text(encoding="utf-8"))
           PY
 
       - name: Build Android APK

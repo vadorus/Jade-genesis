@@ -54,6 +54,11 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
     var pcHost by remember { mutableStateOf("") }
     var pcPort by remember { mutableStateOf("8765") }
     var pcToken by remember { mutableStateOf("") }
+    var distributedText by remember {
+        mutableStateOf(
+            "Jade Genesis répartit ses tâches selon les ressources disponibles."
+        )
+    }
 
     val needsLocalNetworkPermission = Build.VERSION.SDK_INT >= 37
 
@@ -103,8 +108,8 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                 )
 
                 Text(
-                    "Distributed Core Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.4"),
+                    "Adaptive Distributed Core Prototype " +
+                        (state.selfModel?.identity?.version ?: "0.0.5"),
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -205,7 +210,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            "Nœud de calcul préféré : " +
+                            "Nœud de calcul général préféré : " +
                                 (preferred?.name ?: "aucun")
                         )
 
@@ -233,6 +238,10 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                             if (node.kind != NodeKind.PHONE) {
                                 Text("  ${node.host}:${node.port}")
+                            }
+
+                            if (node.protocol.isNotBlank()) {
+                                Text("  Protocole : ${node.protocol}")
                             }
 
                             if (node.cpuCores > 0) {
@@ -325,7 +334,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                         OutlinedTextField(
                             value = pcToken,
                             onValueChange = { pcToken = it },
-                            label = { Text("Jeton du Node Agent") },
+                            label = { Text("Jeton du Node Runtime") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             visualTransformation =
@@ -378,21 +387,26 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                     Spacer(Modifier.height(10.dp))
 
-                    InfoCard("Distributed Runtime") {
+                    InfoCard("Adaptive Distributed Tasks") {
                         val preferred = self.knownNodes.firstOrNull {
                             it.nodeId == self.preferredComputeNodeId
                         }
 
                         Text(
-                            "Task Router : actif",
+                            "Task Router : adaptatif 0.0.5",
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            "Cible actuelle : ${preferred?.name ?: "local"}"
+                            "Cible générale actuelle : ${preferred?.name ?: "local"}"
                         )
                         Text(
-                            "Test V0.0.4 : genesis_probe — calcul SHA-256 borné, " +
-                                "aucune commande système arbitraire."
+                            "Le choix par tâche combine ressources, capacité requise et historique mesuré."
+                        )
+                        Text(
+                            "Liste blanche : genesis_probe, text_analysis. Aucune commande système arbitraire."
+                        )
+                        Text(
+                            "Historique local : ${state.taskHistory.size} tâche(s) chargée(s)."
                         )
 
                         Spacer(Modifier.height(8.dp))
@@ -406,9 +420,33 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                                 if (state.taskBusy) {
                                     "Routage en cours…"
                                 } else {
-                                    "Tester une tâche distribuée"
+                                    "Tester le calcul distribué"
                                 }
                             )
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = distributedText,
+                            onValueChange = { distributedText = it.take(12_000) },
+                            label = { Text("Texte pour text_analysis") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2
+                        )
+
+                        Spacer(Modifier.height(6.dp))
+
+                        Button(
+                            onClick = {
+                                vm.runDistributedTextAnalysis(distributedText)
+                            },
+                            enabled =
+                                !state.taskBusy &&
+                                    distributedText.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Analyser sur le meilleur nœud")
                         }
 
                         if (state.taskMessage.isNotBlank()) {
@@ -419,6 +457,8 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                         state.lastTaskResult?.let { result ->
                             Spacer(Modifier.height(8.dp))
                             Text("Tâche : ${result.taskId}")
+                            Text("Type : ${result.taskKind}")
+                            Text("État : ${result.status}")
                             Text(
                                 "Nœud demandé : " +
                                     (result.requestedNodeName ?: "aucun")
@@ -427,17 +467,42 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                                 "Nœud exécutant : ${result.executedNodeName} " +
                                     "(${result.executionLocation})"
                             )
-                            Text("Durée : ${result.durationMs} ms")
+                            Text("Durée mesurée : ${result.durationMs} ms")
                             Text(
                                 "Fallback : " +
                                     if (result.fallbackUsed) "oui" else "non"
                             )
+                            Text("Décision : ${result.routeReason}")
                             result.fallbackReason?.let {
                                 Text("Raison fallback : $it")
                             }
+
+                            if (result.attempts.isNotEmpty()) {
+                                Text("Tentatives :")
+                                result.attempts.forEachIndexed { index, attempt ->
+                                    Text(
+                                        "  ${index + 1}. ${attempt.nodeName} — " +
+                                            "${if (attempt.success) "succès" else "échec"} — " +
+                                            "${attempt.durationMs} ms"
+                                    )
+                                }
+                            }
+
+                            Text("Résultat : ${result.output.take(220)}")
+                        }
+
+                        if (state.taskHistory.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                "Résultat : ${result.output.take(32)}…"
+                                "Dernières mesures :",
+                                fontWeight = FontWeight.SemiBold
                             )
+                            state.taskHistory.take(3).forEach { result ->
+                                Text(
+                                    "• ${result.taskKind} — ${result.executedNodeName} — " +
+                                        "${result.durationMs} ms — ${result.status}"
+                                )
+                            }
                         }
                     }
 
@@ -508,7 +573,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     onValueChange = { input = it },
                     label = { Text("Parler à Jade") },
                     placeholder = {
-                        Text("Ex : Retiens que le test vaut 42")
+                        Text("Ex : Comment adaptes-tu tes tâches ?")
                     },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2

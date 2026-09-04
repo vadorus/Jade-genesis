@@ -1,25 +1,45 @@
-# Jade Genesis — Distributed Node Runtime 0.0.4
+# Jade Genesis — Distributed Node Runtime 0.0.5
 
-Ce runtime transforme progressivement le PC en nœud d'une **même Jade Genesis distribuée**. Il conserve le même `node_id`, le même port et le même jeton que le Node Agent 0.0.3 via `%USERPROFILE%\.jade-genesis\node-agent.json`.
+This runtime turns a PC into a compute node for the same Jade Genesis identity running across devices.
 
-## Windows
+## Start on Windows
 
-Aucune dépendance Python externe n'est nécessaire.
+Open PowerShell in the folder containing `jade_node_agent.py` and run:
 
 ```powershell
 py jade_node_agent.py
 ```
 
-ou depuis la racine du dépôt :
+The runtime prints the LAN IP, port and pairing token to enter in Jade Android > Node Manager.
+
+The node ID, token and port remain stored in:
+
+`%USERPROFILE%\.jade-genesis\node-agent.json`
+
+So upgrading from 0.0.4 to 0.0.5 keeps the same node identity and token unless `--reset-token` is explicitly used.
+
+## V0.0.5 protocol
+
+Protocol: `jade-genesis-node/0.0.5`
+
+Endpoints:
+
+- `GET /health`
+- `POST /task`
+
+Allowed tasks:
+
+- `genesis_probe` — bounded SHA-256 compute probe
+- `text_analysis` — deterministic text metrics and SHA-256 digest
+
+No arbitrary shell or system command execution is exposed.
+
+## Self test
 
 ```powershell
-py node-agent\jade_node_agent.py
+py jade_node_agent.py --self-test
 ```
 
-Le runtime expose :
-- `GET /health` : profil matériel et état du nœud ;
-- `POST /task` : première exécution distante bornée.
+Expected output:
 
-En 0.0.4, **seule** la tâche `genesis_probe` est autorisée. Elle effectue un calcul SHA-256 borné pour valider le routage, le retour de résultat et le fallback. Aucune commande système arbitraire n'est exposée.
-
-Dans Jade Android, le Task Router choisit automatiquement le nœud d'exécution selon le Resource Governor et l'état des nœuds. Si l'exécution distante échoue, Jade revient au téléphone.
+`JADE NODE RUNTIME 0.0.5 SELF-TEST OK`

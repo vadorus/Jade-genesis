@@ -52,10 +52,24 @@ enum class TaskExecutionLocation {
     REMOTE
 }
 
+enum class TaskStatus {
+    CREATED,
+    ROUTING,
+    RUNNING,
+    COMPLETED,
+    FAILED
+}
+
+enum class TaskWorkload {
+    LIGHT,
+    MEDIUM,
+    HEAVY
+}
+
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.0.4",
+    val version: String = "0.0.5",
     val createdAt: Long
 )
 
@@ -117,6 +131,7 @@ data class GenesisNode(
     val status: NodeStatus,
     val host: String = "",
     val port: Int = 0,
+    val protocol: String = "",
     val osName: String = "",
     val cpuName: String = "",
     val cpuCores: Int = 0,
@@ -128,12 +143,32 @@ data class GenesisNode(
     val lastError: String? = null
 )
 
+data class DistributedTaskRequest(
+    val taskId: String,
+    val taskKind: String,
+    val payload: String,
+    val requiredCapability: String,
+    val workload: TaskWorkload,
+    val iterations: Int = 0,
+    val createdAt: Long
+)
+
 data class NodeTaskResponse(
     val taskId: String,
+    val taskKind: String,
     val nodeId: String,
     val nodeName: String,
     val output: String,
     val durationMs: Long
+)
+
+data class TaskAttempt(
+    val nodeId: String,
+    val nodeName: String,
+    val executionLocation: TaskExecutionLocation,
+    val success: Boolean,
+    val durationMs: Long,
+    val error: String? = null
 )
 
 data class DistributedTaskResult(
@@ -144,11 +179,15 @@ data class DistributedTaskResult(
     val executedNodeId: String,
     val executedNodeName: String,
     val executionLocation: TaskExecutionLocation,
+    val status: TaskStatus,
     val success: Boolean,
     val output: String,
     val durationMs: Long,
     val fallbackUsed: Boolean,
     val fallbackReason: String? = null,
+    val routeReason: String,
+    val attempts: List<TaskAttempt>,
+    val startedAt: Long,
     val completedAt: Long
 )
 

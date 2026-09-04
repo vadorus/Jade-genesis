@@ -13,6 +13,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+private data class RefreshBundle(
+    val self: SelfModel,
+    val memories: List<MemorySnapshot>,
+    val memoryCount: Int,
+    val taskHistory: List<DistributedTaskResult>
+)
+
 data class JadeUiState(
     val loading: Boolean = true,
     val nodeBusy: Boolean = false,
@@ -22,6 +29,7 @@ data class JadeUiState(
     val nodeMessage: String = "",
     val taskMessage: String = "",
     val lastTaskResult: DistributedTaskResult? = null,
+    val taskHistory: List<DistributedTaskResult> = emptyList(),
     val memories: List<MemorySnapshot> = emptyList(),
     val memoryCount: Int = 0,
     val error: String? = null
@@ -41,16 +49,20 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         viewModelScope.launch {
             runCatching {
-                val self = core.initialize()
-                val memories = core.latestMemories()
-                val count = core.memoryCount()
-                Triple(self, memories, count)
-            }.onSuccess { (self, memories, count) ->
+                RefreshBundle(
+                    self = core.initialize(),
+                    memories = core.latestMemories(),
+                    memoryCount = core.memoryCount(),
+                    taskHistory = core.recentTaskHistory()
+                )
+            }.onSuccess { bundle ->
                 _state.value = _state.value.copy(
                     loading = false,
-                    selfModel = self,
-                    memories = memories,
-                    memoryCount = count,
+                    selfModel = bundle.self,
+                    memories = bundle.memories,
+                    memoryCount = bundle.memoryCount,
+                    taskHistory = bundle.taskHistory,
+                    lastTaskResult = bundle.taskHistory.firstOrNull(),
                     error = null
                 )
             }.onFailure { e ->
@@ -116,7 +128,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     nodeBusy = false,
                     selfModel = self,
                     nodeMessage = if (node.status == NodeStatus.ONLINE) {
-                        "${node.name} est en ligne."
+                        "${node.name} est en ligne (${node.protocol.ifBlank { "protocole inconnu" }})."
                     } else {
                         "${node.name} enregistré, mais pas joignable : " +
                             "${node.lastError ?: node.status.name}"
@@ -135,36 +147,36 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun runDistributedProbe() {
         viewModelScope.launch {
-            _state.value = _state.value.copy(
-                taskBusy = true,
-                taskMessage = "Le Task Router choisit un nœud…",
-                error = null
-            )
+            beginTask("Le Task Router classe les nœuds pour genesis_probe…")
 
             runCatching {
                 core.runDistributedProbe()
             }.onSuccess { result ->
-                val self = core.selfModel()
-                _state.value = _state.value.copy(
-                    taskBusy = false,
-                    selfModel = self,
-                    lastTaskResult = result,
-                    taskMessage = buildString {
-                        append(
-                            "Tâche ${result.taskKind} exécutée sur ${result.executedNodeName}."
-                        )
-                        if (result.fallbackUsed) {
-                            append(" Fallback local utilisé.")
-                        }
-                    },
-                    error = null
-                )
+                finishTask(result)
             }.onFailure { e ->
-                _state.value = _state.value.copy(
-                    taskBusy = false,
-                    taskMessage = "",
-                    error = e.message ?: e.toString()
-                )
+                failTask(e)
+            }
+        }
+    }
+
+    fun runDistributedTextAnalysis(text: String) {
+        val clean = text.trim()
+        if (clean.isBlank()) {
+            _state.value = _state.value.copy(
+                error = "Entre un texte à analyser."
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            beginTask("Le Task Router classe les nœuds pour text_analysis…")
+
+            runCatching {
+                core.runDistributedTextAnalysis(clean)
+            }.onSuccess { result ->
+                finishTask(result)
+            }.onFailure { e ->
+                failTask(e)
             }
         }
     }
@@ -199,6 +211,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     selfModel = core.selfModel(),
                     memories = core.latestMemories(),
                     memoryCount = core.memoryCount(),
+                    taskHistory = core.recentTaskHistory(),
                     error = null
                 )
             } catch (e: Exception) {
@@ -207,5 +220,41 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+    }
+
+    private fun beginTask(message: String) {
+        _state.value = _state.value.copy(
+            taskBusy = true,
+            taskMessage = message,
+            error = null
+        )
+    }
+
+    private suspend fun finishTask(result: DistributedTaskResult) {
+        val self = core.selfModel()
+        val history = core.recentTaskHistory()
+        _state.value = _state.value.copy(
+            taskBusy = false,
+            selfModel = self,
+            lastTaskResult = result,
+            taskHistory = history,
+            taskMessage = buildString {
+                append(
+                    "Tâche ${result.taskKind} exécutée sur ${result.executedNodeName}."
+                )
+                if (result.fallbackUsed) {
+                    append(" Fallback utilisé.")
+                }
+            },
+            error = null
+        )
+    }
+
+    private fun failTask(e: Throwable) {
+        _state.value = _state.value.copy(
+            taskBusy = false,
+            taskMessage = "",
+            error = e.message ?: e.toString()
+        )
     }
 }

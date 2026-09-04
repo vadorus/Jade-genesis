@@ -11,7 +11,7 @@ import com.jadegenesis.mobile.model.NodeStatus
 class PrototypeBrain : BrainBackend {
 
     override val info = BrainInfo(
-        id = "prototype-brain-0.0.4",
+        id = "prototype-brain-0.0.5",
         displayName = "Prototype Brain",
         backendType = BrainBackendType.PROTOTYPE,
         location = "distributed-core",
@@ -20,11 +20,45 @@ class PrototypeBrain : BrainBackend {
         paidApi = false,
         available = true,
         priority = 1,
-        details = "Cerveau local à règles, utilisé comme secours et pour valider l'architecture distribuée."
+        details = "Cerveau local à règles, utilisé comme secours pendant la construction du runtime distribué adaptatif."
     )
 
     override suspend fun think(context: BrainContext): BrainResult {
         val text = context.userInput.lowercase().trim()
+
+        if (
+            "amélior" in text ||
+            "amelior" in text ||
+            "apprend" in text ||
+            "apprentissage" in text ||
+            "évolu" in text ||
+            "evolu" in text ||
+            "adapt" in text
+        ) {
+            val self = context.selfModel
+            val compatible = self.knownNodes.count {
+                it.status == NodeStatus.ONLINE &&
+                    "task_execution_v2" in it.capabilities
+            }
+
+            return BrainResult(
+                text = buildString {
+                    append(
+                        "En 0.0.5 mon amélioration mesurable commence par le routage. " +
+                            "Je conserve pour chaque tâche le nœud tenté, le succès ou l'échec, " +
+                            "la durée et les fallbacks. Mon Task Router réutilise cet historique " +
+                            "avec l'état actuel des ressources pour classer les nœuds lors des tâches suivantes. "
+                    )
+                    append(
+                        "J'ai actuellement $compatible nœud(s) distant(s) compatible(s) avec le protocole de tâches v2. "
+                    )
+                    append(
+                        "Je ne modifie pas encore seule mon code ni les poids d'un modèle : cette étape viendra " +
+                            "seulement avec des mécanismes de proposition, test, validation et retour arrière."
+                    )
+                }
+            )
+        }
 
         if (
             "tâche" in text ||
@@ -41,32 +75,31 @@ class PrototypeBrain : BrainBackend {
             val compatible = self.knownNodes.filter {
                 it.kind != NodeKind.PHONE &&
                     it.status == NodeStatus.ONLINE &&
-                    "task_execution_v1" in it.capabilities
+                    "task_execution_v2" in it.capabilities
             }
 
             return BrainResult(
                 text = buildString {
                     append(
-                        "Mon Task Router 0.0.4 choisit le nœud d'exécution à partir " +
-                            "de mon Resource Governor et de l'état réel de mes nœuds. "
+                        "Mon Adaptive Task Router 0.0.5 classe les nœuds à partir de mes ressources actuelles, " +
+                            "de leurs capacités et de l'historique mesuré de mes exécutions. "
                     )
                     preferred?.let {
-                        append("Le nœud actuellement préféré est ${it.name}. ")
+                        append("Le nœud de calcul général actuellement préféré est ${it.name}. ")
                     }
                     if (compatible.isNotEmpty()) {
                         append(
-                            "J'ai ${compatible.size} nœud(s) distant(s) compatible(s) " +
-                                "avec l'exécution de tâche bornée. "
+                            "J'ai ${compatible.size} nœud(s) distant(s) compatible(s) avec task_execution_v2. "
                         )
                     } else {
                         append(
-                            "Aucun nœud distant compatible n'est actuellement prêt, " +
-                                "donc je peux retomber sur mon nœud local. "
+                            "Aucun nœud distant v2 n'est actuellement prêt, donc j'utilise mon nœud local. "
                         )
                     }
                     append(
-                        "Pour cette version je n'expose aucune commande système arbitraire : " +
-                            "seule la tâche de validation genesis_probe est autorisée."
+                        "Les tâches autorisées dans cette version sont genesis_probe et text_analysis. " +
+                            "Si le premier nœud choisi échoue, j'essaie les nœuds compatibles suivants. " +
+                            "Aucune commande système arbitraire n'est exposée."
                     )
                 }
             )
@@ -99,14 +132,12 @@ class PrototypeBrain : BrainBackend {
                     )
 
                     if (online.isEmpty()) {
-                        append(
-                            "Aucun nœud distant n'est actuellement en ligne. "
-                        )
+                        append("Aucun nœud distant n'est actuellement en ligne. ")
                     } else {
                         append(
                             "En ligne : " +
                                 online.joinToString {
-                                    "${it.name} (${it.ramAvailableGb} Go RAM libres)"
+                                    "${it.name} (${it.ramAvailableGb} Go RAM libres, ${it.protocol.ifBlank { "protocole inconnu" }})"
                                 } +
                                 ". "
                         )
@@ -114,15 +145,13 @@ class PrototypeBrain : BrainBackend {
 
                     preferred?.let {
                         append(
-                            "Pour l'état actuel de mes ressources, mon nœud de " +
-                                "calcul préféré est ${it.name}. "
+                            "Pour l'état actuel de mes ressources, mon nœud de calcul général préféré est ${it.name}. "
                         )
                     }
 
                     append(
-                        "En 0.0.4 mon Task Router peut envoyer une première tâche réelle " +
-                            "et bornée vers un nœud compatible, récupérer son résultat " +
-                            "et revenir automatiquement au local si nécessaire."
+                        "Pour une tâche précise, la 0.0.5 recalcule ensuite le meilleur nœud selon la capacité demandée, " +
+                            "la charge de travail et ses mesures passées."
                     )
                 }
             )
@@ -155,19 +184,16 @@ class PrototypeBrain : BrainBackend {
                 text = buildString {
                     append("Mon Resource Governor est en mode ${r.mode}. ")
                     append(
-                        "Je recommande un budget de travail d'environ " +
-                            "${r.recommendedWorkingSetMb} Mo, "
+                        "Je recommande un budget de travail d'environ ${r.recommendedWorkingSetMb} Mo, "
                     )
                     append(
                         "avec ${r.maxParallelTasks} tâche(s) parallèle(s) maximum. "
                     )
                     append(
-                        "Je garde une réserve système cible d'environ " +
-                            "${r.systemRamReserveGb} Go. "
+                        "Je garde une réserve système cible d'environ ${r.systemRamReserveGb} Go. "
                     )
                     append(
-                        "Ma mémoire de processus utilise actuellement " +
-                            "${d.processHeapUsedMb} Mo sur ${d.processHeapMaxMb} Mo. "
+                        "Ma mémoire de processus utilise actuellement ${d.processHeapUsedMb} Mo sur ${d.processHeapMaxMb} Mo. "
                     )
 
                     if (
@@ -175,18 +201,15 @@ class PrototypeBrain : BrainBackend {
                         preferredRemote != null
                     ) {
                         append(
-                            "Pour les calculs lourds, mon Node Manager préfère " +
-                                "${preferredRemote.name}. "
+                            "Pour les calculs lourds, mon Node Manager préfère ${preferredRemote.name}. "
                         )
                     } else if (r.preferRemoteCompute) {
                         append(
-                            "Pour les calculs lourds, je dois préférer un autre nœud " +
-                                "dès qu'il sera disponible. "
+                            "Pour les calculs lourds, je dois préférer un autre nœud dès qu'il sera disponible. "
                         )
                     } else {
                         append(
-                            "Les ressources locales sont actuellement suffisantes " +
-                                "pour mon niveau de charge. "
+                            "Les ressources locales sont actuellement suffisantes pour mon niveau de charge. "
                         )
                     }
 
@@ -222,32 +245,24 @@ class PrototypeBrain : BrainBackend {
             val self = context.selfModel
             return BrainResult(
                 text = buildString {
+                    append("Je suis ${self.identity.name} ${self.identity.version}. ")
+                    append("Mon identité est ${self.identity.jadeId.take(16)}… ")
+                    append("Mon nœud d'interface actuel est ${self.nodeId}, ")
+                    append("${self.device.manufacturer} ${self.device.model}. ")
                     append(
-                        "Je suis ${self.identity.name} ${self.identity.version}. "
-                    )
-                    append(
-                        "Mon identité est ${self.identity.jadeId.take(16)}… "
-                    )
-                    append(
-                        "Mon nœud d'interface actuel est ${self.nodeId}, "
-                    )
-                    append(
-                        "${self.device.manufacturer} ${self.device.model}. "
-                    )
-                    append(
-                        "Je suis conçue comme une seule identité distribuée sur plusieurs " +
-                            "nœuds. Mon cerveau actif est ${self.activeBrain.displayName}, " +
-                            "mon Resource Governor est en mode ${self.resourceBudget.mode} " +
-                            "et mon Node Manager connaît ${self.knownNodes.size} nœud(s)."
+                        "Je suis conçue comme une seule identité distribuée sur plusieurs nœuds. " +
+                            "Mon cerveau actif est ${self.activeBrain.displayName}, mon Resource Governor est en mode " +
+                            "${self.resourceBudget.mode} et mon Node Manager connaît ${self.knownNodes.size} nœud(s). " +
+                            "Mon Task Router 0.0.5 peut adapter ses choix à partir de mesures réelles."
                     )
                 }
             )
         }
 
         return BrainResult(
-            text = "Mon cerveau 0.0.4 reste un backend local minimal, mais mon runtime est maintenant distribué : " +
-                "Resource Governor, Node Manager et Task Router peuvent choisir un nœud, y exécuter une tâche bornée " +
-                "et revenir au local sans changer mon identité ni ma mémoire."
+            text = "Mon cerveau 0.0.5 reste un backend local minimal. Mon runtime distribué sait cependant gérer plusieurs " +
+                "types de tâches autorisées, mesurer leurs résultats, conserver cet historique et adapter le routage futur " +
+                "sans changer mon identité ni ma mémoire."
         )
     }
 }

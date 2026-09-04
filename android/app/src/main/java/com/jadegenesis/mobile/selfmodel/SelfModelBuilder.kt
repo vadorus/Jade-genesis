@@ -38,7 +38,13 @@ class SelfModelBuilder {
         val onlineTaskNode = knownNodes.any {
             it.kind != NodeKind.PHONE &&
                 it.status == NodeStatus.ONLINE &&
-                "task_execution_v1" in it.capabilities &&
+                "task_execution_v2" in it.capabilities
+        }
+        val onlineGenericTaskNode = knownNodes.any {
+            it.kind != NodeKind.PHONE &&
+                it.status == NodeStatus.ONLINE &&
+                "task_execution_v2" in it.capabilities &&
+                "text_analysis" in it.capabilities &&
                 "genesis_probe" in it.capabilities
         }
 
@@ -65,24 +71,46 @@ class SelfModelBuilder {
             Capability(
                 "node_manager",
                 true,
-                "NodeManager 0.0.4",
-                "Registre les nœuds, mesure leur disponibilité et expose leurs capacités."
+                "NodeManager 0.0.5",
+                "Registre les nœuds, mesure leur disponibilité, protocole et capacités."
             ),
             Capability(
                 "task_router",
                 true,
-                "TaskRouter 0.0.4",
-                "Choisit un nœud selon les ressources et revient au local si l'exécution distante échoue."
+                "AdaptiveTaskRouter 0.0.5",
+                "Classe les nœuds par ressources, charge et historique mesuré, puis essaie les alternatives si nécessaire."
+            ),
+            Capability(
+                "task_ledger",
+                true,
+                "TaskLedger 0.0.5",
+                "Conserve les résultats, durées, échecs et fallbacks pour améliorer le routage futur."
+            ),
+            Capability(
+                "adaptive_routing",
+                true,
+                "MeasuredExecutionHistory",
+                "Le routage utilise réellement les succès, échecs et durées précédemment mesurés."
             ),
             Capability(
                 "distributed_execution",
                 onlineTaskNode,
                 if (onlineTaskNode) {
-                    "TaskRouter_remote_ready"
+                    "TaskRouter_remote_ready_v2"
                 } else {
                     "TaskRouter_local_fallback_only"
                 },
-                "La 0.0.4 sait exécuter la tâche bornée genesis_probe sur un nœud compatible."
+                "La 0.0.5 possède un protocole générique de tâches autorisées et un fallback multi-nœuds."
+            ),
+            Capability(
+                "generic_task_runtime",
+                onlineGenericTaskNode,
+                if (onlineGenericTaskNode) {
+                    "NodeRuntime_0.0.5"
+                } else {
+                    "NodeRuntime_upgrade_required"
+                },
+                "Tâches actuellement autorisées : genesis_probe et text_analysis."
             ),
             Capability(
                 "generative_ai",
@@ -117,9 +145,9 @@ class SelfModelBuilder {
 
         val limits = mutableListOf(
             "Aucun modèle génératif n'est encore connecté.",
-            "Le Task Router 0.0.4 n'autorise qu'une tâche de validation bornée genesis_probe ; aucune commande système arbitraire n'est exposée.",
-            "Le routage choisit local ou distant selon le Resource Governor et l'état des nœuds, avec fallback local automatique.",
-            "Le lien LAN de développement utilise HTTP local avec un jeton de Node Agent ; le chiffrement et l'appairage renforcé viendront plus tard.",
+            "Le runtime 0.0.5 reste sur une liste blanche : genesis_probe et text_analysis uniquement ; aucune commande système arbitraire n'est exposée.",
+            "L'adaptation 0.0.5 concerne le routage mesurable des tâches ; Jade ne réécrit pas encore seule son code ni ses poids de modèle.",
+            "Le lien LAN de développement utilise HTTP local avec un jeton de Node Runtime ; le chiffrement et l'appairage renforcé viendront plus tard.",
             "Le budget mémoire est une recommandation de fonctionnement sûr, pas une limite physique absolue d'Android.",
             "Caméra et micro seront ajoutés dans une étape ultérieure."
         )

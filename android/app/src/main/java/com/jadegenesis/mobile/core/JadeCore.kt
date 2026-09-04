@@ -18,6 +18,7 @@ import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
+import com.jadegenesis.mobile.task.TaskLedger
 import com.jadegenesis.mobile.task.TaskRouter
 import com.jadegenesis.mobile.tools.ToolObservation
 import com.jadegenesis.mobile.tools.ToolRegistry
@@ -37,9 +38,10 @@ class JadeCore(
     private val selfModelBuilder = SelfModelBuilder()
     private val brainRouter = BrainRouter(brainBackends)
     private val nodeManager = NodeManager(appContext, profiler)
+    private val taskLedger = TaskLedger(appContext)
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
-        localNodeId = { profiler.nodeId() }
+        ledger = taskLedger
     )
 
     private var identity: JadeIdentity? = null
@@ -105,6 +107,22 @@ class JadeCore(
             budget = resourceBudget
         )
     }
+
+    suspend fun runDistributedTextAnalysis(
+        text: String
+    ): DistributedTaskResult {
+        val device = profiler.capture()
+        val resourceBudget = resourceGovernor.evaluate(device)
+
+        return taskRouter.runTextAnalysis(
+            text = text,
+            device = device,
+            budget = resourceBudget
+        )
+    }
+
+    fun recentTaskHistory(limit: Int = 12): List<DistributedTaskResult> =
+        taskLedger.recent(limit)
 
     suspend fun rememberUserFact(content: String) {
         memory.rememberUserFact(content, profiler.nodeId())

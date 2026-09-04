@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Jade Genesis Distributed Node Runtime 0.0.4
+Jade Genesis Distributed Node Runtime 0.0.5
 
 Dependency-free development runtime for Windows/Linux/macOS.
 It exposes:
 - GET /health: authenticated node profile
-- POST /task: authenticated, bounded genesis_probe task only
+- POST /task: authenticated allow-listed distributed tasks
 
-It does NOT execute arbitrary commands in V0.0.4.
+Allowed tasks in V0.0.5:
+- genesis_probe: bounded SHA-256 compute probe
+- text_analysis: deterministic text metrics + digest
+
+It never executes arbitrary shell/system commands.
 """
 
 from __future__ import annotations
@@ -19,24 +23,27 @@ import hmac
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import socket
 import sys
 import time
 import uuid
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-PROTOCOL = "jade-genesis-node/0.0.4"
-VERSION = "0.0.4"
+PROTOCOL = "jade-genesis-node/0.0.5"
+VERSION = "0.0.5"
 DEFAULT_PORT = 8765
-MAX_BODY_BYTES = 64 * 1024
-MAX_PAYLOAD_CHARS = 4096
+MAX_BODY_BYTES = 96 * 1024
+MAX_PAYLOAD_CHARS = 16_384
 MAX_ITERATIONS = 100_000
 CONFIG_DIR = Path.home() / ".jade-genesis"
 CONFIG_PATH = CONFIG_DIR / "node-agent.json"
+ALLOWED_TASKS = ("genesis_probe", "text_analysis")
 
 
 def round_gb(value: int | float) -> float:
@@ -210,7 +217,9 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
             "python_runtime",
             "hardware_profile",
             "task_execution_v1",
+            "task_execution_v2",
             "genesis_probe",
+            "text_analysis",
         ],
         "timestamp": int(time.time() * 1000),
     }
@@ -225,6 +234,47 @@ def run_genesis_probe(payload: str, iterations: int) -> tuple[str, int]:
 
     duration_ms = (time.perf_counter_ns() - started) // 1_000_000
     return data.hex(), int(duration_ms)
+
+
+def run_text_analysis(payload: str) -> tuple[str, int]:
+    started = time.perf_counter_ns()
+    words = [
+        match.group(0).lower()
+        for match in re.finditer(r"[^\W_]+(?:['’\-][^\W_]+)*|\d+", payload, re.UNICODE)
+    ]
+    counts = Counter(words)
+    top_terms = sorted(
+        counts.items(),
+        key=lambda item: (-item[1], item[0]),
+    )[:5]
+
+    result = {
+        "characters": len(payload),
+        "bytes_utf8": len(payload.encode("utf-8")),
+        "lines": 0 if not payload else len(payload.splitlines()),
+        "words": len(words),
+        "unique_words": len(counts),
+        "top_terms": ",".join(f"{word}:{count}" for word, count in top_terms),
+        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    }
+    duration_ms = (time.perf_counter_ns() - started) // 1_000_000
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(duration_ms)
+
+
+def execute_allowlisted_task(
+    task_kind: str,
+    payload: str,
+    iterations: int,
+) -> tuple[str, int]:
+    if task_kind == "genesis_probe":
+        if not (1 <= iterations <= MAX_ITERATIONS):
+            raise ValueError("iterations_out_of_range")
+        return run_genesis_probe(payload, iterations)
+
+    if task_kind == "text_analysis":
+        return run_text_analysis(payload)
+
+    raise ValueError("unsupported_task")
 
 
 def make_handler(config: dict[str, Any]):
@@ -317,12 +367,12 @@ def make_handler(config: dict[str, Any]):
                 self._send_json(400, {"error": "invalid_task_id"})
                 return
 
-            if task_kind != "genesis_probe":
+            if task_kind not in ALLOWED_TASKS:
                 self._send_json(
                     400,
                     {
                         "error": "unsupported_task",
-                        "allowed": ["genesis_probe"],
+                        "allowed": list(ALLOWED_TASKS),
                     },
                 )
                 return
@@ -331,20 +381,21 @@ def make_handler(config: dict[str, Any]):
                 self._send_json(413, {"error": "payload_too_large"})
                 return
 
-            if not (1 <= iterations <= MAX_ITERATIONS):
+            try:
+                result, duration_ms = execute_allowlisted_task(
+                    task_kind=task_kind,
+                    payload=payload,
+                    iterations=iterations,
+                )
+            except ValueError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            except Exception as exc:
                 self._send_json(
-                    400,
-                    {
-                        "error": "iterations_out_of_range",
-                        "max": MAX_ITERATIONS,
-                    },
+                    500,
+                    {"error": f"task_failed:{exc.__class__.__name__}"},
                 )
                 return
-
-            result, duration_ms = run_genesis_probe(
-                payload=payload,
-                iterations=iterations,
-            )
 
             self._send_json(
                 200,
@@ -357,7 +408,6 @@ def make_handler(config: dict[str, Any]):
                     "node_id": config["node_id"],
                     "node_name": f"PC — {socket.gethostname() or 'home'}",
                     "result": result,
-                    "iterations": iterations,
                     "duration_ms": duration_ms,
                     "completed_at": int(time.time() * 1000),
                 },
@@ -372,9 +422,28 @@ def make_handler(config: dict[str, Any]):
     return JadeNodeHandler
 
 
+def self_test() -> int:
+    probe, _ = run_genesis_probe("jade-self-test", 50)
+    if len(probe) != 64:
+        print("SELF-TEST FAILED: genesis_probe", file=sys.stderr)
+        return 1
+
+    analysis_raw, _ = run_text_analysis("Jade Jade Genesis test")
+    analysis = json.loads(analysis_raw)
+    if analysis.get("words") != 4:
+        print(f"SELF-TEST FAILED: text_analysis={analysis}", file=sys.stderr)
+        return 1
+    if analysis.get("unique_words") != 3:
+        print(f"SELF-TEST FAILED: unique_words={analysis}", file=sys.stderr)
+        return 1
+
+    print("JADE NODE RUNTIME 0.0.5 SELF-TEST OK")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Jade Genesis Distributed Node Runtime 0.0.4"
+        description="Jade Genesis Distributed Node Runtime 0.0.5"
     )
     parser.add_argument(
         "--port",
@@ -387,7 +456,15 @@ def main() -> int:
         action="store_true",
         help="Génère un nouveau jeton d'appairage.",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Teste les tâches autorisées sans démarrer le serveur.",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     if args.port is not None and not (1 <= args.port <= 65535):
         parser.error("Le port doit être compris entre 1 et 65535.")
@@ -400,7 +477,7 @@ def main() -> int:
     ip = local_ip()
 
     print()
-    print("JADE GENESIS — DISTRIBUTED NODE RUNTIME 0.0.4")
+    print("JADE GENESIS — DISTRIBUTED NODE RUNTIME 0.0.5")
     print("=" * 49)
     print(f"Node ID : {config['node_id']}")
     print(f"IP LAN  : {ip}")
@@ -413,7 +490,7 @@ def main() -> int:
     print(f"  Jeton = {config['token']}")
     print()
     print("Endpoints : GET /health, POST /task")
-    print("Tâche autorisée : genesis_probe uniquement.")
+    print("Tâches autorisées : genesis_probe, text_analysis")
     print("Aucune commande système arbitraire n'est exposée.")
     print("Ctrl+C pour arrêter.")
     print()

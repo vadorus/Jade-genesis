@@ -30,22 +30,73 @@ jobs:
           sdkmanager "platforms;android-36"
           sdkmanager "build-tools;36.0.0"
 
+      - name: Set up Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
+
       - name: Extract Android project
         run: |
           unzip -o jade-genesis-android-0.0.1.zip
 
-      - name: Fix Android SDK versions
+      - name: Patch Android project for AGP 9
         run: |
-          sed -i 's/compileSdk = 37/compileSdk = 36/g' \
-            jade-genesis-android-0.0.1/app/build.gradle.kts
+          python3 <<'PY'
+          from pathlib import Path
+          import re
 
-          sed -i 's/targetSdk = 37/targetSdk = 36/g' \
-            jade-genesis-android-0.0.1/app/build.gradle.kts
+          path = Path(
+              "jade-genesis-android-0.0.1/app/build.gradle.kts"
+          )
 
-      - name: Fix Kotlin configuration for AGP 9
+          text = path.read_text(encoding="utf-8")
+
+          # Android SDK 37 -> 36
+          text = text.replace(
+              "compileSdk = 37",
+              "compileSdk = 36"
+          )
+
+          text = text.replace(
+              "targetSdk = 37",
+              "targetSdk = 36"
+          )
+
+          # AGP 9 possède désormais le support Kotlin intégré.
+          # On retire donc l'ancien plugin Kotlin Android.
+          text = re.sub(
+              r'(?m)^\s*id\("org\.jetbrains\.kotlin\.android"\)\s*\n?',
+              '',
+              text
+          )
+
+          # Suppression de l'ancien bloc :
+          #
+          # kotlinOptions {
+          #     jvmTarget = "17"
+          # }
+          text = re.sub(
+              r'(?ms)^\s*kotlinOptions\s*\{\s*.*?^\s*\}\s*\n?',
+              '',
+              text
+          )
+
+          path.write_text(text, encoding="utf-8")
+
+          print("===== build.gradle.kts après correction =====")
+          print(text)
+          PY
+
+      - name: Build Android APK
         run: |
-          sed -i '/org.jetbrains.kotlin.android/d' \
-            jade-genesis-android-0.0.1/app/build.gradle.kts
+          gradle \
+            -p jade-genesis-android-0.0.1 \
+            :app:assembleDebug \
+            --stacktrace
 
-          sed -i '/^[[:space:]]*kotlinOptions[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' \
-            jade
+      - name: Upload Jade Genesis APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jade-Genesis-Android-0.0.1
+          path: jade-genesis-android-0.0.1/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

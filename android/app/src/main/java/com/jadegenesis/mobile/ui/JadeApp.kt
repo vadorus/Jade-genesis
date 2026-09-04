@@ -64,8 +64,10 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold
                 )
+
                 Text(
-                    "Android Core Prototype 0.0.1",
+                    "Android Core Prototype " +
+                        (state.selfModel?.identity?.version ?: "0.0.2"),
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -77,20 +79,82 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                         Text("Version ${self.identity.version}")
                         Text("ID : ${self.identity.jadeId}")
                         Text("Nœud : ${self.nodeId}")
+                        Text("Brain : ${self.activeBrain.displayName}")
                     }
 
                     Spacer(Modifier.height(10.dp))
 
                     InfoCard("Corps actuel") {
                         val d = self.device
-                        Text("${d.manufacturer} ${d.model}", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "${d.manufacturer} ${d.model}",
+                            fontWeight = FontWeight.SemiBold
+                        )
                         Text("Android ${d.androidVersion} — API ${d.sdkInt}")
                         Text("SoC : ${d.socManufacturer} ${d.socModel}")
+                        Text("CPU : ${d.cpuCores} cœurs logiques")
                         Text("RAM : ${d.ramTotalGb} Go")
                         Text("Libre : ${d.ramAvailableGb} Go RAM")
+                        Text(
+                            "Mémoire Jade : ${d.processHeapUsedMb} / " +
+                                "${d.processHeapMaxMb} Mo"
+                        )
+                        Text("Classe mémoire Android : ${d.appMemoryClassMb} Mo")
                         Text("Stockage libre : ${d.storageFreeGb} Go")
-                        Text("Batterie : ${d.batteryPercent}%")
+                        Text(
+                            "Batterie : ${d.batteryPercent}%" +
+                                if (d.charging) " — en charge" else ""
+                        )
+                        Text(
+                            "Économie d'énergie : " +
+                                if (d.powerSaveMode) "active" else "inactive"
+                        )
                         Text("Thermique : ${d.thermalStatus}")
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    InfoCard("Resource Governor") {
+                        val r = self.resourceBudget
+
+                        Text(
+                            "Mode : ${r.mode}",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Budget de travail : " +
+                                "${r.recommendedWorkingSetMb} Mo"
+                        )
+                        Text(
+                            "Réserve RAM système cible : " +
+                                "${r.systemRamReserveGb} Go"
+                        )
+                        Text(
+                            "Tâches parallèles max : " +
+                                "${r.maxParallelTasks}"
+                        )
+                        Text(
+                            "Travail lourd en arrière-plan : " +
+                                if (r.heavyBackgroundWorkAllowed) {
+                                    "autorisé"
+                                } else {
+                                    "non"
+                                }
+                        )
+                        Text(
+                            "Préférer un autre nœud pour le lourd : " +
+                                if (r.preferRemoteCompute) "oui" else "non"
+                        )
+                        Text(
+                            "Tranche de travail : " +
+                                "${r.maxTaskSliceSeconds} s max"
+                        )
+
+                        Spacer(Modifier.height(4.dp))
+
+                        r.reasons.forEach {
+                            Text("• $it")
+                        }
                     }
 
                     Spacer(Modifier.height(10.dp))
@@ -98,7 +162,8 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     InfoCard("Self Model") {
                         self.capabilities.forEach {
                             Text(
-                                "${if (it.available) "✓" else "×"} ${it.name} — ${it.source}"
+                                "${if (it.available) "✓" else "×"} " +
+                                    "${it.name} — ${it.source}"
                             )
                         }
                     }
@@ -116,6 +181,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     ) {
                         Text("Qui es-tu ?")
                     }
+
                     Button(
                         onClick = { vm.send("Inspecte ton téléphone") },
                         modifier = Modifier.weight(1f)
@@ -124,13 +190,29 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     }
                 }
 
+                Spacer(Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        vm.send(
+                            "Évalue tes ressources, tes limites, ta RAM, " +
+                                "ta batterie et ta température"
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Évaluer mes ressources")
+                }
+
                 Spacer(Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
                     label = { Text("Parler à Jade") },
-                    placeholder = { Text("Ex : Retiens que le test vaut 42") },
+                    placeholder = {
+                        Text("Ex : Retiens que le test vaut 42")
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 2
                 )

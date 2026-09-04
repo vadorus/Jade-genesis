@@ -20,21 +20,35 @@ class IdentityManager(private val context: Context) {
         val CREATED_AT = longPreferencesKey("jade_created_at")
     }
 
+    private companion object {
+        const val CURRENT_VERSION = "0.0.2"
+    }
+
     suspend fun loadOrCreate(): JadeIdentity {
         val current = context.identityDataStore.data.first()
         val existingId = current[Keys.ID]
 
         if (existingId != null) {
-            return JadeIdentity(
+            val identity = JadeIdentity(
                 jadeId = existingId,
                 name = current[Keys.NAME] ?: "Jade Genesis",
-                version = "0.0.1",
-                createdAt = current[Keys.CREATED_AT] ?: System.currentTimeMillis()
+                version = CURRENT_VERSION,
+                createdAt =
+                    current[Keys.CREATED_AT] ?: System.currentTimeMillis()
             )
+
+            if (current[Keys.VERSION] != CURRENT_VERSION) {
+                context.identityDataStore.edit { prefs ->
+                    prefs[Keys.VERSION] = CURRENT_VERSION
+                }
+            }
+
+            return identity
         }
 
         val identity = JadeIdentity(
             jadeId = "JG-${UUID.randomUUID()}",
+            version = CURRENT_VERSION,
             createdAt = System.currentTimeMillis()
         )
 

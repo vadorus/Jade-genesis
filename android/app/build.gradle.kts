@@ -1,8 +1,12 @@
 plugins {
     id("com.android.application")
-id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
 }
+
+val jadeKeystorePath = System.getenv("JADE_KEYSTORE_PATH")
+val jadeKeystorePassword = System.getenv("JADE_KEYSTORE_PASSWORD")
+val jadeKeyAlias = System.getenv("JADE_KEY_ALIAS") ?: "jadegenesis"
 
 android {
     namespace = "com.jadegenesis.mobile"
@@ -12,8 +16,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.0.1"
+        versionCode = 2
+        versionName = "0.0.2"
     }
 
     buildFeatures {
@@ -25,7 +29,30 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-packaging {
+
+    signingConfigs {
+        if (
+            !jadeKeystorePath.isNullOrBlank() &&
+            !jadeKeystorePassword.isNullOrBlank()
+        ) {
+            create("jadeDev") {
+                storeFile = file(jadeKeystorePath)
+                storePassword = jadeKeystorePassword
+                keyAlias = jadeKeyAlias
+                keyPassword = jadeKeystorePassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfigs.findByName("jadeDev")?.let {
+                signingConfig = it
+            }
+        }
+    }
+
+    packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }

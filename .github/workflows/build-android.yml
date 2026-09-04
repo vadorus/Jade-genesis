@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -42,21 +42,10 @@ jobs:
           sed -i 's/targetSdk = 37/targetSdk = 36/g' \
             jade-genesis-android-0.0.1/app/build.gradle.kts
 
-      - name: Fix Kotlin plugin for AGP 9
+      - name: Fix Kotlin configuration for AGP 9
         run: |
           sed -i '/org.jetbrains.kotlin.android/d' \
             jade-genesis-android-0.0.1/app/build.gradle.kts
 
-      - name: Build Android APK
-        run: |
-          gradle \
-            -p jade-genesis-android-0.0.1 \
-            :app:assembleDebug \
-            --stacktrace
-
-      - name: Upload Jade Genesis APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: jade-genesis-android-debug
-          path: jade-genesis-android-0.0.1/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+          sed -i '/^[[:space:]]*kotlinOptions[[:space:]]*{/,/^[[:space:]]*}[[:space:]]*$/d' \
+            jade

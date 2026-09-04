@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,6 +16,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
@@ -33,43 +38,28 @@ jobs:
 
           yes | sdkmanager --licenses >/dev/null || true
 
-          sdkmanager \
-            --channel=3 \
-            "platforms;android-37.0" \
-            "build-tools;36.0.0" \
-            "platform-tools"
+          sdkmanager             --channel=3             "platforms;android-37.0"             "build-tools;36.0.0"             "platform-tools"
 
-          echo "===== Installed Android platforms ====="
-          ls -la "$ANDROID_SDK_ROOT/platforms"
-
-          echo "===== Installed Build Tools ====="
-          ls -la "$ANDROID_SDK_ROOT/build-tools"
-
-      - name: Set up Gradle 9.6
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "9.6.0"
-
-      - name: Extract Jade Android project
+      - name: Prepare Android source tree
         shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf jade-genesis-android-0.0.1
+          if [ -d "android/app/src/main" ]; then
+            echo "Using Android source already stored in repository."
+          else
+            echo "Extracting legacy Android source ZIP."
+            rm -rf android jade-genesis-android-0.0.1
+            unzip -o jade-genesis-android-0.0.1.zip
+            mv jade-genesis-android-0.0.1 android
+          fi
 
-          unzip \
-            -o \
-            jade-genesis-android-0.0.1.zip
+          echo "PROJECT_DIR=android" >> "$GITHUB_ENV"
 
-          echo "===== Project extracted ====="
+          echo "===== Android project files ====="
+          find android -maxdepth 6 -type f -print
 
-          find \
-            jade-genesis-android-0.0.1 \
-            -maxdepth 2 \
-            -type f \
-            -print
-
-      - name: Patch project for Android 17 and AGP 9
+      - name: Normalize Android 17 and AGP 9 configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -78,196 +68,91 @@ jobs:
           from pathlib import Path
           import re
 
-          project = Path(
-              "jade-genesis-android-0.0.1"
-          )
-
-          app_gradle = (
-              project /
-              "app" /
-              "build.gradle.kts"
-          )
-
-          root_gradle = (
-              project /
-              "build.gradle.kts"
-          )
-
-          settings_gradle = (
-              project /
-              "settings.gradle.kts"
-          )
+          project = Path("android")
+          app_gradle = project / "app" / "build.gradle.kts"
+          root_gradle = project / "build.gradle.kts"
+          settings_gradle = project / "settings.gradle.kts"
 
           if not app_gradle.exists():
-              raise SystemExit(
-                  "ERROR: app/build.gradle.kts not found"
-              )
+              raise SystemExit("ERROR: app/build.gradle.kts not found")
 
-          # ---------------------------------
-          # Force AGP 9.4.0 where its
-          # version is declared.
-          # ---------------------------------
-
-          for gradle_file in [
-              root_gradle,
-              settings_gradle
-          ]:
+          for gradle_file in (root_gradle, settings_gradle):
               if not gradle_file.exists():
                   continue
 
-              text = gradle_file.read_text(
-                  encoding="utf-8"
-              )
-
+              text = gradle_file.read_text(encoding="utf-8")
               text = re.sub(
-                  r'('
-                  r'id\("com\.android\.application"\)'
-                  r'\s+version\s+"'
-                  r')[^"]+(")',
+                  r'(id\("com\.android\.application"\)\s+version\s+")[^"]+(")',
                   r'\g<1>9.4.0\2',
-                  text
-              )
-
-              gradle_file.write_text(
                   text,
-                  encoding="utf-8"
               )
+              gradle_file.write_text(text, encoding="utf-8")
 
-          # ---------------------------------
-          # App module
-          # ---------------------------------
-
-          app = app_gradle.read_text(
-              encoding="utf-8"
-          )
-
-          # Android 17 / API 37
+          app = app_gradle.read_text(encoding="utf-8")
           app = re.sub(
               r'compileSdk\s*=\s*\d+',
               'compileSdk = 37',
               app,
-              count=1
+              count=1,
           )
-
-          # AGP 9 has built-in Kotlin.
           app = re.sub(
-              r'(?m)^'
-              r'\s*id\('
-              r'"org\.jetbrains\.kotlin\.android"'
-              r'\)'
-              r'\s*\n?',
+              r'(?m)^\s*id\("org\.jetbrains\.kotlin\.android"\)\s*\n?',
               '',
-              app
-          )
-
-          # Old Kotlin Android DSL is no
-          # longer valid with built-in Kotlin.
-          app = re.sub(
-              r'(?ms)^'
-              r'\s*kotlinOptions\s*\{'
-              r'.*?'
-              r'^\s*\}'
-              r'\s*\n?',
-              '',
-              app
-          )
-
-          app_gradle.write_text(
               app,
-              encoding="utf-8"
           )
-
-          # ---------------------------------
-          # Show exact configuration
-          # ---------------------------------
-
-          print(
-              "===== ROOT build.gradle.kts ====="
+          app = re.sub(
+              r'(?ms)^\s*kotlinOptions\s*\{.*?^\s*\}\s*\n?',
+              '',
+              app,
           )
-
-          if root_gradle.exists():
-              print(
-                  root_gradle.read_text(
-                      encoding="utf-8"
-                  )
-              )
-
-          print(
-              "===== settings.gradle.kts ====="
-          )
-
-          if settings_gradle.exists():
-              print(
-                  settings_gradle.read_text(
-                      encoding="utf-8"
-                  )
-              )
-
-          print(
-              "===== APP build.gradle.kts ====="
-          )
-
-          print(
-              app_gradle.read_text(
-                  encoding="utf-8"
-              )
-          )
+          app_gradle.write_text(app, encoding="utf-8")
           PY
+
+      - name: Store Android source in repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "$(git status --porcelain -- android)" ]; then
+            git config user.name "Jade Genesis CI"
+            git config user.email "actions@users.noreply.github.com"
+            git add android
+            git commit -m "Extract Android source tree [skip ci]"
+            git push origin HEAD:main
+          else
+            echo "Android source tree is already committed."
+          fi
+
+      - name: Set up Gradle 9.6
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
 
       - name: Verify environment
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "===== JAVA ====="
           java -version
-
-          echo "===== GRADLE ====="
           gradle --version
-
-          echo "===== ANDROID SDK ====="
-          echo "$ANDROID_SDK_ROOT"
-
-          echo "===== PLATFORMS ====="
-          ls -la "$ANDROID_SDK_ROOT/platforms"
-
-          echo "===== ANDROID 37 FILES ====="
-          find \
-            "$ANDROID_SDK_ROOT/platforms" \
-            -maxdepth 2 \
-            -name android.jar \
-            -print
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          find "$ANDROID_SDK_ROOT/platforms" -maxdepth 2 -name android.jar -print
 
       - name: Build Jade APK
         shell: bash
         run: |
           set -euo pipefail
-
-          gradle \
-            -p jade-genesis-android-0.0.1 \
-            :app:assembleDebug \
-            --stacktrace
+          gradle             -p "$PROJECT_DIR"             :app:assembleDebug             --stacktrace
 
       - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "===== Jade APK ====="
-
-          find \
-            jade-genesis-android-0.0.1/app/build/outputs \
-            -type f \
-            -name "*.apk" \
-            -print
-
           APK_COUNT="$(
-            find \
-              jade-genesis-android-0.0.1/app/build/outputs \
-              -type f \
-              -name "*.apk" \
-              | wc -l
+            find               "$PROJECT_DIR/app/build/outputs"               -type f               -name "*.apk"               | wc -l
           )"
+
+          find             "$PROJECT_DIR/app/build/outputs"             -type f             -name "*.apk"             -print
 
           if [ "$APK_COUNT" -eq 0 ]; then
             echo "ERROR: No APK generated"
@@ -278,5 +163,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Jade-Genesis-Android-0.0.1
-          path: jade-genesis-android-0.0.1/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

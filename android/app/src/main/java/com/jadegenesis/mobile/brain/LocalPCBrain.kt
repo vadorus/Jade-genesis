@@ -20,7 +20,7 @@ class LocalPCBrain(
 ) : BrainBackend {
 
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.0",
+        id = "distributed-local-brain-0.1.1",
         displayName = "Distributed Local Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",

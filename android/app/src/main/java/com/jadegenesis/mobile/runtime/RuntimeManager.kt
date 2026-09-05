@@ -7,7 +7,7 @@ import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
 
 class RuntimeManager {
     companion object {
-        const val EXPECTED_RUNTIME_VERSION = "0.1.0"
+        const val EXPECTED_RUNTIME_VERSION = "0.1.1"
     }
 
     fun snapshots(nodes: List<GenesisNode>): List<RuntimeNodeSnapshot> =

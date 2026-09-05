@@ -112,7 +112,7 @@ enum class LearningCandidateStatus {
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.1.0",
+    val version: String = "0.1.1",
     val createdAt: Long
 )
 
@@ -325,6 +325,22 @@ data class MemorySnapshot(
 data class ToolInfo(
     val name: String,
     val description: String
+)
+
+data class ToolCandidateSnapshot(
+    val id: String,
+    val name: String,
+    val description: String,
+    val language: String,
+    val permissions: List<String>,
+    val sourceCode: String,
+    val tests: List<String>,
+    val status: String,
+    val validationWarnings: List<String>,
+    val sourceSha256: String,
+    val generator: String,
+    val createdAt: Long,
+    val updatedAt: Long
 )
 
 data class CognitiveTraceEvent(

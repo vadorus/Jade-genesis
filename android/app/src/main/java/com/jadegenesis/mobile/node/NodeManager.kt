@@ -41,7 +41,7 @@ class NodeManager(
         private const val LEGACY_PROTOCOL_005 = "jade-genesis-node/0.0.5"
         private const val LEGACY_PROTOCOL_004 = "jade-genesis-node/0.0.4"
         private const val DEFAULT_PORT = 8765
-        private const val MAX_PAYLOAD_CHARS = 48_000
+        private const val MAX_PAYLOAD_CHARS = 2_500_000
         private const val NODE_STALE_MS = 90_000L
         private const val ASYNC_TASK_TIMEOUT_MS = 180_000L
         private const val ASYNC_POLL_MS = 900L
@@ -166,6 +166,7 @@ class NodeManager(
             "prototype_brain",
             "distributed_brain_client",
             "device_registry_v2",
+            "device_registry_v2_1",
             "multi_route_v1",
             "compute_mesh_v1",
             "cognitive_core_v1",
@@ -179,7 +180,7 @@ class NodeManager(
             "task_queue_v1"
         ),
         lastSeenAt = System.currentTimeMillis(),
-        runtimeVersion = "0.1.0",
+        runtimeVersion = "0.1.1",
         runtimeChannel = "android"
     )
 
@@ -913,22 +914,127 @@ class NodeManager(
     private fun loadStoredNodes(): List<StoredNode> {
         val rawV2 = prefs.getString(KEY_REMOTE_NODES_V2, null)
         if (!rawV2.isNullOrBlank()) {
-            return parseV2(rawV2)
+            val parsed = parseV2(rawV2)
+            val normalized = deduplicateStoredNodes(parsed)
+            if (normalized != parsed) {
+                saveStoredNodes(normalized)
+                logger?.log(
+                    DiagnosticLevel.INFO,
+                    "node_registry_deduplicated",
+                    "Device Registry v2.1 a fusionné les doublons partageant le même Node ID.",
+                    mapOf(
+                        "before" to parsed.size,
+                        "after" to normalized.size
+                    )
+                )
+            }
+            return normalized
         }
 
         val rawV1 = prefs.getString(KEY_REMOTE_NODES_V1, null)
             ?: return emptyList()
-        val migrated = migrateV1(rawV1)
+        val migrated = deduplicateStoredNodes(migrateV1(rawV1))
         if (migrated.isNotEmpty()) {
             saveStoredNodes(migrated)
             logger?.log(
                 DiagnosticLevel.INFO,
                 "node_registry_migrated",
-                "Ancien registre de nœuds migré vers Device Registry v2.",
+                "Ancien registre de nœuds migré vers Device Registry v2.1 et dédupliqué.",
                 mapOf("node_count" to migrated.size)
             )
         }
         return migrated
+    }
+
+    private fun deduplicateStoredNodes(nodes: List<StoredNode>): List<StoredNode> {
+        if (nodes.size < 2) return nodes
+
+        val groups = linkedMapOf<String, MutableList<StoredNode>>()
+        nodes.forEach { node ->
+            val stableId = node.nodeId.trim().lowercase()
+            val fallbackRoute = node.routes.firstOrNull()?.let { route ->
+                "${route.host.lowercase()}:${route.port}"
+            }.orEmpty()
+            val key = if (stableId.isNotBlank()) {
+                "id:$stableId"
+            } else {
+                "route:$fallbackRoute"
+            }
+            groups.getOrPut(key) { mutableListOf() }.add(node)
+        }
+
+        return groups.values.map { group -> mergeStoredNodeGroup(group) }
+    }
+
+    private fun mergeStoredNodeGroup(group: List<StoredNode>): StoredNode {
+        if (group.size == 1) return group.first()
+
+        fun statusRank(status: NodeStatus): Long = when (status) {
+            NodeStatus.ONLINE -> 5L
+            NodeStatus.LOCAL -> 4L
+            NodeStatus.UNKNOWN -> 3L
+            NodeStatus.OFFLINE -> 2L
+            NodeStatus.ERROR -> 1L
+        }
+
+        fun routeRank(route: StoredRoute): Long {
+            val status = when (route.status) {
+                NodeRouteStatus.ONLINE -> 4L
+                NodeRouteStatus.UNKNOWN -> 3L
+                NodeRouteStatus.OFFLINE -> 2L
+                NodeRouteStatus.ERROR -> 1L
+            }
+            return status * 10_000_000_000_000L + route.lastSeenAt
+        }
+
+        val preferred = group.maxByOrNull { node ->
+            statusRank(node.status) * 10_000_000_000_000L + node.lastSeenAt
+        } ?: group.first()
+
+        val mergedRoutes = group
+            .flatMap { it.routes }
+            .groupBy { "${it.host.lowercase()}:${it.port}" }
+            .values
+            .map { routes -> routes.maxByOrNull(::routeRank) ?: routes.first() }
+
+        val preferredActive = preferred.routes.firstOrNull {
+            it.routeId == preferred.activeRouteId
+        }
+        val activeRouteId = preferredActive?.let { active ->
+            mergedRoutes.firstOrNull { route ->
+                route.host.equals(active.host, ignoreCase = true) &&
+                    route.port == active.port
+            }?.routeId
+        } ?: mergedRoutes
+            .filter { it.status == NodeRouteStatus.ONLINE }
+            .minByOrNull { it.latencyMs ?: Long.MAX_VALUE }
+            ?.routeId
+            ?: mergedRoutes.firstOrNull()?.routeId
+
+        val mergedCapabilities = group
+            .flatMap { it.capabilities }
+            .filter { it.isNotBlank() }
+            .distinct()
+
+        return preferred.copy(
+            token = preferred.token.ifBlank {
+                group.firstOrNull { it.token.isNotBlank() }?.token.orEmpty()
+            },
+            status = if (group.any { it.status == NodeStatus.ONLINE }) {
+                NodeStatus.ONLINE
+            } else {
+                preferred.status
+            },
+            capabilities = mergedCapabilities,
+            lastSeenAt = group.maxOfOrNull { it.lastSeenAt } ?: preferred.lastSeenAt,
+            lastError = if (group.any { it.status == NodeStatus.ONLINE }) {
+                null
+            } else {
+                preferred.lastError
+            },
+            routes = mergedRoutes,
+            activeRouteId = activeRouteId
+        )
     }
 
     private fun parseV2(raw: String): List<StoredNode> = runCatching {

@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.core
 
 import android.content.Context
+import android.util.Base64
 import com.jadegenesis.mobile.brain.BrainRouter
 import com.jadegenesis.mobile.brain.LocalPCBrain
 import com.jadegenesis.mobile.brain.PrototypeBrain
@@ -34,13 +35,17 @@ import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
 import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.model.TaskExecutionLocation
 import com.jadegenesis.mobile.model.TaskStatus
+import com.jadegenesis.mobile.model.TaskWorkload
+import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
+import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.runtime.RuntimeManager
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
 import com.jadegenesis.mobile.task.TaskLedger
 import com.jadegenesis.mobile.task.TaskQueue
 import com.jadegenesis.mobile.task.TaskRouter
+import com.jadegenesis.mobile.tools.ToolLab
 import com.jadegenesis.mobile.tools.ToolObservation
 import com.jadegenesis.mobile.tools.ToolRegistry
 import org.json.JSONArray
@@ -82,6 +87,8 @@ class JadeCore(context: Context) {
     private val computeMesh = ComputeMesh(nodeManager, diagnostics)
     private val learningEngine = LearningEngine()
     private val runtimeManager = RuntimeManager()
+    private val screenObserver = ScreenObserverRepository(appContext)
+    private val toolLab = ToolLab(appContext)
 
     private var identity: JadeIdentity? = null
 
@@ -90,7 +97,7 @@ class JadeCore(context: Context) {
         diagnostics.log(
             DiagnosticLevel.INFO,
             "jade_initialize",
-            "Jade Genesis 0.1.0 initialisée.",
+            "Jade Genesis 0.1.1 initialisée.",
             mapOf("jade_id" to identity?.jadeId)
         )
         return selfModel()
@@ -213,7 +220,7 @@ class JadeCore(context: Context) {
                             "OBSOLETE_CANDIDATE n'entraîne jamais une suppression automatique."
                     )
                 },
-                source = "JADE_CONSOLIDATION_0.1.0",
+                source = "JADE_CONSOLIDATION_0.1.1",
                 confidence = 0.88,
                 originNode = result.executedNodeId
             )
@@ -250,6 +257,157 @@ class JadeCore(context: Context) {
 
     fun runtimeSnapshots(nodes: List<GenesisNode>): List<RuntimeNodeSnapshot> =
         runtimeManager.snapshots(nodes)
+
+    fun toolCandidates(limit: Int = 20): List<ToolCandidateSnapshot> =
+        toolLab.list(limit)
+
+    suspend fun proposeToolCandidate(idea: String): ToolCandidateSnapshot {
+        val clean = idea.trim()
+        require(clean.isNotBlank()) { "Décris l'outil que Jade doit concevoir." }
+        require(clean.length <= 4_000) { "La description de l'outil est trop longue." }
+
+        runCatching { nodeManager.refreshRemoteNodes() }
+        val self = selfModel()
+        val result = brainRouter.think(
+            BrainContext(
+                userInput = clean,
+                selfModel = self,
+                memories = memory.latest(8),
+                tools = tools.describe(),
+                operation = "tool_build"
+            )
+        )
+        val candidate = toolLab.saveFromBrain(
+            raw = result.text,
+            generator = result.model.ifBlank { result.backendDisplayName }
+        )
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "tool_candidate_created",
+            "Tool Lab a créé un candidat non activé.",
+            mapOf(
+                "tool_id" to candidate.id,
+                "tool_name" to candidate.name,
+                "status" to candidate.status,
+                "sha256" to candidate.sourceSha256
+            )
+        )
+        return candidate
+    }
+
+    suspend fun analyzeLatestPhoneScreen(captureRequestedAt: Long): String {
+        val frame = screenObserver.awaitAndConsumeFrameAfter(captureRequestedAt)
+        val device = profiler.capture()
+        val nodes = nodeManager.nodes(device = device, refreshRemote = true)
+        val target = nodes
+            .filter { node ->
+                node.kind != com.jadegenesis.mobile.model.NodeKind.PHONE &&
+                    node.status == com.jadegenesis.mobile.model.NodeStatus.ONLINE &&
+                    "task_execution_v3" in node.capabilities &&
+                    "vision_analyze" in node.capabilities
+            }
+            .maxWithOrNull(
+                compareBy<GenesisNode> { it.ramAvailableGb }
+                    .thenBy { it.cpuCores }
+            )
+            ?: error(
+                "Aucun nœud en ligne ne dispose encore d'un modèle vision compatible. " +
+                    "Le Screen Observer a capturé l'écran, mais il faut un PC/VPS avec vision_analyze pour l'interpréter."
+            )
+
+        val payload = JSONObject().apply {
+            put(
+                "prompt",
+                "Analyse cette capture de mon écran Pixel. Décris ce qui est visible, " +
+                    "les informations importantes et ce que Jade peut utilement me conseiller. " +
+                    "N'invente rien qui n'est pas visible."
+            )
+            put("image_b64", Base64.encodeToString(frame.bytes, Base64.NO_WRAP))
+            put("image_sha256", frame.sha256)
+            put("source", "pixel_screen")
+        }.toString()
+
+        val response = nodeManager.executeTask(
+            nodeId = target.nodeId,
+            request = com.jadegenesis.mobile.model.DistributedTaskRequest(
+                taskId = "vision-${UUID.randomUUID()}",
+                taskKind = "vision_analyze",
+                payload = payload,
+                requiredCapability = "vision_analyze",
+                workload = TaskWorkload.HEAVY,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        val json = JSONObject(response.output)
+        val answer = json.optString("text").trim()
+        if (answer.isBlank()) error("Le backend vision a renvoyé une réponse vide.")
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "screen_pixel_analyzed",
+            "Capture Pixel analysée par un nœud vision.",
+            mapOf(
+                "node_id" to response.nodeId,
+                "image_sha256" to frame.sha256,
+                "duration_ms" to response.durationMs
+            )
+        )
+        return answer
+    }
+
+    suspend fun analyzePcScreen(): String {
+        val device = profiler.capture()
+        val nodes = nodeManager.nodes(device = device, refreshRemote = true)
+        val target = nodes
+            .filter { node ->
+                node.kind == com.jadegenesis.mobile.model.NodeKind.PC &&
+                    node.status == com.jadegenesis.mobile.model.NodeStatus.ONLINE &&
+                    "task_execution_v3" in node.capabilities &&
+                    "screen_analyze" in node.capabilities
+            }
+            .maxWithOrNull(
+                compareBy<GenesisNode> { it.ramAvailableGb }
+                    .thenBy { it.cpuCores }
+            )
+            ?: error(
+                "Aucun PC en ligne n'annonce screen_analyze. " +
+                    "Le runtime PC 0.1.1 avec un modèle vision Ollama est requis."
+            )
+
+        val payload = JSONObject().apply {
+            put(
+                "prompt",
+                "Observe l'écran actuel du PC. Décris ce qui est visible, " +
+                    "signale les erreurs ou informations importantes et propose l'action utile suivante. " +
+                    "N'invente rien qui n'est pas visible."
+            )
+            put("source", "pc_screen")
+        }.toString()
+
+        val response = nodeManager.executeTask(
+            nodeId = target.nodeId,
+            request = com.jadegenesis.mobile.model.DistributedTaskRequest(
+                taskId = "screen-${UUID.randomUUID()}",
+                taskKind = "screen_analyze",
+                payload = payload,
+                requiredCapability = "screen_analyze",
+                workload = TaskWorkload.HEAVY,
+                createdAt = System.currentTimeMillis()
+            )
+        )
+        val json = JSONObject(response.output)
+        val answer = json.optString("text").trim()
+        if (answer.isBlank()) error("Le backend Screen Observer a renvoyé une réponse vide.")
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "screen_pc_analyzed",
+            "Écran PC analysé par le runtime local.",
+            mapOf(
+                "node_id" to response.nodeId,
+                "duration_ms" to response.durationMs
+            )
+        )
+        return answer
+    }
 
     fun isAdminConfigured(): Boolean = adminGate.isConfigured()
 

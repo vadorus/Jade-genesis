@@ -14,6 +14,8 @@ import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
 import com.jadegenesis.mobile.model.SelfModel
+import com.jadegenesis.mobile.model.ToolCandidateSnapshot
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,6 +32,7 @@ private data class RefreshBundle(
     val learningCandidates: List<LearningCandidate>,
     val diagnostics: List<DiagnosticLogEntry>,
     val runtimes: List<RuntimeNodeSnapshot>,
+    val toolCandidates: List<ToolCandidateSnapshot>,
     val adminConfigured: Boolean,
     val adminUnlocked: Boolean,
     val debugEnabled: Boolean
@@ -55,6 +58,11 @@ data class JadeUiState(
     val meshProbe: MeshProbeSummary? = null,
     val diagnostics: List<DiagnosticLogEntry> = emptyList(),
     val runtimes: List<RuntimeNodeSnapshot> = emptyList(),
+    val toolCandidates: List<ToolCandidateSnapshot> = emptyList(),
+    val screenBusy: Boolean = false,
+    val screenMessage: String = "",
+    val toolBusy: Boolean = false,
+    val toolMessage: String = "",
     val adminConfigured: Boolean = false,
     val adminUnlocked: Boolean = false,
     val debugEnabled: Boolean = false,
@@ -243,6 +251,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     learningCandidates = bundle.learningCandidates,
                     diagnostics = bundle.diagnostics,
                     runtimes = bundle.runtimes,
+                    toolCandidates = bundle.toolCandidates,
                     adminConfigured = bundle.adminConfigured,
                     adminUnlocked = bundle.adminUnlocked,
                     debugEnabled = bundle.debugEnabled,
@@ -254,6 +263,106 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     error = e.message ?: e.toString()
                 )
             }
+        }
+    }
+
+    fun onPhoneScreenCaptureStarted(requestedAt: Long) {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                screenBusy = true,
+                screenMessage = "Capture Pixel autorisée. Jade attend l'image puis cherche un nœud vision…",
+                error = null
+            )
+            delay(250L)
+            runCatching { core.analyzeLatestPhoneScreen(requestedAt) }
+                .onSuccess { answer ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        screenMessage = answer,
+                        selfModel = core.selfModel(),
+                        diagnostics = core.recentDiagnostics(),
+                        error = null
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        screenMessage = "",
+                        diagnostics = core.recentDiagnostics(),
+                        error = e.message ?: e.toString()
+                    )
+                }
+        }
+    }
+
+    fun onPhoneScreenCaptureDenied() {
+        _state.value = _state.value.copy(
+            screenBusy = false,
+            screenMessage = "Capture d'écran annulée. Aucune image n'a été transmise à Jade.",
+            error = null
+        )
+    }
+
+    fun analyzePcScreen() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                screenBusy = true,
+                screenMessage = "Jade demande au runtime PC d'observer son écran…",
+                error = null
+            )
+            runCatching { core.analyzePcScreen() }
+                .onSuccess { answer ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        screenMessage = answer,
+                        selfModel = core.selfModel(),
+                        diagnostics = core.recentDiagnostics(),
+                        error = null
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        screenMessage = "",
+                        diagnostics = core.recentDiagnostics(),
+                        error = e.message ?: e.toString()
+                    )
+                }
+        }
+    }
+
+    fun proposeToolCandidate(idea: String) {
+        val clean = idea.trim()
+        if (clean.isBlank()) {
+            _state.value = _state.value.copy(error = "Décris l'outil à concevoir.")
+            return
+        }
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                toolBusy = true,
+                toolMessage = "Tool Lab : conception d'un candidat non activé…",
+                error = null
+            )
+            runCatching { core.proposeToolCandidate(clean) }
+                .onSuccess { candidate ->
+                    _state.value = _state.value.copy(
+                        toolBusy = false,
+                        toolCandidates = core.toolCandidates(),
+                        toolMessage =
+                            "Candidat ${candidate.name} créé (${candidate.status}). " +
+                                "Il n'est pas activé automatiquement.",
+                        diagnostics = core.recentDiagnostics(),
+                        error = null
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(
+                        toolBusy = false,
+                        toolMessage = "",
+                        diagnostics = core.recentDiagnostics(),
+                        error = e.message ?: e.toString()
+                    )
+                }
         }
     }
 
@@ -332,6 +441,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             learningCandidates = core.learningCandidates(),
             diagnostics = core.recentDiagnostics(),
             runtimes = core.runtimeSnapshots(self.knownNodes),
+            toolCandidates = core.toolCandidates(),
             adminConfigured = core.isAdminConfigured(),
             adminUnlocked = core.isAdminUnlocked(),
             debugEnabled = core.isDebugEnabled()
@@ -351,6 +461,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             learningCandidates = bundle.learningCandidates,
             diagnostics = bundle.diagnostics,
             runtimes = bundle.runtimes,
+            toolCandidates = bundle.toolCandidates,
             adminConfigured = bundle.adminConfigured,
             adminUnlocked = bundle.adminUnlocked,
             debugEnabled = bundle.debugEnabled,
@@ -382,6 +493,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             learningCandidates = bundle.learningCandidates,
             diagnostics = bundle.diagnostics,
             runtimes = bundle.runtimes,
+            toolCandidates = bundle.toolCandidates,
             taskMessage = taskCompletionMessage(result),
             error = null
         )

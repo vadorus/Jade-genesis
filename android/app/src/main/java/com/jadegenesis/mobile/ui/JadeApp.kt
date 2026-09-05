@@ -1,6 +1,9 @@
 package com.jadegenesis.mobile.ui
 
+import android.app.Activity
+import android.content.Context
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,6 +53,7 @@ import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeRouteStatus
 import com.jadegenesis.mobile.model.NodeStatus
+import com.jadegenesis.mobile.screen.ScreenCaptureService
 
 private const val LOCAL_NETWORK_PERMISSION =
     "android.permission.ACCESS_LOCAL_NETWORK"
@@ -82,6 +86,26 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         localNetworkGranted = granted
+    }
+
+    val projectionManager = remember(context) {
+        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    }
+    val screenCaptureLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val data = result.data
+        if (result.resultCode == Activity.RESULT_OK && data != null) {
+            val requestedAt = System.currentTimeMillis()
+            ScreenCaptureService.startCapture(
+                context = context,
+                resultCode = result.resultCode,
+                resultData = data
+            )
+            vm.onPhoneScreenCaptureStarted(requestedAt)
+        } else {
+            vm.onPhoneScreenCaptureDenied()
+        }
     }
 
     MaterialTheme {
@@ -119,6 +143,11 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     JadeTab.JADE -> JadeHome(
                         state = state,
                         vm = vm,
+                        requestPhoneScreenCapture = {
+                            screenCaptureLauncher.launch(
+                                projectionManager.createScreenCaptureIntent()
+                            )
+                        },
                         modifier = Modifier.padding(innerPadding)
                     )
 
@@ -160,6 +189,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 private fun JadeHome(
     state: JadeUiState,
     vm: JadeViewModel,
+    requestPhoneScreenCapture: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var input by remember { mutableStateOf("") }
@@ -175,7 +205,7 @@ private fun JadeHome(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Cognitive Core ${self?.identity?.version ?: "0.1.0"}",
+            "Cognitive Core ${self?.identity?.version ?: "0.1.1"}",
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))
@@ -188,6 +218,34 @@ private fun JadeHome(
                 it.nodeId == self.preferredComputeNodeId
             }
             Text("Calcul préféré : ${preferred?.name ?: "Pixel / local"}")
+        }
+
+        Spacer(Modifier.height(10.dp))
+        InfoCard("Screen Observer v1") {
+            Text(
+                "Observation à la demande uniquement : Jade ne capture aucun écran en secret. " +
+                    "Le Pixel affiche l'autorisation Android avant chaque session."
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = requestPhoneScreenCapture,
+                enabled = !state.screenBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser l'écran Pixel")
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = { vm.analyzePcScreen() },
+                enabled = !state.screenBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Analyser l'écran du PC")
+            }
+            if (state.screenMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(state.screenMessage)
+            }
         }
 
         if (state.chatBusy) {
@@ -550,6 +608,7 @@ private fun AdminScreen(
     modifier: Modifier = Modifier
 ) {
     var pin by remember { mutableStateOf("") }
+    var toolIdea by remember { mutableStateOf("") }
 
     PageColumn(modifier) {
         PageTitle("Admin / Diagnostic", "Le capot technique de Jade")
@@ -614,6 +673,50 @@ private fun AdminScreen(
             return@PageColumn
         }
 
+        InfoCard("Tool Lab v1") {
+            Text(
+                "Jade peut maintenant concevoir du code d'outil candidat. " +
+                    "Le candidat est versionné et contrôlé statiquement, mais jamais exécuté ni activé automatiquement."
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = toolIdea,
+                onValueChange = { toolIdea = it.take(4_000) },
+                label = { Text("Outil à développer") },
+                placeholder = { Text("Ex : un outil qui analyse un fichier log et extrait les erreurs") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    vm.proposeToolCandidate(toolIdea)
+                    toolIdea = ""
+                },
+                enabled = toolIdea.isNotBlank() && !state.toolBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.toolBusy) "Conception…" else "Créer un candidat")
+            }
+            if (state.toolMessage.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(state.toolMessage)
+            }
+            if (state.toolCandidates.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                state.toolCandidates.take(6).forEach { candidate ->
+                    Text(candidate.name, fontWeight = FontWeight.SemiBold)
+                    Text("${candidate.status} • ${candidate.language}")
+                    Text("SHA ${candidate.sourceSha256.take(12)}…")
+                    if (candidate.validationWarnings.isNotEmpty()) {
+                        Text("Revue : ${candidate.validationWarnings.joinToString(" | ").take(260)}")
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
         InfoCard("Runtime Manager") {
             if (state.runtimes.isEmpty()) {
                 Text("Aucun runtime distant enregistré.")
@@ -624,7 +727,7 @@ private fun AdminScreen(
                             "runtime ${runtime.runtimeVersion} • ${runtime.channel}"
                     )
                     if (runtime.updateAvailable) {
-                        Text("  Mise à niveau 0.1.0 recommandée.")
+                        Text("  Mise à niveau 0.1.1 recommandée.")
                     }
                 }
             }

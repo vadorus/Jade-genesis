@@ -54,6 +54,13 @@ class SelfModelBuilder {
             "runtime_manager_v1" in it.capabilities
         }
 
+        val onlineScreenNode = onlineRemote.any {
+            "screen_analyze" in it.capabilities
+        }
+        val onlineVisionNode = onlineRemote.any {
+            "vision_analyze" in it.capabilities
+        }
+
         val capabilities = listOf(
             Capability("persistent_identity", true, "DataStore"),
             Capability("local_memory", true, "Room 3"),
@@ -101,13 +108,13 @@ class SelfModelBuilder {
             Capability(
                 "brain_backend_router",
                 true,
-                "BrainRouter 0.1.0",
+                "BrainRouter 0.1.1",
                 "Les modèles sont des ressources interchangeables ; l'identité Jade reste dans le Core."
             ),
             Capability(
                 "cognitive_core",
                 true,
-                "CognitiveCore 0.1.0",
+                "CognitiveCore 0.1.1",
                 "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
             ),
             Capability(
@@ -188,7 +195,7 @@ class SelfModelBuilder {
             Capability(
                 "diagnostics",
                 true,
-                "DiagnosticLogger 0.1.0",
+                "DiagnosticLogger 0.1.1",
                 "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
             ),
             Capability(
@@ -202,6 +209,24 @@ class SelfModelBuilder {
                 runtimeManagedNode,
                 if (runtimeManagedNode) "RuntimeManager protocol ready" else "legacy_runtime_detected",
                 "La version et le canal des runtimes sont suivis. L'exécution automatique des mises à jour reste volontairement désactivée dans cette première V0.1."
+            ),
+            Capability(
+                "screen_observer",
+                true,
+                if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_ready" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
+                "Le Pixel peut effectuer une capture MediaProjection autorisée. Un runtime PC 0.1.1 peut capturer son propre écran ; l'interprétation nécessite un modèle vision compatible."
+            ),
+            Capability(
+                "vision_analysis",
+                onlineVisionNode,
+                if (onlineVisionNode) "Ollama_vision_node" else "waiting_for_vision_model",
+                "Les images ne sont analysées que par un nœud qui annonce explicitement vision_analyze."
+            ),
+            Capability(
+                "tool_lab",
+                true,
+                "ToolLab v1 candidate-only",
+                "Jade peut concevoir et versionner des outils candidats avec manifeste de permissions et revue statique ; l'activation/exécution automatique reste bloquée."
             ),
             Capability("microphone", false, "not_requested_yet"),
             Capability("camera", false, "not_requested_yet"),
@@ -226,12 +251,13 @@ class SelfModelBuilder {
         )
 
         val limits = mutableListOf(
-            "Le Cognitive Core 0.1.0 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
+            "Le Cognitive Core 0.1.1 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",
             "La protection Admin utilise un PIN local dans cette V0.1 ; l'intégration biométrique pourra la remplacer.",
-            "Le runtime conserve une liste blanche stricte : genesis_probe, text_analysis, memory_consolidation et brain_chat ; aucune commande shell arbitraire.",
+            "Le runtime conserve une liste blanche stricte. Screen Observer utilise seulement des tâches dédiées ; aucune commande shell arbitraire n'est exposée à distance.",
+            "Tool Lab v1 ne peut pas encore activer ou exécuter seul un outil candidat : une étape de sandbox et promotion contrôlée reste nécessaire.",
             "Memory Lifecycle 0.0.7 ne supprime jamais automatiquement une mémoire contradictoire ou obsolète.",
             "Tailscale fournit le transport privé quand il est actif ; Jade ne contourne pas un réseau absent."
         )

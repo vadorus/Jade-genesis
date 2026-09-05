@@ -1,0 +1,1224 @@
+name: Build Jade Genesis V0.1.3 Perception Research Learning Fix 3
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/jade-v013-perception-research-learning-fix3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout V0.1.3 sources
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up real Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
+          cache-disabled: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 and Build Tools 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --channel=3 \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+      - name: Restore stable Jade signing key
+        shell: bash
+        env:
+          JADE_SIGNING_BUNDLE_B64: ${{ secrets.JADE_SIGNING_BUNDLE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JADE_SIGNING_BUNDLE_B64:-}" ]; then
+            echo "ERROR: GitHub secret JADE_SIGNING_BUNDLE_B64 is missing."
+            exit 1
+          fi
+          SIGN_DIR="$RUNNER_TEMP/jade-signing"
+          mkdir -p "$SIGN_DIR"
+          printf '%s' "$JADE_SIGNING_BUNDLE_B64" | base64 -d > "$SIGN_DIR/signing.tar.gz"
+          tar -xzf "$SIGN_DIR/signing.tar.gz" -C "$SIGN_DIR"
+          test -f "$SIGN_DIR/jade-genesis-dev.jks"
+          test -f "$SIGN_DIR/password.txt"
+          test -f "$SIGN_DIR/alias.txt"
+          PASSWORD="$(cat "$SIGN_DIR/password.txt")"
+          ALIAS="$(cat "$SIGN_DIR/alias.txt")"
+          echo "::add-mask::$PASSWORD"
+          echo "JADE_KEYSTORE_PATH=$SIGN_DIR/jade-genesis-dev.jks" >> "$GITHUB_ENV"
+          echo "JADE_KEYSTORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "JADE_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Add Research Engine and Visual Learning store
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p android/app/src/main/java/com/jadegenesis/mobile/research
+          cat > android/app/src/main/java/com/jadegenesis/mobile/research/ResearchEngine.kt <<'KOTLIN'
+          package com.jadegenesis.mobile.research
+
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.withContext
+          import org.json.JSONArray
+          import org.json.JSONObject
+          import java.net.HttpURLConnection
+          import java.net.URL
+          import java.net.URLEncoder
+          import java.nio.charset.StandardCharsets
+
+          data class ResearchEvidence(
+              val provider: String,
+              val title: String,
+              val url: String,
+              val snippet: String,
+              val confidence: Double
+          )
+
+          data class ResearchReport(
+              val query: String,
+              val evidence: List<ResearchEvidence>,
+              val providerErrors: List<String>,
+              val createdAt: Long
+          ) {
+              val providerCount: Int
+                  get() = evidence.map { it.provider }.distinct().size
+
+              val confidence: Double
+                  get() = when {
+                      providerCount >= 3 && evidence.size >= 4 -> 0.88
+                      providerCount >= 2 -> 0.80
+                      evidence.isNotEmpty() -> 0.62
+                      else -> 0.25
+                  }
+
+              fun providerSummary(): String =
+                  evidence.map { it.provider }.distinct().joinToString(", ").ifBlank { "aucune" }
+
+              fun renderForModel(maxEvidence: Int = 6): String = buildString {
+                  appendLine("Requête de recherche : $query")
+                  appendLine("Sources trouvées : ${evidence.size}")
+                  evidence.take(maxEvidence).forEachIndexed { index, item ->
+                      appendLine("[${index + 1}] ${item.provider} — ${item.title}")
+                      appendLine("URL: ${item.url}")
+                      appendLine("Extrait: ${item.snippet}")
+                  }
+                  if (providerErrors.isNotEmpty()) {
+                      appendLine("Fournisseurs indisponibles : ${providerErrors.joinToString(" | ")}")
+                  }
+              }.trim()
+
+              fun renderForUser(maxEvidence: Int = 5): String = buildString {
+                  appendLine("Recherche : $query")
+                  if (evidence.isEmpty()) {
+                      appendLine("Aucune source publique suffisamment exploitable n'a été trouvée.")
+                  } else {
+                      appendLine("Résultats trouvés : ${evidence.size} • fournisseurs indépendants : $providerCount • confiance recherche ${(confidence * 100).toInt()} %")
+                      evidence.take(maxEvidence).forEach { item ->
+                          appendLine("• ${item.provider} — ${item.title}")
+                          appendLine("  ${item.url}")
+                      }
+                  }
+                  if (providerErrors.isNotEmpty()) {
+                      appendLine("Limites : ${providerErrors.joinToString(" | ")}")
+                  }
+              }.trim()
+          }
+
+          class ResearchEngine {
+
+              suspend fun investigate(observation: String): ResearchReport = withContext(Dispatchers.IO) {
+                  val query = buildSafeQuery(observation)
+                  val evidence = mutableListOf<ResearchEvidence>()
+                  val errors = mutableListOf<String>()
+
+                  runCatching { wikipedia(query) }
+                      .onSuccess { evidence += it }
+                      .onFailure { errors += "Wikipedia: ${shortError(it)}" }
+
+                  runCatching { wikidata(query) }
+                      .onSuccess { evidence += it }
+                      .onFailure { errors += "Wikidata: ${shortError(it)}" }
+
+                  if (looksTechnical(query)) {
+                      runCatching { githubIssues(query) }
+                          .onSuccess { evidence += it }
+                          .onFailure { errors += "GitHub: ${shortError(it)}" }
+                  }
+
+                  ResearchReport(
+                      query = query,
+                      evidence = evidence
+                          .distinctBy { it.url }
+                          .sortedByDescending { it.confidence }
+                          .take(8),
+                      providerErrors = errors,
+                      createdAt = System.currentTimeMillis()
+                  )
+              }
+
+              fun buildSafeQuery(observation: String): String {
+                  val redacted = redactSensitive(observation)
+                  val usefulLines = redacted
+                      .lineSequence()
+                      .map { it.trim().trimStart('-', '•', '*', '#', ' ') }
+                      .filter { it.length >= 4 }
+                      .filterNot {
+                          val lower = it.lowercase()
+                          lower.startsWith("conseil") ||
+                              lower.startsWith("incertain") ||
+                              lower.startsWith("confiance") ||
+                              lower.contains("confiance faible")
+                      }
+                      .map {
+                          it.replace(
+                              Regex("""(?i)\b(visible|élevée|moyenne|faible)\b\s*[:\-–—]*"""),
+                              " "
+                          ).trim()
+                      }
+                      .filter { it.isNotBlank() }
+                      .take(4)
+                      .toList()
+
+                  val combined = usefulLines.joinToString(" ")
+                      .replace(Regex("""\s+"""), " ")
+                      .trim()
+                  return combined.take(220).ifBlank {
+                      "analyse visuelle information visible"
+                  }
+              }
+
+              private fun wikipedia(query: String): List<ResearchEvidence> {
+                  val url =
+                      "https://fr.wikipedia.org/w/api.php?action=query&list=search&utf8=1&format=json&srlimit=3&srsearch=${enc(query)}"
+                  val json = JSONObject(get(url))
+                  val results = json.optJSONObject("query")
+                      ?.optJSONArray("search") ?: JSONArray()
+                  return buildList {
+                      for (i in 0 until results.length()) {
+                          val item = results.optJSONObject(i) ?: continue
+                          val title = item.optString("title").trim()
+                          val snippet = cleanHtml(item.optString("snippet"))
+                          if (title.isBlank()) continue
+                          add(
+                              ResearchEvidence(
+                                  provider = "Wikipedia",
+                                  title = title,
+                                  url = "https://fr.wikipedia.org/wiki/${encPath(title.replace(' ', '_'))}",
+                                  snippet = snippet.take(700),
+                                  confidence = 0.78
+                              )
+                          )
+                      }
+                  }
+              }
+
+              private fun wikidata(query: String): List<ResearchEvidence> {
+                  val url =
+                      "https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=fr&uselang=fr&limit=3&search=${enc(query)}"
+                  val json = JSONObject(get(url))
+                  val results = json.optJSONArray("search") ?: JSONArray()
+                  return buildList {
+                      for (i in 0 until results.length()) {
+                          val item = results.optJSONObject(i) ?: continue
+                          val id = item.optString("id").trim()
+                          val label = item.optString("label").trim()
+                          val description = item.optString("description").trim()
+                          if (id.isBlank() || label.isBlank()) continue
+                          add(
+                              ResearchEvidence(
+                                  provider = "Wikidata",
+                                  title = "$label ($id)",
+                                  url = "https://www.wikidata.org/wiki/$id",
+                                  snippet = description.take(700),
+                                  confidence = 0.76
+                              )
+                          )
+                      }
+                  }
+              }
+
+              private fun githubIssues(query: String): List<ResearchEvidence> {
+                  val technical = query
+                      .replace(Regex("""[^\p{L}\p{N}._+\- ]"""), " ")
+                      .replace(Regex("""\s+"""), " ")
+                      .take(180)
+                  val url =
+                      "https://api.github.com/search/issues?q=${enc(technical)}&per_page=3&sort=updated&order=desc"
+                  val json = JSONObject(get(url, accept = "application/vnd.github+json"))
+                  val results = json.optJSONArray("items") ?: JSONArray()
+                  return buildList {
+                      for (i in 0 until results.length()) {
+                          val item = results.optJSONObject(i) ?: continue
+                          val title = item.optString("title").trim()
+                          val htmlUrl = item.optString("html_url").trim()
+                          val body = item.optString("body").trim()
+                          if (title.isBlank() || htmlUrl.isBlank()) continue
+                          add(
+                              ResearchEvidence(
+                                  provider = "GitHub",
+                                  title = title,
+                                  url = htmlUrl,
+                                  snippet = body.replace(Regex("""\s+"""), " ").take(700),
+                                  confidence = 0.70
+                              )
+                          )
+                      }
+                  }
+              }
+
+              private fun get(url: String, accept: String = "application/json"): String {
+                  val connection = URL(url).openConnection() as HttpURLConnection
+                  return try {
+                      connection.requestMethod = "GET"
+                      connection.connectTimeout = 6_000
+                      connection.readTimeout = 8_000
+                      connection.setRequestProperty("Accept", accept)
+                      connection.setRequestProperty(
+                          "User-Agent",
+                          "JadeGenesis/0.1.3 (personal research assistant; public-data research)"
+                      )
+                      val code = connection.responseCode
+                      val stream = if (code in 200..299) {
+                          connection.inputStream
+                      } else {
+                          connection.errorStream
+                      }
+                      val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                      if (code !in 200..299) {
+                          error("HTTP $code ${body.take(120)}")
+                      }
+                      body
+                  } finally {
+                      connection.disconnect()
+                  }
+              }
+
+              private fun redactSensitive(value: String): String {
+                  var text = value
+                  text = text.replace(
+                      Regex("""(?i)\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b"""),
+                      "[email]"
+                  )
+                  text = text.replace(
+                      Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b"""),
+                      "[ip]"
+                  )
+                  text = text.replace(
+                      Regex("""(?i)\b(?:bearer\s+)?[A-Za-z0-9_\-]{28,}\b"""),
+                      "[secret]"
+                  )
+                  text = text.replace(
+                      Regex("""(?i)\b[A-Z]:\\[^\s]{2,}"""),
+                      "[path]"
+                  )
+                  return text
+              }
+
+              private fun looksTechnical(query: String): Boolean {
+                  val lower = query.lowercase()
+                  val markers = listOf(
+                      "error", "erreur", "exception", "android", "windows", "linux",
+                      "github", "gradle", "kotlin", "java", "python", "ollama",
+                      "pixel", "nvidia", "amd", "intel", "driver", "runtime",
+                      "version", "http", "api", "logiciel", "application"
+                  )
+                  return markers.any(lower::contains)
+              }
+
+              private fun cleanHtml(value: String): String =
+                  value
+                      .replace(Regex("""<[^>]+>"""), " ")
+                      .replace("&quot;", "\"")
+                      .replace("&amp;", "&")
+                      .replace("&#039;", "'")
+                      .replace(Regex("""\s+"""), " ")
+                      .trim()
+
+              private fun enc(value: String): String =
+                  URLEncoder.encode(value, StandardCharsets.UTF_8.toString())
+
+              private fun encPath(value: String): String =
+                  enc(value).replace("+", "%20")
+
+              private fun shortError(t: Throwable): String =
+                  (t.message ?: t::class.java.simpleName).replace(Regex("""\s+"""), " ").take(160)
+          }
+          KOTLIN
+
+          mkdir -p android/app/src/main/java/com/jadegenesis/mobile/cognitive
+          cat > android/app/src/main/java/com/jadegenesis/mobile/cognitive/VisualLearningStore.kt <<'KOTLIN'
+          package com.jadegenesis.mobile.cognitive
+
+          import android.content.Context
+          import com.jadegenesis.mobile.model.LearningCandidate
+          import org.json.JSONArray
+          import org.json.JSONObject
+
+          data class VisualObservationRecord(
+              val imageSha256: String,
+              val source: String,
+              val visionText: String,
+              val observedAt: Long,
+              val researchQuery: String = "",
+              val researchText: String = "",
+              val researchEvidenceCount: Int = 0,
+              val researchConfidence: Double = 0.0,
+              val researchedAt: Long = 0L
+          )
+
+          class VisualLearningStore(context: Context) {
+              companion object {
+                  private const val PREFS = "jade_visual_learning_v1"
+                  private const val KEY_RECORDS = "records"
+                  private const val MAX_RECORDS = 24
+              }
+
+              private val prefs =
+                  context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+              @Synchronized
+              fun recordVision(
+                  imageSha256: String,
+                  source: String,
+                  visionText: String
+              ): VisualObservationRecord {
+                  val current = records().toMutableList()
+                  val existingIndex = current.indexOfFirst { it.imageSha256 == imageSha256 }
+                  val record = if (existingIndex >= 0) {
+                      current[existingIndex].copy(
+                          source = source,
+                          visionText = visionText.trim()
+                      )
+                  } else {
+                      VisualObservationRecord(
+                          imageSha256 = imageSha256,
+                          source = source,
+                          visionText = visionText.trim(),
+                          observedAt = System.currentTimeMillis()
+                      )
+                  }
+
+                  if (existingIndex >= 0) {
+                      current[existingIndex] = record
+                  } else {
+                      current.add(0, record)
+                  }
+                  save(current)
+                  return record
+              }
+
+              @Synchronized
+              fun hasObservation(imageSha256: String): Boolean =
+                  records().any { it.imageSha256 == imageSha256 }
+
+              @Synchronized
+              fun last(): VisualObservationRecord? = records().firstOrNull()
+
+              @Synchronized
+              fun recordResearch(
+                  imageSha256: String,
+                  query: String,
+                  researchText: String,
+                  evidenceCount: Int,
+                  confidence: Double
+              ): VisualObservationRecord? {
+                  val current = records().toMutableList()
+                  val index = current.indexOfFirst { it.imageSha256 == imageSha256 }
+                  if (index < 0) return null
+                  val updated = current[index].copy(
+                      researchQuery = query.trim(),
+                      researchText = researchText.trim(),
+                      researchEvidenceCount = evidenceCount.coerceAtLeast(0),
+                      researchConfidence = confidence.coerceIn(0.0, 1.0),
+                      researchedAt = System.currentTimeMillis()
+                  )
+                  current[index] = updated
+                  save(current)
+                  return updated
+              }
+
+              fun candidates(limit: Int = 6): List<LearningCandidate> =
+                  records()
+                      .map { record ->
+                          if (record.researchedAt > 0L) {
+                              LearningCandidate(
+                                  id = "visual-${record.imageSha256.take(16)}-researched",
+                                  title = "Apprentissage visuel à consolider",
+                                  description =
+                                      "Une observation visuelle a été confrontée à des sources publiques. " +
+                                          "Elle reste candidate tant que Jade ne dispose pas d'assez de confirmations indépendantes.",
+                                  evidence =
+                                      "${record.researchEvidenceCount} élément(s) de preuve • " +
+                                          "image ${record.imageSha256.take(12)}… • ${record.source}",
+                                  confidence = record.researchConfidence,
+                                  createdAt = record.researchedAt
+                              )
+                          } else {
+                              LearningCandidate(
+                                  id = "visual-${record.imageSha256.take(16)}-pending",
+                                  title = "Observation visuelle à vérifier",
+                                  description =
+                                      "Jade a observé l'écran mais cette observation n'a pas encore été recoupée avec des données externes.",
+                                  evidence =
+                                      "image ${record.imageSha256.take(12)}… • ${record.source}",
+                                  confidence = 0.55,
+                                  createdAt = record.observedAt
+                              )
+                          }
+                      }
+                      .sortedByDescending { it.createdAt }
+                      .take(limit)
+
+              private fun records(): List<VisualObservationRecord> {
+                  val raw = prefs.getString(KEY_RECORDS, null) ?: return emptyList()
+                  return runCatching {
+                      val array = JSONArray(raw)
+                      buildList {
+                          for (index in 0 until array.length()) {
+                              val item = array.optJSONObject(index) ?: continue
+                              val sha = item.optString("image_sha256").trim()
+                              val text = item.optString("vision_text").trim()
+                              if (sha.isBlank() || text.isBlank()) continue
+                              add(
+                                  VisualObservationRecord(
+                                      imageSha256 = sha,
+                                      source = item.optString("source", "unknown"),
+                                      visionText = text,
+                                      observedAt = item.optLong("observed_at", 0L),
+                                      researchQuery = item.optString("research_query"),
+                                      researchText = item.optString("research_text"),
+                                      researchEvidenceCount =
+                                          item.optInt("research_evidence_count", 0),
+                                      researchConfidence =
+                                          item.optDouble("research_confidence", 0.0),
+                                      researchedAt = item.optLong("researched_at", 0L)
+                                  )
+                              )
+                          }
+                      }
+                  }.getOrDefault(emptyList())
+              }
+
+              private fun save(records: List<VisualObservationRecord>) {
+                  val array = JSONArray()
+                  records
+                      .sortedByDescending { it.observedAt }
+                      .distinctBy { it.imageSha256 }
+                      .take(MAX_RECORDS)
+                      .forEach { record ->
+                          array.put(
+                              JSONObject().apply {
+                                  put("image_sha256", record.imageSha256)
+                                  put("source", record.source)
+                                  put("vision_text", record.visionText)
+                                  put("observed_at", record.observedAt)
+                                  put("research_query", record.researchQuery)
+                                  put("research_text", record.researchText)
+                                  put(
+                                      "research_evidence_count",
+                                      record.researchEvidenceCount
+                                  )
+                                  put("research_confidence", record.researchConfidence)
+                                  put("researched_at", record.researchedAt)
+                              }
+                          )
+                      }
+                  prefs.edit().putString(KEY_RECORDS, array.toString()).apply()
+              }
+          }
+          KOTLIN
+
+      - name: Patch Jade Core, UI and version to V0.1.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def read(path):
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path, value):
+              Path(path).write_text(value, encoding="utf-8")
+
+          def replace_required(text, old, new, label, count=1):
+              if old not in text:
+                  raise SystemExit(f"Missing patch anchor: {label}")
+              return text.replace(old, new, count)
+
+          def replace_range(text, start_marker, end_marker, replacement, label):
+              start = text.find(start_marker)
+              if start < 0:
+                  raise SystemExit(f"Missing range start: {label}")
+              end = text.find(end_marker, start + len(start_marker))
+              if end < 0:
+                  raise SystemExit(f"Missing range end: {label}")
+              return text[:start] + replacement + text[end:]
+
+          # ------------------------------------------------------------------
+          # Version 0.1.3
+          # ------------------------------------------------------------------
+          path = "android/app/build.gradle.kts"
+          text = read(path)
+          text = replace_required(
+              text,
+              'versionCode = 12\n        versionName = "0.1.2"',
+              'versionCode = 13\n        versionName = "0.1.3"',
+              "Gradle version"
+          )
+          write(path, text)
+
+          path = "android/app/src/main/java/com/jadegenesis/mobile/identity/IdentityManager.kt"
+          text = read(path)
+          text = replace_required(
+              text,
+              'const val CURRENT_VERSION = "0.1.2"',
+              'const val CURRENT_VERSION = "0.1.3"',
+              "IdentityManager version"
+          )
+          write(path, text)
+
+          path = "android/app/src/main/java/com/jadegenesis/mobile/model/Models.kt"
+          text = read(path)
+          text = replace_required(
+              text,
+              'val version: String = "0.1.2"',
+              'val version: String = "0.1.3"',
+              "Models JadeIdentity version"
+          )
+          write(path, text)
+
+          path = "android/app/src/main/java/com/jadegenesis/mobile/ui/JadeApp.kt"
+          text = read(path)
+          text = replace_required(
+              text,
+              'self?.identity?.version ?: "0.1.2"',
+              'self?.identity?.version ?: "0.1.3"',
+              "JadeApp fallback version"
+          )
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # JadeCore: Research Engine + Visual Learning
+          # ------------------------------------------------------------------
+          core_path = "android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt"
+          text = read(core_path)
+
+          text = replace_required(
+              text,
+              'import com.jadegenesis.mobile.cognitive.LearningEngine\n',
+              'import com.jadegenesis.mobile.cognitive.LearningEngine\n'
+              'import com.jadegenesis.mobile.cognitive.VisualLearningStore\n',
+              "JadeCore VisualLearning import"
+          )
+          text = replace_required(
+              text,
+              'import com.jadegenesis.mobile.resource.ResourceGovernor\n',
+              'import com.jadegenesis.mobile.resource.ResourceGovernor\n'
+              'import com.jadegenesis.mobile.research.ResearchEngine\n',
+              "JadeCore ResearchEngine import"
+          )
+          text = replace_required(
+              text,
+              '    private val learningEngine = LearningEngine()\n',
+              '    private val learningEngine = LearningEngine()\n'
+              '    private val visualLearning = VisualLearningStore(appContext)\n'
+              '    private val researchEngine = ResearchEngine()\n',
+              "JadeCore engine instances"
+          )
+          text = replace_required(
+              text,
+              '"Jade Genesis 0.1.2 initialisée."',
+              '"Jade Genesis 0.1.3 initialisée."',
+              "JadeCore init version"
+          )
+
+          old_candidates = (
+              '    fun learningCandidates(limit: Int = 8): List<LearningCandidate> =\n'
+              '        learningEngine.candidates(taskLedger.recent(50), limit)\n'
+          )
+          new_candidates = (
+              '    fun learningCandidates(limit: Int = 8): List<LearningCandidate> =\n'
+              '        (\n'
+              '            visualLearning.candidates(limit) +\n'
+              '                learningEngine.candidates(taskLedger.recent(50), limit)\n'
+              '            )\n'
+              '            .distinctBy { it.id }\n'
+              '            .sortedByDescending { it.confidence }\n'
+              '            .take(limit)\n'
+          )
+          text = replace_required(
+              text,
+              old_candidates,
+              new_candidates,
+              "JadeCore learningCandidates"
+          )
+
+          pixel_anchor = (
+              '        val answer = json.optString("text").trim()\n'
+              '        if (answer.isBlank()) error("Le backend vision a renvoyé une réponse vide.")\n'
+              '        diagnostics.log(\n'
+          )
+          pixel_insert = (
+              '        val answer = json.optString("text").trim()\n'
+              '        if (answer.isBlank()) error("Le backend vision a renvoyé une réponse vide.")\n'
+              '\n'
+              '        val wasKnown = visualLearning.hasObservation(frame.sha256)\n'
+              '        visualLearning.recordVision(\n'
+              '            imageSha256 = frame.sha256,\n'
+              '            source = "pixel_screen",\n'
+              '            visionText = answer\n'
+              '        )\n'
+              '        if (!wasKnown) {\n'
+              '            memory.remember(\n'
+              '                type = MemoryType.OBSERVATION,\n'
+              '                content = answer,\n'
+              '                source = "VISION_PIXEL:${frame.sha256.take(16)}",\n'
+              '                confidence = 0.68,\n'
+              '                originNode = response.nodeId\n'
+              '            )\n'
+              '        }\n'
+              '\n'
+              '        diagnostics.log(\n'
+          )
+          text = replace_required(
+              text,
+              pixel_anchor,
+              pixel_insert,
+              "Pixel visual observation"
+          )
+
+          pc_anchor = (
+              '        val answer = json.optString("text").trim()\n'
+              '        if (answer.isBlank()) error("Le backend Screen Observer a renvoyé une réponse vide.")\n'
+              '        diagnostics.log(\n'
+          )
+          pc_insert = (
+              '        val answer = json.optString("text").trim()\n'
+              '        if (answer.isBlank()) error("Le backend Screen Observer a renvoyé une réponse vide.")\n'
+              '\n'
+              '        val pcImageSha = json.optString("image_sha256").trim().ifBlank {\n'
+              '            sha256("pc-screen:${System.currentTimeMillis()}:$answer")\n'
+              '        }\n'
+              '        val wasKnown = visualLearning.hasObservation(pcImageSha)\n'
+              '        visualLearning.recordVision(\n'
+              '            imageSha256 = pcImageSha,\n'
+              '            source = "pc_screen",\n'
+              '            visionText = answer\n'
+              '        )\n'
+              '        if (!wasKnown) {\n'
+              '            memory.remember(\n'
+              '                type = MemoryType.OBSERVATION,\n'
+              '                content = answer,\n'
+              '                source = "VISION_PC:${pcImageSha.take(16)}",\n'
+              '                confidence = 0.68,\n'
+              '                originNode = response.nodeId\n'
+              '            )\n'
+              '        }\n'
+              '\n'
+              '        diagnostics.log(\n'
+          )
+          text = replace_required(
+              text,
+              pc_anchor,
+              pc_insert,
+              "PC visual observation"
+          )
+
+          admin_anchor = '    fun isAdminConfigured(): Boolean = adminGate.isConfigured()\n'
+          research_method = '''    suspend fun deepResearchLastVisualObservation(): String {
+              val observation = visualLearning.last()
+                  ?: error("Aucune observation visuelle récente à approfondir.")
+
+              val report = researchEngine.investigate(observation.visionText)
+              val synthesis = if (report.evidence.isNotEmpty()) {
+                  val self = selfModel()
+                  val prompt = buildString {
+                      appendLine("Tu es le module de synthèse de Jade Genesis.")
+                      appendLine("Réponds exclusivement en français.")
+                      appendLine("Ne prétends jamais qu'une information est confirmée si les sources ne la confirment pas.")
+                      appendLine("Sépare : Faits confirmés, Probable, Non vérifié, Conclusion.")
+                      appendLine("Observation visuelle locale :")
+                      appendLine(observation.visionText.take(6_000))
+                      appendLine()
+                      appendLine("Données publiques récupérées :")
+                      appendLine(report.renderForModel())
+                      appendLine()
+                      appendLine("Cite les numéros [1], [2]... des sources quand tu t'appuies dessus.")
+                  }
+                  val result = brainRouter.think(
+                      BrainContext(
+                          userInput = prompt,
+                          selfModel = self,
+                          memories = memory.latest(8),
+                          tools = tools.describe(),
+                          operation = "visual_research_synthesis"
+                      )
+                  )
+                  result.text.trim().ifBlank { report.renderForUser() }
+              } else {
+                  buildString {
+                      appendLine("Je n'ai pas trouvé assez de données publiques pour confirmer cette observation.")
+                      appendLine(report.renderForUser())
+                  }.trim()
+              }
+
+              // V0.1.3 ne promeut jamais automatiquement une recherche web en connaissance stable.
+              // Elle reste une hypothèse candidate jusqu'à une validation/consolidation ultérieure.
+              if (report.evidence.isNotEmpty()) {
+                  memory.remember(
+                      type = MemoryType.HYPOTHESIS,
+                      content = synthesis,
+                      source = "RESEARCH_CANDIDATE_V1:${report.providerSummary()}",
+                      confidence = report.confidence,
+                      originNode = profiler.nodeId()
+                  )
+              }
+
+              visualLearning.recordResearch(
+                  imageSha256 = observation.imageSha256,
+                  query = report.query,
+                  researchText = synthesis,
+                  evidenceCount = report.evidence.size,
+                  confidence = report.confidence
+              )
+
+              diagnostics.log(
+                  if (report.evidence.isNotEmpty()) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
+                  "visual_research_completed",
+                  if (report.evidence.isNotEmpty()) {
+                      "Observation visuelle recoupée ; résultat conservé comme hypothèse candidate."
+                  } else {
+                      "Observation visuelle recherchée mais non corroborée."
+                  },
+                  mapOf(
+                      "image_sha256" to observation.imageSha256,
+                      "source" to observation.source,
+                      "research_query" to report.query.take(180),
+                      "evidence_count" to report.evidence.size,
+                      "provider_count" to report.providerCount,
+                      "providers" to report.providerSummary(),
+                      "confidence" to report.confidence
+                  )
+              )
+
+              return buildString {
+                  appendLine("ANALYSE APPROFONDIE")
+                  appendLine(synthesis)
+                  appendLine()
+                  appendLine(report.renderForUser())
+                  appendLine()
+                  appendLine("Statut mémoire : HYPOTHÈSE candidate — pas encore connaissance stable.")
+                  appendLine(
+                      "Confidentialité : l'image n'a pas été envoyée aux sources Internet ; " +
+                          "seule une requête texte raccourcie et filtrée a été utilisée."
+                  )
+              }.trim()
+          }
+
+          '''
+          if admin_anchor not in text:
+              raise SystemExit("Missing patch anchor: JadeCore admin insertion")
+          text = text.replace(admin_anchor, research_method + admin_anchor, 1)
+          write(core_path, text)
+
+          # ------------------------------------------------------------------
+          # ViewModel: research state + action
+          # ------------------------------------------------------------------
+          vm_path = "android/app/src/main/java/com/jadegenesis/mobile/ui/JadeViewModel.kt"
+          text = read(vm_path)
+
+          state_anchor = (
+              '    val screenBusy: Boolean = false,\n'
+              '    val screenMessage: String = "",\n'
+          )
+          state_new = (
+              '    val screenBusy: Boolean = false,\n'
+              '    val screenMessage: String = "",\n'
+              '    val researchBusy: Boolean = false,\n'
+              '    val researchMessage: String = "",\n'
+          )
+          text = replace_required(
+              text,
+              state_anchor,
+              state_new,
+              "ViewModel research state"
+          )
+
+          pixel_busy = (
+              '                screenBusy = true,\n'
+              '                screenMessage = "Capture Pixel autorisée. Jade attend l\'image puis cherche un nœud vision…",\n'
+              '                error = null\n'
+          )
+          pixel_busy_new = (
+              '                screenBusy = true,\n'
+              '                screenMessage = "Capture Pixel autorisée. Jade attend l\'image puis cherche un nœud vision…",\n'
+              '                researchMessage = "",\n'
+              '                error = null\n'
+          )
+          text = replace_required(
+              text,
+              pixel_busy,
+              pixel_busy_new,
+              "ViewModel Pixel research reset"
+          )
+
+          pc_busy = (
+              '                screenBusy = true,\n'
+              '                screenMessage = "Jade demande au runtime PC d\'observer son écran…",\n'
+              '                error = null\n'
+          )
+          pc_busy_new = (
+              '                screenBusy = true,\n'
+              '                screenMessage = "Jade demande au runtime PC d\'observer son écran…",\n'
+              '                researchMessage = "",\n'
+              '                error = null\n'
+          )
+          text = replace_required(
+              text,
+              pc_busy,
+              pc_busy_new,
+              "ViewModel PC research reset"
+          )
+
+          tool_anchor = '    fun proposeToolCandidate(idea: String) {\n'
+          research_vm = '''    fun deepResearchLastVisualObservation() {
+              viewModelScope.launch {
+                  _state.value = _state.value.copy(
+                      researchBusy = true,
+                      researchMessage =
+                          "Jade extrait une requête sûre, consulte des sources publiques et recoupe les résultats…",
+                      error = null
+                  )
+                  runCatching { core.deepResearchLastVisualObservation() }
+                      .onSuccess { answer ->
+                          val bundle = loadBundle(initialize = false)
+                          _state.value = _state.value.copy(
+                              researchBusy = false,
+                              researchMessage = answer,
+                              selfModel = bundle.self,
+                              memories = bundle.memories,
+                              memoryCount = bundle.memoryCount,
+                              learningCandidates = bundle.learningCandidates,
+                              diagnostics = bundle.diagnostics,
+                              error = null
+                          )
+                      }
+                      .onFailure { e ->
+                          _state.value = _state.value.copy(
+                              researchBusy = false,
+                              researchMessage = "",
+                              diagnostics = core.recentDiagnostics(),
+                              error = e.message ?: e.toString()
+                          )
+                      }
+              }
+          }
+
+          '''
+          if tool_anchor not in text:
+              raise SystemExit("Missing patch anchor: ViewModel tool method")
+          text = text.replace(tool_anchor, research_vm + tool_anchor, 1)
+          write(vm_path, text)
+
+          # ------------------------------------------------------------------
+          # Jade UI: replace complete card using stable boundary markers.
+          # ------------------------------------------------------------------
+          app_path = "android/app/src/main/java/com/jadegenesis/mobile/ui/JadeApp.kt"
+          text = read(app_path)
+          card_start = '        InfoCard("Screen Observer v1") {'
+          card_end = '\n\n        if (state.chatBusy) {'
+          new_card = '''        InfoCard("Perception + Research v1") {
+              Text(
+                  "Observation à la demande uniquement : Jade ne capture aucun écran en secret. " +
+                      "Le Pixel affiche l'autorisation Android avant chaque session."
+              )
+              Spacer(Modifier.height(8.dp))
+              Button(
+                  onClick = requestPhoneScreenCapture,
+                  enabled = !state.screenBusy && !state.researchBusy,
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser l'écran Pixel")
+              }
+              Spacer(Modifier.height(6.dp))
+              OutlinedButton(
+                  onClick = { vm.analyzePcScreen() },
+                  enabled = !state.screenBusy && !state.researchBusy,
+                  modifier = Modifier.fillMaxWidth()
+              ) {
+                  Text("Analyser l'écran du PC")
+              }
+              if (state.screenMessage.isNotBlank()) {
+                  Spacer(Modifier.height(8.dp))
+                  Text(state.screenMessage)
+                  Spacer(Modifier.height(8.dp))
+                  Button(
+                      onClick = { vm.deepResearchLastVisualObservation() },
+                      enabled = !state.screenBusy && !state.researchBusy,
+                      modifier = Modifier.fillMaxWidth()
+                  ) {
+                      Text(
+                          if (state.researchBusy) {
+                              "Recherche + vérification en cours…"
+                          } else {
+                              "Approfondir avec des données publiques"
+                          }
+                      )
+                  }
+                  Spacer(Modifier.height(4.dp))
+                  Text(
+                      "L'image reste dans Jade/son nœud vision. La recherche Internet reçoit seulement une requête texte raccourcie et filtrée."
+                  )
+              }
+              if (state.researchMessage.isNotBlank()) {
+                  Spacer(Modifier.height(8.dp))
+                  Text(state.researchMessage)
+              }
+          }'''
+          text = replace_range(
+              text,
+              card_start,
+              card_end,
+              new_card,
+              "JadeApp Perception card"
+          )
+          write(app_path, text)
+
+          # ------------------------------------------------------------------
+          # Self Model: replace learning capability block using stable markers.
+          # ------------------------------------------------------------------
+          self_path = "android/app/src/main/java/com/jadegenesis/mobile/selfmodel/SelfModelBuilder.kt"
+          text = read(self_path)
+          capability_start = (
+              '            Capability(\n'
+              '                "learning_candidates",\n'
+          )
+          capability_end = (
+              '            Capability(\n'
+              '                "task_router",\n'
+          )
+          capability_new = '''            Capability(
+              "learning_candidates",
+              true,
+              "LearningEngine + VisualLearning v1",
+              "Les échecs, latences et observations visuelles recoupées produisent des candidats d'apprentissage mesurables ; ils ne sont pas appliqués automatiquement."
+          ),
+          Capability(
+              "research_engine",
+              true,
+              "ResearchEngine v1 public-data",
+              "Après une observation visuelle, Jade peut rechercher des données publiques via des fournisseurs interchangeables. V1 utilise Wikipedia, Wikidata et GitHub pour les sujets techniques."
+          ),
+          Capability(
+              "visual_learning",
+              true,
+              "VisualLearningStore v1",
+              "Jade conserve la provenance d'une observation, son empreinte d'image, la recherche associée et le niveau de corroboration avant consolidation."
+          ),
+          '''
+          text = replace_range(
+              text,
+              capability_start,
+              capability_end,
+              capability_new,
+              "SelfModel learning/research capabilities"
+          )
+          text = text.replace("CognitiveCore 0.1.2", "CognitiveCore 0.1.3")
+          text = text.replace("DiagnosticLogger 0.1.2", "DiagnosticLogger 0.1.3")
+          write(self_path, text)
+
+          # ------------------------------------------------------------------
+          # Local Android node advertises its own V0.1.3 capabilities.
+          # Remote PC runtime remains compatible at 0.1.1.
+          # ------------------------------------------------------------------
+          node_path = "android/app/src/main/java/com/jadegenesis/mobile/node/NodeManager.kt"
+          text = read(node_path)
+          text = replace_required(
+              text,
+              '        runtimeVersion = "0.1.2",\n        runtimeChannel = "android"',
+              '        runtimeVersion = "0.1.3",\n        runtimeChannel = "android"',
+              "NodeManager local runtime version"
+          )
+          text = replace_required(
+              text,
+              '            "memory_consolidation",\n            "task_queue_v1"\n        ),',
+              '            "memory_consolidation",\n'
+              '            "task_queue_v1",\n'
+              '            "research_engine_v1",\n'
+              '            "visual_learning_v1"\n'
+              '        ),',
+              "NodeManager local capabilities"
+          )
+          write(node_path, text)
+
+          print("V0.1.3 robust patch applied successfully")
+          PY
+
+      - name: Verify V0.1.3 source before build
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'versionCode = 13' android/app/build.gradle.kts
+          grep -F 'versionName = "0.1.3"' android/app/build.gradle.kts
+          grep -F 'CURRENT_VERSION = "0.1.3"' \
+            android/app/src/main/java/com/jadegenesis/mobile/identity/IdentityManager.kt
+          grep -F 'class ResearchEngine' \
+            android/app/src/main/java/com/jadegenesis/mobile/research/ResearchEngine.kt
+          grep -F 'class VisualLearningStore' \
+            android/app/src/main/java/com/jadegenesis/mobile/cognitive/VisualLearningStore.kt
+          grep -F 'deepResearchLastVisualObservation' \
+            android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt
+          grep -F 'Approfondir avec des données publiques' \
+            android/app/src/main/java/com/jadegenesis/mobile/ui/JadeApp.kt
+          grep -F 'ResearchEngine v1 public-data' \
+            android/app/src/main/java/com/jadegenesis/mobile/selfmodel/SelfModelBuilder.kt
+          grep -F 'type = MemoryType.HYPOTHESIS' \
+            android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt
+          if grep -F 'MemoryType.KNOWLEDGE' android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt | grep -F 'report.evidence' >/dev/null; then
+            echo "ERROR: V0.1.3 must not auto-promote visual research to stable KNOWLEDGE."
+            exit 1
+          fi
+          grep -F 'VERSION = "0.1.1"' node-agent/jade_node_agent.py
+          python3 -m py_compile node-agent/jade_node_agent.py
+
+      - name: Remove every stale Android build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf android/.gradle android/build android/app/build
+          find android -type f -name '*.apk' -delete
+
+      - name: Build V0.1.3 from scratch with real Gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --console=plain \
+            -p android \
+            :app:assembleDebug
+
+      - name: Verify APK really is Jade Genesis 0.1.3
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/badging.txt"
+          grep -F "package: name='com.jadegenesis.mobile'" "$RUNNER_TEMP/badging.txt"
+          grep -F "versionCode='13'" "$RUNNER_TEMP/badging.txt"
+          grep -F "versionName='0.1.3'" "$RUNNER_TEMP/badging.txt"
+          sha256sum "$APK" | tee "$RUNNER_TEMP/apk.sha256"
+
+      - name: Verify stable Jade APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          SIGNATURE_FILE="$RUNNER_TEMP/signature.txt"
+          EXPECTED_DIGEST="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" \
+            | tee "$SIGNATURE_FILE"
+
+          grep -F "Number of signers: 1" "$SIGNATURE_FILE" >/dev/null
+          ACTUAL_DIGEST="$(
+            sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' "$SIGNATURE_FILE" \
+              | head -n 1 \
+              | tr '[:upper:]' '[:lower:]' \
+              | tr -d ':[:space:]'
+          )"
+
+          if [ -z "$ACTUAL_DIGEST" ]; then
+            echo "ERROR: unable to read APK signer SHA-256 digest."
+            exit 1
+          fi
+
+          if [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "ERROR: APK signer fingerprint does not match the stable Jade key."
+            exit 1
+          fi
+
+          echo "Stable Jade signing fingerprint verified."
+
+      - name: Package verified V0.1.3 APK and compatible runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/jade-v013"
+          mkdir -p "$OUT"
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+            "$OUT/Jade-Genesis-0.1.3.apk"
+          cp node-agent/jade_node_agent.py "$OUT/jade_node_agent_0.1.1.py"
+          cp "$RUNNER_TEMP/apk.sha256" "$OUT/Jade-Genesis-0.1.3.apk.sha256.txt"
+          cat > "$OUT/README.txt" <<'TXT'
+          Jade Genesis 0.1.3 — Perception + Research + Learning v1
+
+          Android:
+          - Screen perception remains on-demand.
+          - Visual observations become provenance-aware learning candidates.
+          - "Approfondir avec des données publiques" performs a second research stage.
+          - The image itself is not sent to public Internet research sources.
+          - Only a shortened/redacted text query is used by ResearchEngine.
+          - Public-data providers in v1: French Wikipedia, Wikidata, and GitHub issues for technical topics.
+          - Findings remain candidates/knowledge with confidence; research is not silently treated as ground truth.
+
+          Distributed runtime:
+          - PC/VPS Node Runtime 0.1.1 remains compatible; no token or Node ID reset is needed.
+          TXT
+
+      - name: Persist verified V0.1.3 sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Jade Genesis CI"
+          git config user.email "actions@jade-genesis.local"
+          git add \
+            android/app/build.gradle.kts \
+            android/app/src/main/java/com/jadegenesis/mobile/identity/IdentityManager.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/model/Models.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/ui/JadeViewModel.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/ui/JadeApp.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/selfmodel/SelfModelBuilder.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/node/NodeManager.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/research/ResearchEngine.kt \
+            android/app/src/main/java/com/jadegenesis/mobile/cognitive/VisualLearningStore.kt
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "Jade Genesis 0.1.3 perception research learning"
+            git push origin HEAD:main
+          fi
+
+      - name: Upload verified Jade Genesis 0.1.3
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jade-Genesis-0.1.3-perception-research-learning-verified
+          path: ${{ runner.temp }}/jade-v013/
+          if-no-files-found: error
+          retention-days: 90

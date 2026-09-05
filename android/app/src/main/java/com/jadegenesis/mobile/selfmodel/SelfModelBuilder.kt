@@ -58,6 +58,12 @@ class SelfModelBuilder {
             Capability("persistent_identity", true, "DataStore"),
             Capability("local_memory", true, "Room 3"),
             Capability(
+                "memory_lifecycle",
+                true,
+                "MemoryLifecycleManager 0.0.7",
+                "Empreinte les sources, bloque les consolidations identiques et classe NEW/CONFIRMED/CONTRADICTORY/OBSOLETE_CANDIDATE sans suppression automatique."
+            ),
+            Capability(
                 "device_inspection",
                 "inspect_device" in toolNames,
                 "ToolRegistry"
@@ -112,7 +118,7 @@ class SelfModelBuilder {
                 } else {
                     "LocalMemoryConsolidation"
                 },
-                "Analyse un lot de mémoire, détecte doublons et contradictions potentielles puis stocke une connaissance consolidée."
+                "La consolidation reste distribuable ; Memory Lifecycle 0.0.7 décide d'abord si le lot a réellement changé."
             ),
             Capability(
                 "distributed_execution",
@@ -176,7 +182,8 @@ class SelfModelBuilder {
 
         val limits = mutableListOf(
             "Aucun modèle génératif n'est encore connecté.",
-            "La consolidation 0.0.6 est déterministe et heuristique : une contradiction détectée est un signal à vérifier, pas une vérité automatiquement tranchée.",
+            "Memory Lifecycle 0.0.7 classe les contradictions et l'obsolescence comme des candidats à vérifier ; il ne tranche ni ne supprime automatiquement une mémoire.",
+            "La détection de contradiction reste déterministe et heuristique : elle produit un signal, pas une vérité.",
             "Le runtime reste sur une liste blanche : genesis_probe, text_analysis et memory_consolidation uniquement ; aucune commande système arbitraire n'est exposée.",
             "La file persistante 0.0.6 suit et récupère l'état des tâches, mais l'ordonnancement autonome en arrière-plan viendra plus tard.",
             "Jade ne réécrit pas encore seule son code ni les poids d'un modèle.",

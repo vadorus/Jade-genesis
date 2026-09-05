@@ -109,7 +109,7 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                 Text(
                     "Adaptive Learning Core Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.6"),
+                        (state.selfModel?.identity?.version ?: "0.0.7"),
                     style = MaterialTheme.typography.titleMedium
                 )
 
@@ -465,6 +465,9 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 
                         Text(
                             "La consolidation crée une connaissance traçable sans supprimer les mémoires sources."
+                        )
+                        Text(
+                            "Memory Lifecycle 0.0.7 empreinte le lot et bloque une consolidation identique."
                         )
 
                         if (state.taskMessage.isNotBlank()) {

@@ -199,7 +199,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     fun runMemoryConsolidation() {
         viewModelScope.launch {
             beginTask(
-                "Jade prépare un lot de mémoire, le place dans la file et choisit un nœud…"
+                "Memory Lifecycle 0.0.7 vérifie d'abord si les sources ont réellement changé…"
             )
 
             runCatching {
@@ -279,23 +279,44 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             pendingTasks = core.pendingTaskCount(),
             memories = memories,
             memoryCount = memoryCount,
-            taskMessage = buildString {
-                append(
-                    "Tâche ${result.taskKind} exécutée sur " +
-                        "${result.executedNodeName}."
-                )
-                if (result.fallbackUsed) {
-                    append(" Fallback utilisé.")
-                }
-                if (
-                    result.success &&
-                    result.taskKind == "memory_consolidation"
-                ) {
-                    append(" Une connaissance consolidée a été ajoutée à ma mémoire.")
-                }
-            },
+            taskMessage = taskCompletionMessage(result),
             error = null
         )
+    }
+
+    private fun taskCompletionMessage(
+        result: DistributedTaskResult
+    ): String = when (result.taskKind) {
+        "memory_lifecycle_noop" ->
+            "Memory Lifecycle 0.0.7 : aucune nouvelle source à apprendre. " +
+                "La consolidation identique a été bloquée et aucune " +
+                "connaissance supplémentaire n'a été créée."
+
+        "memory_consolidation" -> buildString {
+            append(
+                "Tâche memory_consolidation exécutée sur " +
+                    "${result.executedNodeName}."
+            )
+            if (result.fallbackUsed) {
+                append(" Fallback utilisé.")
+            }
+            if (result.success) {
+                append(
+                    " Une connaissance 0.0.7 traçable a été ajoutée ; " +
+                        "l'empreinte du lot est maintenant enregistrée."
+                )
+            }
+        }
+
+        else -> buildString {
+            append(
+                "Tâche ${result.taskKind} exécutée sur " +
+                    "${result.executedNodeName}."
+            )
+            if (result.fallbackUsed) {
+                append(" Fallback utilisé.")
+            }
+        }
     }
 
     private fun failTask(e: Throwable) {

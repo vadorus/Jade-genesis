@@ -7,9 +7,12 @@ import com.jadegenesis.mobile.brain.PrototypeBrain
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.identity.IdentityManager
 import com.jadegenesis.mobile.memory.JadeDatabase
+import com.jadegenesis.mobile.memory.MemoryLifecycleAnalysis
+import com.jadegenesis.mobile.memory.MemoryLifecycleManager
 import com.jadegenesis.mobile.memory.MemoryStore
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainInfo
+import com.jadegenesis.mobile.model.DeviceProfile
 import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.GenesisNode
 import com.jadegenesis.mobile.model.JadeIdentity
@@ -17,6 +20,8 @@ import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.MemoryType
 import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.SelfModel
+import com.jadegenesis.mobile.model.TaskExecutionLocation
+import com.jadegenesis.mobile.model.TaskStatus
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
@@ -26,6 +31,8 @@ import com.jadegenesis.mobile.task.TaskRouter
 import com.jadegenesis.mobile.tools.ToolObservation
 import com.jadegenesis.mobile.tools.ToolRegistry
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.util.UUID
 
 class JadeCore(
     context: Context,
@@ -39,6 +46,7 @@ class JadeCore(
     private val memory = MemoryStore(
         JadeDatabase.get(appContext).memoryDao()
     )
+    private val memoryLifecycle = MemoryLifecycleManager(appContext)
     private val selfModelBuilder = SelfModelBuilder()
     private val brainRouter = BrainRouter(brainBackends)
     private val nodeManager = NodeManager(appContext, profiler)
@@ -131,7 +139,16 @@ class JadeCore(
         val activeIdentity = activeIdentity()
         val device = profiler.capture()
         val resourceBudget = resourceGovernor.evaluate(device)
-        val sourceMemories = memory.latest(24)
+        val recentMemories = memory.latest(64)
+        val sourceMemories = memoryLifecycle.sourceMemories(recentMemories)
+        val lifecycle = memoryLifecycle.analyze(sourceMemories)
+
+        if (!lifecycle.needsConsolidation) {
+            return lifecycleNoOpResult(
+                analysis = lifecycle,
+                device = device
+            )
+        }
 
         val result = taskRouter.runMemoryConsolidation(
             identityId = activeIdentity.jadeId,
@@ -152,19 +169,31 @@ class JadeCore(
             val contradictions =
                 json.optInt("potential_contradictions", 0)
 
-            memory.remember(
+            val knowledge = memory.remember(
                 type = MemoryType.KNOWLEDGE,
                 content = buildString {
-                    append("Consolidation mémoire 0.0.6 : ")
+                    append("Consolidation mémoire 0.0.7 : ")
+                    append(memoryLifecycle.lifecycleSummary(lifecycle))
+                    append(" ")
                     append(summary)
                     append(
                         " Doublons groupés : $duplicateGroups. " +
-                            "Contradictions potentielles : $contradictions."
+                            "Contradictions potentielles : $contradictions. "
+                    )
+                    append(
+                        "Les mémoires sources restent intactes ; " +
+                            "OBSOLETE_CANDIDATE n'entraîne jamais une suppression automatique."
                     )
                 },
-                source = "JADE_CONSOLIDATION_0.0.6",
-                confidence = 0.85,
+                source = "JADE_CONSOLIDATION_0.0.7",
+                confidence = 0.88,
                 originNode = result.executedNodeId
+            )
+
+            memoryLifecycle.markConsolidated(
+                analysis = lifecycle,
+                knowledgeId = knowledge.id,
+                resultSha256 = sha256(result.output)
             )
         }
 
@@ -234,6 +263,59 @@ class JadeCore(
             }
         }
     }
+
+    private fun lifecycleNoOpResult(
+        analysis: MemoryLifecycleAnalysis,
+        device: DeviceProfile
+    ): DistributedTaskResult {
+        val now = System.currentTimeMillis()
+        val local = nodeManager.localNode(device)
+        val output = JSONObject().apply {
+            put("skipped", true)
+            put("reason", analysis.reason)
+            put(
+                "lifecycle_summary",
+                memoryLifecycle.lifecycleSummary(analysis)
+            )
+            put("source_fingerprint", analysis.sourceFingerprint)
+            put("source_count", analysis.sourceCount)
+            put("new_count", analysis.newCount)
+            put("confirmed_count", analysis.confirmedCount)
+            put("contradiction_count", analysis.contradictionCount)
+            put(
+                "obsolete_candidate_count",
+                analysis.obsoleteCandidateCount
+            )
+            put("last_consolidated_at", analysis.lastConsolidatedAt)
+        }.toString()
+
+        return DistributedTaskResult(
+            taskId = "lifecycle-${UUID.randomUUID()}",
+            taskKind = "memory_lifecycle_noop",
+            requestedNodeId = null,
+            requestedNodeName = null,
+            executedNodeId = local.nodeId,
+            executedNodeName = local.name,
+            executionLocation = TaskExecutionLocation.LOCAL,
+            status = TaskStatus.COMPLETED,
+            success = true,
+            output = output,
+            durationMs = 0L,
+            fallbackUsed = false,
+            fallbackReason = null,
+            routeReason = analysis.reason,
+            attempts = emptyList(),
+            startedAt = now,
+            completedAt = now
+        )
+    }
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte ->
+                "%02x".format(byte.toInt() and 0xff)
+            }
 
     private suspend fun activeIdentity(): JadeIdentity =
         identity ?: identityManager

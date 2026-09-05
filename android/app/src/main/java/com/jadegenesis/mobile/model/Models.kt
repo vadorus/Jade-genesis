@@ -76,7 +76,7 @@ enum class QueueTaskStatus {
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.0.6",
+    val version: String = "0.0.7",
     val createdAt: Long
 )
 

@@ -178,10 +178,12 @@ class NodeManager(
             "genesis_probe",
             "text_analysis",
             "memory_consolidation",
-            "task_queue_v1"
+            "task_queue_v1",
+            "research_engine_v1",
+            "visual_learning_v1"
         ),
         lastSeenAt = System.currentTimeMillis(),
-        runtimeVersion = "0.1.2",
+        runtimeVersion = "0.1.3",
         runtimeChannel = "android"
     )
 

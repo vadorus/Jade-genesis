@@ -205,7 +205,7 @@ private fun JadeHome(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Cognitive Core ${self?.identity?.version ?: "0.1.2"}",
+            "Cognitive Core ${self?.identity?.version ?: "0.1.3"}",
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))
@@ -221,32 +221,54 @@ private fun JadeHome(
         }
 
         Spacer(Modifier.height(10.dp))
-        InfoCard("Screen Observer v1") {
+        InfoCard("Perception + Research v1") {
+    Text(
+        "Observation à la demande uniquement : Jade ne capture aucun écran en secret. " +
+            "Le Pixel affiche l'autorisation Android avant chaque session."
+    )
+    Spacer(Modifier.height(8.dp))
+    Button(
+        onClick = requestPhoneScreenCapture,
+        enabled = !state.screenBusy && !state.researchBusy,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser l'écran Pixel")
+    }
+    Spacer(Modifier.height(6.dp))
+    OutlinedButton(
+        onClick = { vm.analyzePcScreen() },
+        enabled = !state.screenBusy && !state.researchBusy,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text("Analyser l'écran du PC")
+    }
+    if (state.screenMessage.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(state.screenMessage)
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { vm.deepResearchLastVisualObservation() },
+            enabled = !state.screenBusy && !state.researchBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text(
-                "Observation à la demande uniquement : Jade ne capture aucun écran en secret. " +
-                    "Le Pixel affiche l'autorisation Android avant chaque session."
+                if (state.researchBusy) {
+                    "Recherche + vérification en cours…"
+                } else {
+                    "Approfondir avec des données publiques"
+                }
             )
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = requestPhoneScreenCapture,
-                enabled = !state.screenBusy,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser l'écran Pixel")
-            }
-            Spacer(Modifier.height(6.dp))
-            OutlinedButton(
-                onClick = { vm.analyzePcScreen() },
-                enabled = !state.screenBusy,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Analyser l'écran du PC")
-            }
-            if (state.screenMessage.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(state.screenMessage)
-            }
         }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "L'image reste dans Jade/son nœud vision. La recherche Internet reçoit seulement une requête texte raccourcie et filtrée."
+        )
+    }
+    if (state.researchMessage.isNotBlank()) {
+        Spacer(Modifier.height(8.dp))
+        Text(state.researchMessage)
+    }
+}
 
         if (state.chatBusy) {
             Spacer(Modifier.height(12.dp))

@@ -112,7 +112,7 @@ enum class LearningCandidateStatus {
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.1.2",
+    val version: String = "0.1.3",
     val createdAt: Long
 )
 

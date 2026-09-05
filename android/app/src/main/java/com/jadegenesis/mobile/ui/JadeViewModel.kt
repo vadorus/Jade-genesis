@@ -61,6 +61,8 @@ data class JadeUiState(
     val toolCandidates: List<ToolCandidateSnapshot> = emptyList(),
     val screenBusy: Boolean = false,
     val screenMessage: String = "",
+    val researchBusy: Boolean = false,
+    val researchMessage: String = "",
     val toolBusy: Boolean = false,
     val toolMessage: String = "",
     val adminConfigured: Boolean = false,
@@ -271,6 +273,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             _state.value = _state.value.copy(
                 screenBusy = true,
                 screenMessage = "Capture Pixel autorisée. Jade attend l'image puis cherche un nœud vision…",
+                researchMessage = "",
                 error = null
             )
             delay(250L)
@@ -308,6 +311,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             _state.value = _state.value.copy(
                 screenBusy = true,
                 screenMessage = "Jade demande au runtime PC d'observer son écran…",
+                researchMessage = "",
                 error = null
             )
             runCatching { core.analyzePcScreen() }
@@ -330,6 +334,39 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                 }
         }
     }
+
+    fun deepResearchLastVisualObservation() {
+    viewModelScope.launch {
+        _state.value = _state.value.copy(
+            researchBusy = true,
+            researchMessage =
+                "Jade extrait une requête sûre, consulte des sources publiques et recoupe les résultats…",
+            error = null
+        )
+        runCatching { core.deepResearchLastVisualObservation() }
+            .onSuccess { answer ->
+                val bundle = loadBundle(initialize = false)
+                _state.value = _state.value.copy(
+                    researchBusy = false,
+                    researchMessage = answer,
+                    selfModel = bundle.self,
+                    memories = bundle.memories,
+                    memoryCount = bundle.memoryCount,
+                    learningCandidates = bundle.learningCandidates,
+                    diagnostics = bundle.diagnostics,
+                    error = null
+                )
+            }
+            .onFailure { e ->
+                _state.value = _state.value.copy(
+                    researchBusy = false,
+                    researchMessage = "",
+                    diagnostics = core.recentDiagnostics(),
+                    error = e.message ?: e.toString()
+                )
+            }
+    }
+}
 
     fun proposeToolCandidate(idea: String) {
         val clean = idea.trim()

@@ -114,7 +114,7 @@ class SelfModelBuilder {
             Capability(
                 "cognitive_core",
                 true,
-                "CognitiveCore 0.1.2",
+                "CognitiveCore 0.1.3",
                 "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
             ),
             Capability(
@@ -128,11 +128,23 @@ class SelfModelBuilder {
                 "Les requêtes complexes peuvent recevoir une seconde passe de contrôle structurée sans stocker de chaîne de pensée privée."
             ),
             Capability(
-                "learning_candidates",
-                true,
-                "LearningEngine v1",
-                "Les échecs et latences répétées produisent des candidats d'amélioration mesurables ; ils ne sont pas appliqués automatiquement."
-            ),
+    "learning_candidates",
+    true,
+    "LearningEngine + VisualLearning v1",
+    "Les échecs, latences et observations visuelles recoupées produisent des candidats d'apprentissage mesurables ; ils ne sont pas appliqués automatiquement."
+),
+Capability(
+    "research_engine",
+    true,
+    "ResearchEngine v1 public-data",
+    "Après une observation visuelle, Jade peut rechercher des données publiques via des fournisseurs interchangeables. V1 utilise Wikipedia, Wikidata et GitHub pour les sujets techniques."
+),
+Capability(
+    "visual_learning",
+    true,
+    "VisualLearningStore v1",
+    "Jade conserve la provenance d'une observation, son empreinte d'image, la recherche associée et le niveau de corroboration avant consolidation."
+),
             Capability(
                 "task_router",
                 true,
@@ -195,7 +207,7 @@ class SelfModelBuilder {
             Capability(
                 "diagnostics",
                 true,
-                "DiagnosticLogger 0.1.2",
+                "DiagnosticLogger 0.1.3",
                 "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
             ),
             Capability(

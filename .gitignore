@@ -1,0 +1,9 @@
+# Jade Genesis - generated Android/Gradle files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# Python generated files
+__pycache__/
+*.pyc

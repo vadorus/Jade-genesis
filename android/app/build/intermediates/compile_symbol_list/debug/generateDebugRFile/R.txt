@@ -1,1 +1,0 @@
-int style Theme_JadeGenesis 0x0

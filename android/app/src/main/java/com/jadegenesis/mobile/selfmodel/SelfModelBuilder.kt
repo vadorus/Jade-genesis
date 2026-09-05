@@ -114,7 +114,7 @@ class SelfModelBuilder {
             Capability(
                 "cognitive_core",
                 true,
-                "CognitiveCore 0.1.1",
+                "CognitiveCore 0.1.2",
                 "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
             ),
             Capability(
@@ -195,7 +195,7 @@ class SelfModelBuilder {
             Capability(
                 "diagnostics",
                 true,
-                "DiagnosticLogger 0.1.1",
+                "DiagnosticLogger 0.1.2",
                 "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
             ),
             Capability(
@@ -213,8 +213,8 @@ class SelfModelBuilder {
             Capability(
                 "screen_observer",
                 true,
-                if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_ready" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
-                "Le Pixel peut effectuer une capture MediaProjection autorisée. Un runtime PC 0.1.1 peut capturer son propre écran ; l'interprétation nécessite un modèle vision compatible."
+                if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_1_grounded" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
+                "Le Pixel attend la disparition de l'overlay MediaProjection avant capture et demande une analyse factuelle en français. Le runtime PC 0.1.1 reste compatible."
             ),
             Capability(
                 "vision_analysis",

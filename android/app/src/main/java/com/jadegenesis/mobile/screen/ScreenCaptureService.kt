@@ -19,6 +19,7 @@ import android.os.HandlerThread
 import android.os.IBinder
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,8 +32,14 @@ class ScreenCaptureService : Service() {
         private const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "jade_screen_observer"
         private const val NOTIFICATION_ID = 4101
-        private const val MAX_CAPTURE_WIDTH = 720
-        private const val JPEG_QUALITY = 55
+
+        // V0.1.2: do not capture the Android MediaProjection consent overlay.
+        private const val CAPTURE_SETTLE_MS = 1_300L
+        private const val CAPTURE_TIMEOUT_MS = 9_000L
+
+        // Keep text readable while staying below the remote vision payload budget.
+        private const val MAX_CAPTURE_WIDTH = 960
+        private const val TARGET_JPEG_BYTES = 1_050_000
 
         fun startCapture(
             context: Context,
@@ -60,7 +67,7 @@ class ScreenCaptureService : Service() {
         val notification = android.app.Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("Jade — observation d'écran")
-            .setContentText("Capture unique autorisée par l'utilisateur")
+            .setContentText("Capture unique autorisée — stabilisation de l'image en cours")
             .setOngoing(true)
             .build()
 
@@ -114,31 +121,13 @@ class ScreenCaptureService : Service() {
             width,
             height,
             PixelFormat.RGBA_8888,
-            2
+            3
         )
         imageReader = reader
 
         val thread = HandlerThread("jade-screen-capture").apply { start() }
         workerThread = thread
         val handler = Handler(thread.looper)
-
-        reader.setOnImageAvailableListener({ source ->
-            if (captured.get()) {
-                source.acquireLatestImage()?.close()
-                return@setOnImageAvailableListener
-            }
-            val image = source.acquireLatestImage() ?: return@setOnImageAvailableListener
-            if (!captured.compareAndSet(false, true)) {
-                image.close()
-                return@setOnImageAvailableListener
-            }
-            try {
-                saveImage(image, width, height)
-            } finally {
-                image.close()
-                finishCapture()
-            }
-        }, handler)
 
         virtualDisplay = mediaProjection.createVirtualDisplay(
             "JadeScreenObserver",
@@ -150,6 +139,37 @@ class ScreenCaptureService : Service() {
             null,
             handler
         )
+
+        // Let the Android consent UI disappear, then discard any queued stale frame.
+        handler.postDelayed({
+            if (captured.get()) return@postDelayed
+            runCatching { reader.acquireLatestImage()?.close() }
+
+            reader.setOnImageAvailableListener({ source ->
+                if (captured.get()) {
+                    source.acquireLatestImage()?.close()
+                    return@setOnImageAvailableListener
+                }
+                val image = source.acquireLatestImage()
+                    ?: return@setOnImageAvailableListener
+                if (!captured.compareAndSet(false, true)) {
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
+                try {
+                    saveImage(image, width, height)
+                } finally {
+                    image.close()
+                    finishCapture()
+                }
+            }, handler)
+        }, CAPTURE_SETTLE_MS)
+
+        handler.postDelayed({
+            if (!captured.get()) {
+                finishCapture()
+            }
+        }, CAPTURE_TIMEOUT_MS)
     }
 
     private fun saveImage(image: Image, width: Int, height: Int) {
@@ -185,13 +205,13 @@ class ScreenCaptureService : Service() {
             cropped
         }
 
+        val encoded = encodeBoundedJpeg(output)
         val dir = File(filesDir, "screen-observer").apply { mkdirs() }
         val temp = File(dir, "latest.tmp.jpg")
         val target = File(dir, "latest.jpg")
         FileOutputStream(temp).use { stream ->
-            check(output.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)) {
-                "Échec compression JPEG."
-            }
+            stream.write(encoded)
+            stream.flush()
         }
         if (target.exists()) target.delete()
         check(temp.renameTo(target)) {
@@ -202,10 +222,58 @@ class ScreenCaptureService : Service() {
         cropped.recycle()
     }
 
+    private fun encodeBoundedJpeg(bitmap: Bitmap): ByteArray {
+        var working = bitmap
+        var ownsWorking = false
+        var last = ByteArray(0)
+
+        try {
+            val widths = listOf(
+                working.width,
+                minOf(working.width, 840),
+                minOf(working.width, 720)
+            ).distinct()
+
+            widths.forEach { targetWidth ->
+                if (working.width != targetWidth) {
+                    if (ownsWorking) working.recycle()
+                    val ratio = targetWidth.toDouble() / working.width.toDouble()
+                    working = Bitmap.createScaledBitmap(
+                        working,
+                        targetWidth,
+                        (working.height * ratio).roundToInt().coerceAtLeast(1),
+                        true
+                    )
+                    ownsWorking = true
+                }
+
+                listOf(78, 70, 62, 54, 46).forEach { quality ->
+                    val output = ByteArrayOutputStream()
+                    check(
+                        working.compress(
+                            Bitmap.CompressFormat.JPEG,
+                            quality,
+                            output
+                        )
+                    ) { "Échec compression JPEG." }
+                    val bytes = output.toByteArray()
+                    last = bytes
+                    if (bytes.size <= TARGET_JPEG_BYTES) {
+                        return bytes
+                    }
+                }
+            }
+            return last
+        } finally {
+            if (ownsWorking) working.recycle()
+        }
+    }
+
     @Synchronized
     private fun finishCapture() {
         runCatching { virtualDisplay?.release() }
         virtualDisplay = null
+        runCatching { imageReader?.setOnImageAvailableListener(null, null) }
         runCatching { imageReader?.close() }
         imageReader = null
         val currentProjection = projection

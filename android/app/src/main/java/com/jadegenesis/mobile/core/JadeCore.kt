@@ -97,7 +97,7 @@ class JadeCore(context: Context) {
         diagnostics.log(
             DiagnosticLevel.INFO,
             "jade_initialize",
-            "Jade Genesis 0.1.1 initialisée.",
+            "Jade Genesis 0.1.2 initialisée.",
             mapOf("jade_id" to identity?.jadeId)
         )
         return selfModel()
@@ -220,7 +220,7 @@ class JadeCore(context: Context) {
                             "OBSOLETE_CANDIDATE n'entraîne jamais une suppression automatique."
                     )
                 },
-                source = "JADE_CONSOLIDATION_0.1.1",
+                source = "JADE_CONSOLIDATION_0.1.2",
                 confidence = 0.88,
                 originNode = result.executedNodeId
             )
@@ -318,9 +318,12 @@ class JadeCore(context: Context) {
         val payload = JSONObject().apply {
             put(
                 "prompt",
-                "Analyse cette capture de mon écran Pixel. Décris ce qui est visible, " +
-                    "les informations importantes et ce que Jade peut utilement me conseiller. " +
-                    "N'invente rien qui n'est pas visible."
+                "IMPORTANT : réponds exclusivement en français. Analyse uniquement cette image précise de l'écran Pixel. " +
+                    "Décris seulement les éléments réellement visibles et lisibles. N'infère aucune fonction, donnée cachée, " +
+                    "intention ou signification à partir d'une icône, d'une position ou d'un élément ambigu. " +
+                    "Si tu n'es pas sûr, écris explicitement 'incertain'. Structure la réponse en trois sections courtes : " +
+                    "Visible, Incertain, Conseil. Pour chaque observation importante, indique une confiance élevée, moyenne ou faible. " +
+                    "Ne décris pas les capacités théoriques de Jade et n'invente aucun texte absent de l'image."
             )
             put("image_b64", Base64.encodeToString(frame.bytes, Base64.NO_WRAP))
             put("image_sha256", frame.sha256)
@@ -376,9 +379,12 @@ class JadeCore(context: Context) {
         val payload = JSONObject().apply {
             put(
                 "prompt",
-                "Observe l'écran actuel du PC. Décris ce qui est visible, " +
-                    "signale les erreurs ou informations importantes et propose l'action utile suivante. " +
-                    "N'invente rien qui n'est pas visible."
+                "IMPORTANT : réponds exclusivement en français. Observe uniquement l'image actuelle de l'écran du PC. " +
+                    "Décris les éléments réellement visibles et lisibles, puis signale les erreurs seulement si elles sont explicitement affichées. " +
+                    "N'infère aucune fonction, donnée cachée ou intention à partir d'une icône ou d'un élément ambigu. " +
+                    "Si tu n'es pas sûr, écris explicitement 'incertain'. Structure la réponse en trois sections courtes : " +
+                    "Visible, Incertain, Conseil. Pour chaque observation importante, indique une confiance élevée, moyenne ou faible. " +
+                    "N'invente aucun texte absent de l'image."
             )
             put("source", "pc_screen")
         }.toString()

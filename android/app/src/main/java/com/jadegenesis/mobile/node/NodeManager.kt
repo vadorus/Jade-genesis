@@ -167,6 +167,7 @@ class NodeManager(
             "distributed_brain_client",
             "device_registry_v2",
             "device_registry_v2_1",
+            "device_registry_v2_2",
             "multi_route_v1",
             "compute_mesh_v1",
             "cognitive_core_v1",
@@ -180,7 +181,7 @@ class NodeManager(
             "task_queue_v1"
         ),
         lastSeenAt = System.currentTimeMillis(),
-        runtimeVersion = "0.1.1",
+        runtimeVersion = "0.1.2",
         runtimeChannel = "android"
     )
 
@@ -321,8 +322,9 @@ class NodeManager(
     suspend fun refreshRemoteNodes(): List<GenesisNode> {
         val current = loadStoredNodes()
         val refreshed = current.map { node -> probeNode(node) }
-        saveStoredNodes(refreshed)
-        return refreshed.map { currentPublicNode(it) }
+        val normalized = deduplicateStoredNodes(refreshed)
+        saveStoredNodes(normalized)
+        return normalized.map { currentPublicNode(it) }
     }
 
     fun preferredComputeNode(
@@ -921,7 +923,7 @@ class NodeManager(
                 logger?.log(
                     DiagnosticLevel.INFO,
                     "node_registry_deduplicated",
-                    "Device Registry v2.1 a fusionné les doublons partageant le même Node ID.",
+                    "Device Registry v2.2 a fusionné les doublons partageant le même Node ID ou le même jeton de runtime.",
                     mapOf(
                         "before" to parsed.size,
                         "after" to normalized.size
@@ -939,7 +941,7 @@ class NodeManager(
             logger?.log(
                 DiagnosticLevel.INFO,
                 "node_registry_migrated",
-                "Ancien registre de nœuds migré vers Device Registry v2.1 et dédupliqué.",
+                "Ancien registre de nœuds migré vers Device Registry v2.2 et dédupliqué.",
                 mapOf("node_count" to migrated.size)
             )
         }
@@ -949,21 +951,41 @@ class NodeManager(
     private fun deduplicateStoredNodes(nodes: List<StoredNode>): List<StoredNode> {
         if (nodes.size < 2) return nodes
 
-        val groups = linkedMapOf<String, MutableList<StoredNode>>()
-        nodes.forEach { node ->
-            val stableId = node.nodeId.trim().lowercase()
-            val fallbackRoute = node.routes.firstOrNull()?.let { route ->
-                "${route.host.lowercase()}:${route.port}"
-            }.orEmpty()
-            val key = if (stableId.isNotBlank()) {
-                "id:$stableId"
-            } else {
-                "route:$fallbackRoute"
+        fun sameLogicalNode(left: StoredNode, right: StoredNode): Boolean {
+            val leftId = left.nodeId.trim().lowercase()
+            val rightId = right.nodeId.trim().lowercase()
+            if (leftId.isNotBlank() && rightId.isNotBlank() && leftId == rightId) {
+                return true
             }
-            groups.getOrPut(key) { mutableListOf() }.add(node)
+
+            // Historical registrations of the same runtime can have temporary old IDs.
+            // The pairing token is never logged, but equality in memory is a strong
+            // indicator that both records refer to the same physical runtime.
+            val leftToken = left.token.trim()
+            val rightToken = right.token.trim()
+            return leftToken.isNotBlank() &&
+                rightToken.isNotBlank() &&
+                leftToken == rightToken
         }
 
-        return groups.values.map { group -> mergeStoredNodeGroup(group) }
+        val groups = mutableListOf<MutableList<StoredNode>>()
+        nodes.forEach { node ->
+            val matching = groups.indices.filter { index ->
+                groups[index].any { existing -> sameLogicalNode(existing, node) }
+            }
+
+            if (matching.isEmpty()) {
+                groups.add(mutableListOf(node))
+            } else {
+                val merged = mutableListOf(node)
+                matching.asReversed().forEach { index ->
+                    merged.addAll(groups.removeAt(index))
+                }
+                groups.add(merged)
+            }
+        }
+
+        return groups.map { group -> mergeStoredNodeGroup(group) }
     }
 
     private fun mergeStoredNodeGroup(group: List<StoredNode>): StoredNode {

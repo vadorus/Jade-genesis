@@ -205,7 +205,7 @@ private fun JadeHome(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Cognitive Core ${self?.identity?.version ?: "0.1.1"}",
+            "Cognitive Core ${self?.identity?.version ?: "0.1.2"}",
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))

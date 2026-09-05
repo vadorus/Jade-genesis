@@ -21,7 +21,7 @@ class IdentityManager(private val context: Context) {
     }
 
     private companion object {
-        const val CURRENT_VERSION = "0.0.8"
+        const val CURRENT_VERSION = "0.1.0"
     }
 
     suspend fun loadOrCreate(): JadeIdentity {

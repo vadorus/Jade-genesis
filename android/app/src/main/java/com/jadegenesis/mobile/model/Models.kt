@@ -47,6 +47,19 @@ enum class NodeStatus {
     ERROR
 }
 
+enum class NodeRouteKind {
+    LAN,
+    TAILSCALE,
+    MANUAL
+}
+
+enum class NodeRouteStatus {
+    ONLINE,
+    OFFLINE,
+    UNKNOWN,
+    ERROR
+}
+
 enum class TaskExecutionLocation {
     LOCAL,
     REMOTE
@@ -73,10 +86,33 @@ enum class QueueTaskStatus {
     FAILED
 }
 
+enum class CognitivePhase {
+    OBSERVE,
+    PLAN,
+    EXECUTE,
+    VERIFY,
+    REVISE,
+    LEARN,
+    COMPLETE
+}
+
+enum class DiagnosticLevel {
+    INFO,
+    WARN,
+    ERROR,
+    DEBUG
+}
+
+enum class LearningCandidateStatus {
+    CANDIDATE,
+    ACCEPTED,
+    REJECTED
+}
+
 data class JadeIdentity(
     val jadeId: String,
     val name: String = "Jade Genesis",
-    val version: String = "0.0.8",
+    val version: String = "0.1.0",
     val createdAt: Long
 )
 
@@ -131,6 +167,17 @@ data class BrainInfo(
     val details: String = ""
 )
 
+data class NodeRouteSnapshot(
+    val routeId: String,
+    val kind: NodeRouteKind,
+    val host: String,
+    val port: Int,
+    val status: NodeRouteStatus,
+    val latencyMs: Long? = null,
+    val lastSeenAt: Long = 0L,
+    val lastError: String? = null
+)
+
 data class GenesisNode(
     val nodeId: String,
     val name: String,
@@ -147,7 +194,13 @@ data class GenesisNode(
     val storageFreeGb: Double = 0.0,
     val capabilities: List<String> = emptyList(),
     val lastSeenAt: Long = 0L,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val routes: List<NodeRouteSnapshot> = emptyList(),
+    val activeRouteId: String? = null,
+    val runtimeVersion: String = "",
+    val runtimeChannel: String = "",
+    val brainBackend: String = "",
+    val brainModel: String = ""
 )
 
 data class DistributedTaskRequest(
@@ -244,12 +297,20 @@ data class BrainContext(
     val userInput: String,
     val selfModel: SelfModel,
     val memories: List<MemorySnapshot>,
-    val tools: List<ToolInfo>
+    val tools: List<ToolInfo>,
+    val operation: String = "answer",
+    val draftResponse: String? = null,
+    val reviewNote: String? = null
 )
 
 data class BrainResult(
     val text: String,
-    val toolName: String? = null
+    val toolName: String? = null,
+    val backendId: String = "",
+    val backendDisplayName: String = "",
+    val model: String = "",
+    val fallbackUsed: Boolean = false,
+    val fallbackReason: String? = null
 )
 
 data class MemorySnapshot(
@@ -264,4 +325,60 @@ data class MemorySnapshot(
 data class ToolInfo(
     val name: String,
     val description: String
+)
+
+data class CognitiveTraceEvent(
+    val id: String,
+    val phase: CognitivePhase,
+    val summary: String,
+    val backendId: String? = null,
+    val nodeId: String? = null,
+    val durationMs: Long = 0L,
+    val success: Boolean = true,
+    val createdAt: Long
+)
+
+data class LearningCandidate(
+    val id: String,
+    val title: String,
+    val description: String,
+    val evidence: String,
+    val confidence: Double,
+    val status: LearningCandidateStatus = LearningCandidateStatus.CANDIDATE,
+    val createdAt: Long
+)
+
+data class MeshNodeResult(
+    val nodeId: String,
+    val nodeName: String,
+    val success: Boolean,
+    val durationMs: Long,
+    val outputPreview: String = "",
+    val error: String? = null
+)
+
+data class MeshProbeSummary(
+    val startedAt: Long,
+    val completedAt: Long,
+    val nodeResults: List<MeshNodeResult>
+) {
+    val successCount: Int
+        get() = nodeResults.count { it.success }
+}
+
+data class DiagnosticLogEntry(
+    val level: DiagnosticLevel,
+    val event: String,
+    val message: String,
+    val metadata: Map<String, String>,
+    val createdAt: Long
+)
+
+data class RuntimeNodeSnapshot(
+    val nodeId: String,
+    val nodeName: String,
+    val runtimeVersion: String,
+    val channel: String,
+    val online: Boolean,
+    val updateAvailable: Boolean
 )

@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -21,9 +23,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -39,29 +47,29 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.model.NodeKind
+import com.jadegenesis.mobile.model.NodeRouteStatus
 import com.jadegenesis.mobile.model.NodeStatus
 
 private const val LOCAL_NETWORK_PERMISSION =
     "android.permission.ACCESS_LOCAL_NETWORK"
 
+private enum class JadeTab(val label: String, val short: String) {
+    JADE("Jade", "J"),
+    NODES("Nœuds", "N"),
+    ACTIVITY("Activité", "A"),
+    MEMORY("Mémoire", "M"),
+    ADMIN("Admin", "D")
+}
+
 @Composable
 fun JadeApp(vm: JadeViewModel = viewModel()) {
     val state by vm.state.collectAsState()
     val context = LocalContext.current
-
-    var input by remember { mutableStateOf("") }
-    var pcHost by remember { mutableStateOf("") }
-    var pcPort by remember { mutableStateOf("8765") }
-    var pcToken by remember { mutableStateOf("") }
-    var distributedText by remember {
-        mutableStateOf(
-            "Jade Genesis répartit ses tâches selon les ressources disponibles."
-        )
-    }
+    var tab by remember { mutableStateOf(JadeTab.JADE) }
 
     val needsLocalNetworkPermission = Build.VERSION.SDK_INT >= 37
-
     var localNetworkGranted by remember {
         mutableStateOf(
             !needsLocalNetworkPermission ||
@@ -71,7 +79,6 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                 ) == PackageManager.PERMISSION_GRANTED
         )
     }
-
     val localNetworkLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -95,576 +102,615 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                 return@Surface
             }
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp)
-            ) {
-                Text(
-                    "JADE GENESIS",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    "Distributed Local Brain Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.8"),
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                Spacer(Modifier.height(16.dp))
-
-                state.selfModel?.let { self ->
-                    InfoCard("Identité") {
-                        Text(self.identity.name)
-                        Text("Version ${self.identity.version}")
-                        Text("ID : ${self.identity.jadeId}")
-                        Text("Nœud d'interface actuel : ${self.nodeId}")
-                        Text("Brain : ${self.activeBrain.displayName}")
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    InfoCard("Corps actuel") {
-                        val d = self.device
-                        Text(
-                            "${d.manufacturer} ${d.model}",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text("Android ${d.androidVersion} — API ${d.sdkInt}")
-                        Text("SoC : ${d.socManufacturer} ${d.socModel}")
-                        Text("CPU : ${d.cpuCores} cœurs logiques")
-                        Text("RAM : ${d.ramTotalGb} Go")
-                        Text("Libre : ${d.ramAvailableGb} Go RAM")
-                        Text(
-                            "Mémoire Jade : ${d.processHeapUsedMb} / " +
-                                "${d.processHeapMaxMb} Mo"
-                        )
-                        Text("Classe mémoire Android : ${d.appMemoryClassMb} Mo")
-                        Text("Stockage libre : ${d.storageFreeGb} Go")
-                        Text(
-                            "Batterie : ${d.batteryPercent}%" +
-                                if (d.charging) " — en charge" else ""
-                        )
-                        Text(
-                            "Économie d'énergie : " +
-                                if (d.powerSaveMode) "active" else "inactive"
-                        )
-                        Text("Thermique : ${d.thermalStatus}")
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    InfoCard("Resource Governor") {
-                        val r = self.resourceBudget
-                        Text(
-                            "Mode : ${r.mode}",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Budget de travail : " +
-                                "${r.recommendedWorkingSetMb} Mo"
-                        )
-                        Text(
-                            "Réserve RAM système cible : " +
-                                "${r.systemRamReserveGb} Go"
-                        )
-                        Text(
-                            "Tâches parallèles max : " +
-                                "${r.maxParallelTasks}"
-                        )
-                        Text(
-                            "Travail lourd en arrière-plan : " +
-                                if (r.heavyBackgroundWorkAllowed) {
-                                    "autorisé"
-                                } else {
-                                    "non"
-                                }
-                        )
-                        Text(
-                            "Préférer un autre nœud pour le lourd : " +
-                                if (r.preferRemoteCompute) "oui" else "non"
-                        )
-                        Text(
-                            "Tranche de travail : " +
-                                "${r.maxTaskSliceSeconds} s max"
-                        )
-
-                        Spacer(Modifier.height(4.dp))
-
-                        r.reasons.forEach {
-                            Text("• $it")
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    InfoCard("Node Manager") {
-                        val preferred = self.knownNodes.firstOrNull {
-                            it.nodeId == self.preferredComputeNodeId
-                        }
-
-                        Text(
-                            "Nœuds connus : ${self.knownNodes.size}",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Nœud de calcul général préféré : " +
-                                (preferred?.name ?: "aucun")
-                        )
-
-                        Spacer(Modifier.height(6.dp))
-
-                        self.knownNodes.forEach { node ->
-                            val symbol = when (node.status) {
-                                NodeStatus.LOCAL -> "●"
-                                NodeStatus.ONLINE -> "✓"
-                                NodeStatus.OFFLINE -> "○"
-                                NodeStatus.ERROR -> "!"
-                                NodeStatus.UNKNOWN -> "?"
-                            }
-
-                            Text(
-                                "$symbol ${node.name} — ${node.kind} / ${node.status}",
-                                fontWeight = if (
-                                    node.nodeId == self.preferredComputeNodeId
-                                ) {
-                                    FontWeight.SemiBold
-                                } else {
-                                    FontWeight.Normal
-                                }
-                            )
-
-                            if (node.kind != NodeKind.PHONE) {
-                                Text("  ${node.host}:${node.port}")
-                            }
-
-                            if (node.protocol.isNotBlank()) {
-                                Text("  Protocole : ${node.protocol}")
-                            }
-
-                            if (node.cpuCores > 0) {
-                                Text(
-                                    "  CPU : ${node.cpuCores} cœurs" +
-                                        if (node.cpuName.isNotBlank()) {
-                                            " — ${node.cpuName}"
-                                        } else {
-                                            ""
-                                        }
-                                )
-                            }
-
-                            if (node.ramTotalGb > 0.0) {
-                                Text(
-                                    "  RAM : ${node.ramAvailableGb} / " +
-                                        "${node.ramTotalGb} Go libres/total"
-                                )
-                            }
-
-                            if (node.capabilities.isNotEmpty()) {
-                                Text(
-                                    "  Capacités : " +
-                                        node.capabilities.joinToString()
-                                )
-                            }
-
-                            node.lastError
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let {
-                                    Text("  Erreur : $it")
-                                }
-
-                            Spacer(Modifier.height(5.dp))
-                        }
-
-                        if (
-                            needsLocalNetworkPermission &&
-                            !localNetworkGranted
-                        ) {
-                            Text(
-                                "Android 17 bloque le LAN tant que Jade " +
-                                    "n'a pas l'autorisation Réseau local."
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Button(
-                                onClick = {
-                                    localNetworkLauncher.launch(
-                                        LOCAL_NETWORK_PERMISSION
-                                    )
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Autoriser le réseau local")
-                            }
-                        } else {
-                            Text("Réseau local : autorisé")
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = pcHost,
-                            onValueChange = { pcHost = it },
-                            label = { Text("IP du PC") },
-                            placeholder = { Text("Ex : 192.168.1.25") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true
-                        )
-
-                        Spacer(Modifier.height(6.dp))
-
-                        OutlinedTextField(
-                            value = pcPort,
-                            onValueChange = { value ->
-                                pcPort = value
-                                    .filter { it.isDigit() }
-                                    .take(5)
-                            },
-                            label = { Text("Port") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Number
-                            )
-                        )
-
-                        Spacer(Modifier.height(6.dp))
-
-                        OutlinedTextField(
-                            value = pcToken,
-                            onValueChange = { pcToken = it },
-                            label = { Text("Jeton du Node Runtime") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            visualTransformation =
-                                PasswordVisualTransformation()
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(
-                            onClick = {
-                                vm.registerPcNode(
-                                    host = pcHost.trim(),
-                                    port = pcPort.toIntOrNull() ?: 8765,
-                                    token = pcToken.trim()
-                                )
-                            },
-                            enabled =
-                                !state.nodeBusy &&
-                                    localNetworkGranted &&
-                                    pcHost.isNotBlank() &&
-                                    pcToken.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                if (state.nodeBusy) {
-                                    "Test en cours…"
-                                } else {
-                                    "Enregistrer + tester le PC"
-                                }
-                            )
-                        }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        Button(
-                            onClick = { vm.refreshNodes() },
-                            enabled =
-                                !state.nodeBusy &&
-                                    localNetworkGranted,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Rafraîchir les nœuds")
-                        }
-
-                        if (state.nodeMessage.isNotBlank()) {
-                            Spacer(Modifier.height(6.dp))
-                            Text(state.nodeMessage)
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    InfoCard("Adaptive Distributed Tasks") {
-                        val preferred = self.knownNodes.firstOrNull {
-                            it.nodeId == self.preferredComputeNodeId
-                        }
-
-                        Text(
-                            "Task Router : adaptatif 0.0.6",
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            "Cible générale actuelle : ${preferred?.name ?: "local"}"
-                        )
-                        Text(
-                            "Le choix par tâche combine ressources, capacité requise et historique mesuré."
-                        )
-                        Text(
-                            "Liste blanche : genesis_probe, text_analysis, memory_consolidation. Aucune commande système arbitraire."
-                        )
-                        Text(
-                            "Historique local : ${state.taskHistory.size} tâche(s). File active : ${state.pendingTasks}."
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(
-                            onClick = { vm.runDistributedProbe() },
-                            enabled = !state.taskBusy,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                if (state.taskBusy) {
-                                    "Routage en cours…"
-                                } else {
-                                    "Tester le calcul distribué"
-                                }
-                            )
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = distributedText,
-                            onValueChange = { distributedText = it.take(12_000) },
-                            label = { Text("Texte pour text_analysis") },
-                            modifier = Modifier.fillMaxWidth(),
-                            minLines = 2
-                        )
-
-                        Spacer(Modifier.height(6.dp))
-
-                        Button(
-                            onClick = {
-                                vm.runDistributedTextAnalysis(distributedText)
-                            },
-                            enabled =
-                                !state.taskBusy &&
-                                    distributedText.isNotBlank(),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Analyser sur le meilleur nœud")
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-
-                        Button(
-                            onClick = {
-                                vm.runMemoryConsolidation()
-                            },
-                            enabled =
-                                !state.taskBusy &&
-                                    state.memoryCount > 0,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Consolider ma mémoire")
-                        }
-
-                        Text(
-                            "La consolidation crée une connaissance traçable sans supprimer les mémoires sources."
-                        )
-                        Text(
-                            "Memory Lifecycle 0.0.7 empreinte le lot et bloque une consolidation identique."
-                        )
-
-                        if (state.taskMessage.isNotBlank()) {
-                            Spacer(Modifier.height(6.dp))
-                            Text(state.taskMessage)
-                        }
-
-                        state.lastTaskResult?.let { result ->
-                            Spacer(Modifier.height(8.dp))
-                            Text("Tâche : ${result.taskId}")
-                            Text("Type : ${result.taskKind}")
-                            Text("État : ${result.status}")
-                            Text(
-                                "Nœud demandé : " +
-                                    (result.requestedNodeName ?: "aucun")
-                            )
-                            Text(
-                                "Nœud exécutant : ${result.executedNodeName} " +
-                                    "(${result.executionLocation})"
-                            )
-                            Text("Durée mesurée : ${result.durationMs} ms")
-                            Text(
-                                "Fallback : " +
-                                    if (result.fallbackUsed) "oui" else "non"
-                            )
-                            Text("Décision : ${result.routeReason}")
-                            result.fallbackReason?.let {
-                                Text("Raison fallback : $it")
-                            }
-
-                            if (result.attempts.isNotEmpty()) {
-                                Text("Tentatives :")
-                                result.attempts.forEachIndexed { index, attempt ->
-                                    Text(
-                                        "  ${index + 1}. ${attempt.nodeName} — " +
-                                            "${if (attempt.success) "succès" else "échec"} — " +
-                                            "${attempt.durationMs} ms"
-                                    )
-                                }
-                            }
-
-                            Text("Résultat : ${result.output.take(220)}")
-                        }
-
-                        if (state.taskQueue.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "File de tâches :",
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            state.taskQueue.take(4).forEach { queued ->
-                                Text(
-                                    "• ${queued.taskKind} — ${queued.status} — " +
-                                        (queued.selectedNodeName ?: "en attente")
-                                )
-                            }
-                        }
-
-                        if (state.taskHistory.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "Dernières mesures :",
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            state.taskHistory.take(3).forEach { result ->
-                                Text(
-                                    "• ${result.taskKind} — ${result.executedNodeName} — " +
-                                        "${result.durationMs} ms — ${result.status}"
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(10.dp))
-
-                    InfoCard("Self Model") {
-                        self.capabilities.forEach {
-                            Text(
-                                "${if (it.available) "✓" else "×"} " +
-                                    "${it.name} — ${it.source}"
+            Scaffold(
+                bottomBar = {
+                    NavigationBar {
+                        JadeTab.entries.forEach { item ->
+                            NavigationBarItem(
+                                selected = tab == item,
+                                onClick = { tab = item },
+                                icon = { Text(item.short) },
+                                label = { Text(item.label) }
                             )
                         }
                     }
                 }
+            ) { innerPadding ->
+                when (tab) {
+                    JadeTab.JADE -> JadeHome(
+                        state = state,
+                        vm = vm,
+                        modifier = Modifier.padding(innerPadding)
+                    )
 
-                Spacer(Modifier.height(12.dp))
+                    JadeTab.NODES -> NodesScreen(
+                        state = state,
+                        vm = vm,
+                        localNetworkGranted = localNetworkGranted,
+                        requestLocalNetwork = {
+                            localNetworkLauncher.launch(LOCAL_NETWORK_PERMISSION)
+                        },
+                        needsLocalNetworkPermission = needsLocalNetworkPermission,
+                        modifier = Modifier.padding(innerPadding)
+                    )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { vm.send("Qui es-tu ?") },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Qui es-tu ?")
-                    }
+                    JadeTab.ACTIVITY -> ActivityScreen(
+                        state = state,
+                        vm = vm,
+                        modifier = Modifier.padding(innerPadding)
+                    )
 
-                    Button(
-                        onClick = { vm.send("Inspecte ton téléphone") },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Inspecter")
-                    }
+                    JadeTab.MEMORY -> MemoryScreen(
+                        state = state,
+                        vm = vm,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+
+                    JadeTab.ADMIN -> AdminScreen(
+                        state = state,
+                        vm = vm,
+                        modifier = Modifier.padding(innerPadding)
+                    )
                 }
-
-                Spacer(Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        vm.send(
-                            "Évalue tes ressources, tes limites, ta RAM, " +
-                                "ta batterie et ta température"
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Évaluer mes ressources")
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        vm.send(
-                            "Quels nœuds connais-tu et lequel préfères-tu ?"
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Évaluer mes nœuds")
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    label = { Text("Parler à Jade") },
-                    placeholder = {
-                        Text("Ex : Comment adaptes-tu tes tâches ?")
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                Button(
-                    onClick = {
-                        vm.send(input)
-                        input = ""
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Envoyer")
-                }
-
-                if (state.response.isNotBlank()) {
-                    Spacer(Modifier.height(12.dp))
-                    InfoCard("Jade") {
-                        Text(state.response)
-                    }
-                }
-
-                state.error?.let {
-                    Spacer(Modifier.height(12.dp))
-                    InfoCard("Erreur") {
-                        Text(it)
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                InfoCard("Mémoire locale — ${state.memoryCount}") {
-                    if (state.memories.isEmpty()) {
-                        Text("Aucune mémoire pour le moment.")
-                    } else {
-                        state.memories.take(10).forEach { memory ->
-                            Text(
-                                "${memory.type} • ${memory.content}",
-                                modifier = Modifier.padding(vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
 }
 
 @Composable
+private fun JadeHome(
+    state: JadeUiState,
+    vm: JadeViewModel,
+    modifier: Modifier = Modifier
+) {
+    var input by remember { mutableStateOf("") }
+    val self = state.selfModel
+    val onlineRemote = self?.knownNodes?.count {
+        it.kind != NodeKind.PHONE && it.status == NodeStatus.ONLINE
+    } ?: 0
+
+    PageColumn(modifier) {
+        Text(
+            "JADE GENESIS",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            "Cognitive Core ${self?.identity?.version ?: "0.1.0"}",
+            style = MaterialTheme.typography.titleMedium
+        )
+        Spacer(Modifier.height(12.dp))
+
+        InfoCard("État") {
+            Text("Cerveau : ${self?.activeBrain?.displayName ?: "inconnu"}")
+            Text("Nœuds distants en ligne : $onlineRemote")
+            Text("Mode ressources : ${self?.resourceBudget?.mode ?: "?"}")
+            val preferred = self?.knownNodes?.firstOrNull {
+                it.nodeId == self.preferredComputeNodeId
+            }
+            Text("Calcul préféré : ${preferred?.name ?: "Pixel / local"}")
+        }
+
+        if (state.chatBusy) {
+            Spacer(Modifier.height(12.dp))
+            InfoCard("Jade travaille") {
+                CircularProgressIndicator()
+                Text(
+                    "Le Cognitive Core observe les nœuds, choisit un backend et peut vérifier les requêtes complexes."
+                )
+            }
+        }
+
+        if (state.response.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            InfoCard("Jade") {
+                Text(state.response)
+            }
+        }
+
+        state.error?.let { error ->
+            Spacer(Modifier.height(12.dp))
+            InfoCard("Erreur") {
+                Text(error)
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it.take(10_000) },
+            label = { Text("Parler à Jade") },
+            placeholder = { Text("Ex : Analyse l'état de ton Compute Mesh") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = {
+                vm.send(input)
+                input = ""
+            },
+            enabled = input.isNotBlank() && !state.chatBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (state.chatBusy) "Jade réfléchit…" else "Envoyer")
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { vm.send("Qui es-tu et quels nœuds connais-tu ?") },
+                enabled = !state.chatBusy,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Qui es-tu ?")
+            }
+            OutlinedButton(
+                onClick = {
+                    vm.send(
+                        "Évalue tes ressources, tes nœuds disponibles et explique quel calcul tu utiliserais maintenant."
+                    )
+                },
+                enabled = !state.chatBusy,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("État réel")
+            }
+        }
+    }
+}
+
+@Composable
+private fun NodesScreen(
+    state: JadeUiState,
+    vm: JadeViewModel,
+    localNetworkGranted: Boolean,
+    requestLocalNetwork: () -> Unit,
+    needsLocalNetworkPermission: Boolean,
+    modifier: Modifier = Modifier
+) {
+    var showPairing by remember { mutableStateOf(false) }
+    var host by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("8765") }
+    var token by remember { mutableStateOf("") }
+
+    PageColumn(modifier) {
+        PageTitle("Mes nœuds", "Device Registry + routes LAN/Tailscale")
+
+        state.selfModel?.knownNodes?.forEach { node ->
+            InfoCard(node.name) {
+                Text("${node.kind} • ${node.status}", fontWeight = FontWeight.SemiBold)
+                if (node.runtimeVersion.isNotBlank()) {
+                    Text(
+                        "Runtime ${node.runtimeVersion}" +
+                            if (node.runtimeChannel.isNotBlank()) " • ${node.runtimeChannel}" else ""
+                    )
+                }
+                if (node.brainBackend.isNotBlank()) {
+                    Text(
+                        "Cerveau : ${node.brainBackend}" +
+                            if (node.brainModel.isNotBlank()) " / ${node.brainModel}" else ""
+                    )
+                }
+                if (node.ramTotalGb > 0.0) {
+                    Text("RAM : ${node.ramAvailableGb} / ${node.ramTotalGb} Go libres/total")
+                }
+                if (node.routes.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Routes enregistrées :", fontWeight = FontWeight.SemiBold)
+                    node.routes.forEach { route ->
+                        val active = route.routeId == node.activeRouteId
+                        Text(
+                            "${if (active) "●" else "○"} ${route.kind} • ${route.status} • " +
+                                "${route.host}:${route.port}" +
+                                (route.latencyMs?.let { " • ${it} ms" } ?: "")
+                        )
+                        route.lastError?.takeIf { it.isNotBlank() }?.let {
+                            Text("  $it")
+                        }
+                    }
+                }
+                if (node.kind != NodeKind.PHONE && node.routes.isEmpty()) {
+                    Text("Aucune route enregistrée.")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        Button(
+            onClick = { vm.refreshNodes() },
+            enabled = !state.nodeBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (state.nodeBusy) "Sondage en cours…" else "Rafraîchir les nœuds")
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { vm.runComputeMeshProbe() },
+            enabled = !state.taskBusy,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Tester le Compute Mesh en parallèle")
+        }
+
+        state.meshProbe?.let { mesh ->
+            Spacer(Modifier.height(8.dp))
+            InfoCard("Dernier test Mesh") {
+                Text("${mesh.successCount}/${mesh.nodeResults.size} nœud(s) réussis")
+                Text("Durée globale : ${mesh.completedAt - mesh.startedAt} ms")
+                mesh.nodeResults.forEach { result ->
+                    Text(
+                        "• ${result.nodeName} — " +
+                            if (result.success) "${result.durationMs} ms" else "échec : ${result.error}"
+                    )
+                }
+            }
+        }
+
+        if (state.nodeMessage.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(state.nodeMessage)
+        }
+        if (state.taskMessage.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(state.taskMessage)
+        }
+
+        Spacer(Modifier.height(14.dp))
+        OutlinedButton(
+            onClick = { showPairing = !showPairing },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (showPairing) "Masquer l'association" else "Ajouter un appareil ou une route")
+        }
+
+        if (showPairing) {
+            Spacer(Modifier.height(8.dp))
+            InfoCard("Association — une seule fois") {
+                Text(
+                    "Jade garde ensuite le nœud et ses routes. Pour un même PC, une seconde adresse LAN/Tailscale sera fusionnée si le runtime renvoie le même Node ID."
+                )
+                if (needsLocalNetworkPermission && !localNetworkGranted) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("Android doit autoriser le réseau local pour tester une route LAN.")
+                    Button(
+                        onClick = requestLocalNetwork,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Autoriser le réseau local")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { host = it },
+                    label = { Text("Adresse LAN, Tailscale ou DNS") },
+                    placeholder = { Text("Ex : 100.x.x.x") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { value ->
+                        port = value.filter { it.isDigit() }.take(5)
+                    },
+                    label = { Text("Port") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = { token = it },
+                    label = { Text("Jeton du Node Runtime") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        vm.registerNode(
+                            host = host.trim(),
+                            port = port.toIntOrNull() ?: 8765,
+                            token = token.trim()
+                        )
+                        token = ""
+                    },
+                    enabled =
+                        !state.nodeBusy &&
+                            host.isNotBlank() &&
+                            token.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Associer + tester")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityScreen(
+    state: JadeUiState,
+    vm: JadeViewModel,
+    modifier: Modifier = Modifier
+) {
+    PageColumn(modifier) {
+        PageTitle("Activité", "Ce que Jade fait et mesure")
+
+        InfoCard("Cognitive Core") {
+            if (state.cognitiveTrace.isEmpty()) {
+                Text("Aucun cycle cognitif enregistré pour le moment.")
+            } else {
+                state.cognitiveTrace.take(16).forEach { event ->
+                    Text(
+                        "${event.phase} • ${if (event.success) "OK" else "WARN"} • ${event.summary}"
+                    )
+                    if (event.durationMs > 0) {
+                        Text("  ${event.durationMs} ms")
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        InfoCard("Candidats d'apprentissage") {
+            if (state.learningCandidates.isEmpty()) {
+                Text("Aucun problème répétitif assez mesuré pour proposer une adaptation.")
+            } else {
+                state.learningCandidates.forEach { candidate ->
+                    Text(candidate.title, fontWeight = FontWeight.SemiBold)
+                    Text(candidate.description)
+                    Text("Preuves : ${candidate.evidence}")
+                    Text("Confiance : ${(candidate.confidence * 100).toInt()} %")
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        InfoCard("Tâches distribuées") {
+            Text("File active : ${state.pendingTasks}")
+            if (state.taskHistory.isEmpty()) {
+                Text("Aucun historique.")
+            } else {
+                state.taskHistory.take(12).forEach { result ->
+                    Text(
+                        "• ${result.taskKind} — ${result.executedNodeName} — " +
+                            "${result.durationMs} ms — ${if (result.success) "OK" else "ÉCHEC"}" +
+                            if (result.fallbackUsed) " — fallback" else ""
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { vm.runDistributedProbe() },
+                enabled = !state.taskBusy,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Probe")
+            }
+            OutlinedButton(
+                onClick = { vm.runMemoryConsolidation() },
+                enabled = !state.taskBusy && state.memoryCount > 0,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Consolider")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemoryScreen(
+    state: JadeUiState,
+    vm: JadeViewModel,
+    modifier: Modifier = Modifier
+) {
+    PageColumn(modifier) {
+        PageTitle("Mémoire", "${state.memoryCount} élément(s) persistent(s)")
+        InfoCard("Mémoire récente") {
+            if (state.memories.isEmpty()) {
+                Text("Aucune mémoire pour le moment.")
+            } else {
+                state.memories.take(24).forEach { memory ->
+                    Text("${memory.type} • ${memory.content}")
+                    Text("source=${memory.source} • confiance=${memory.confidence}")
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { vm.runMemoryConsolidation() },
+            enabled = !state.taskBusy && state.memoryCount > 0,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Vérifier / consolider la mémoire")
+        }
+    }
+}
+
+@Composable
+private fun AdminScreen(
+    state: JadeUiState,
+    vm: JadeViewModel,
+    modifier: Modifier = Modifier
+) {
+    var pin by remember { mutableStateOf("") }
+
+    PageColumn(modifier) {
+        PageTitle("Admin / Diagnostic", "Le capot technique de Jade")
+
+        if (!state.adminConfigured) {
+            InfoCard("Créer le PIN Admin") {
+                Text(
+                    "Ce PIN local protège les détails de diagnostic. Il n'est jamais envoyé au PC ni au VPS."
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it.filter(Char::isDigit).take(10) },
+                    label = { Text("Nouveau PIN (4–10 chiffres)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        vm.configureAdminPin(pin)
+                        pin = ""
+                    },
+                    enabled = pin.length >= 4,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Créer et ouvrir le mode Admin")
+                }
+            }
+            return@PageColumn
+        }
+
+        if (!state.adminUnlocked) {
+            InfoCard("Mode Admin verrouillé") {
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it.filter(Char::isDigit).take(10) },
+                    label = { Text("PIN Admin") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        vm.unlockAdmin(pin)
+                        pin = ""
+                    },
+                    enabled = pin.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Déverrouiller")
+                }
+            }
+            state.error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it)
+            }
+            return@PageColumn
+        }
+
+        InfoCard("Runtime Manager") {
+            if (state.runtimes.isEmpty()) {
+                Text("Aucun runtime distant enregistré.")
+            } else {
+                state.runtimes.forEach { runtime ->
+                    Text(
+                        "${runtime.nodeName} • ${if (runtime.online) "ONLINE" else "OFFLINE"} • " +
+                            "runtime ${runtime.runtimeVersion} • ${runtime.channel}"
+                    )
+                    if (runtime.updateAvailable) {
+                        Text("  Mise à niveau 0.1.0 recommandée.")
+                    }
+                }
+            }
+            Text(
+                "La V0.1 suit version/canal et prépare stable/candidate. L'installation automatique distante reste volontairement désactivée pour ce premier runtime manager."
+            )
+        }
+
+        Spacer(Modifier.height(10.dp))
+        InfoCard("Journal") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("DEBUG détaillé")
+                Switch(
+                    checked = state.debugEnabled,
+                    onCheckedChange = { vm.setDebugEnabled(it) }
+                )
+            }
+            Text("Les tokens, mots de passe et secrets sont masqués dans les métadonnées.")
+            Spacer(Modifier.height(6.dp))
+            state.diagnostics.take(30).forEach { entry ->
+                Text(
+                    "${entry.level} • ${entry.event} • ${entry.message}"
+                )
+                if (entry.level == DiagnosticLevel.ERROR) {
+                    Spacer(Modifier.height(2.dp))
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Button(
+            onClick = { vm.generateDiagnosticBundle() },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Générer un bundle diagnostic")
+        }
+        state.diagnosticBundlePath?.let { path ->
+            Spacer(Modifier.height(6.dp))
+            Text("Bundle créé : $path")
+        }
+
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(
+            onClick = { vm.lockAdmin() },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Verrouiller le mode Admin")
+        }
+    }
+}
+
+@Composable
+private fun PageColumn(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        content = content
+    )
+}
+
+@Composable
+private fun PageTitle(title: String, subtitle: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold
+    )
+    Text(subtitle, style = MaterialTheme.typography.bodyMedium)
+    Spacer(Modifier.height(12.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(12.dp))
+}
+
+@Composable
 private fun InfoCard(
     title: String,
-    content: @Composable () -> Unit
+    content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),

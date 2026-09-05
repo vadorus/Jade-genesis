@@ -23,42 +23,35 @@ class SelfModelBuilder {
         preferredComputeNodeId: String?,
         toolNames: List<String>
     ): SelfModel {
-        val pcNodes = knownNodes.filter {
-            it.kind == NodeKind.PC
+        val remoteNodes = knownNodes.filter { it.kind != NodeKind.PHONE }
+        val onlineRemote = remoteNodes.filter { it.status == NodeStatus.ONLINE }
+        val pcNodes = knownNodes.filter { it.kind == NodeKind.PC }
+        val vpsNodes = knownNodes.filter { it.kind == NodeKind.VPS }
+        val onlinePc = pcNodes.any { it.status == NodeStatus.ONLINE }
+        val onlineVps = vpsNodes.any { it.status == NodeStatus.ONLINE }
+        val onlineTaskNode = onlineRemote.any {
+            "task_execution_v3" in it.capabilities
         }
-        val vpsNodes = knownNodes.filter {
-            it.kind == NodeKind.VPS
-        }
-        val onlinePc = pcNodes.any {
-            it.status == NodeStatus.ONLINE
-        }
-        val onlineVps = vpsNodes.any {
-            it.status == NodeStatus.ONLINE
-        }
-        val onlineTaskNode = knownNodes.any {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities
-        }
-        val onlineGenericTaskNode = knownNodes.any {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities &&
+        val onlineGenericTaskNode = onlineRemote.any {
+            "task_execution_v3" in it.capabilities &&
                 "text_analysis" in it.capabilities &&
                 "genesis_probe" in it.capabilities
         }
-        val onlineConsolidationNode = knownNodes.any {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities &&
+        val onlineConsolidationNode = onlineRemote.any {
+            "task_execution_v3" in it.capabilities &&
                 "memory_consolidation" in it.capabilities
         }
-        val onlineLocalBrainNode = knownNodes.any {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities &&
+        val onlineLocalBrainNode = onlineRemote.any {
+            "task_execution_v3" in it.capabilities &&
                 "local_brain" in it.capabilities &&
                 "brain_chat" in it.capabilities
+        }
+        val onlineAsyncNode = onlineRemote.any {
+            "async_tasks_v1" in it.capabilities
+        }
+        val multiRouteNode = remoteNodes.any { it.routes.size > 1 }
+        val runtimeManagedNode = onlineRemote.any {
+            "runtime_manager_v1" in it.capabilities
         }
 
         val capabilities = listOf(
@@ -68,7 +61,7 @@ class SelfModelBuilder {
                 "memory_lifecycle",
                 true,
                 "MemoryLifecycleManager 0.0.7",
-                "Empreinte les sources, bloque les consolidations identiques et classe NEW/CONFIRMED/CONTRADICTORY/OBSOLETE_CANDIDATE sans suppression automatique."
+                "Empreinte les sources, bloque les consolidations identiques et conserve les contradictions comme signaux à vérifier."
             ),
             Capability(
                 "device_inspection",
@@ -79,43 +72,83 @@ class SelfModelBuilder {
                 "resource_governor",
                 true,
                 "ResourceGovernor",
-                "Adapte le budget de travail à la RAM, batterie, température et état Android."
+                "Adapte le budget aux ressources réelles du Pixel."
+            ),
+            Capability(
+                "device_registry",
+                true,
+                "DeviceRegistry v2",
+                "Les nœuds et leurs secrets d'appairage restent enregistrés ; l'ancien registre 0.0.x est migré automatiquement."
+            ),
+            Capability(
+                "multi_route_nodes",
+                true,
+                if (multiRouteNode) "MultiRoute_active" else "MultiRoute_ready",
+                "Un même nœud peut avoir plusieurs chemins, notamment LAN et Tailscale, avec sélection par disponibilité et latence."
+            ),
+            Capability(
+                "on_demand_connectivity",
+                true,
+                "NodeManager probe-on-demand",
+                "Jade sonde les routes quand une tâche en a besoin plutôt que maintenir des sockets permanentes."
+            ),
+            Capability(
+                "compute_mesh",
+                onlineTaskNode,
+                if (onlineTaskNode) "ComputeMesh fan-out v1" else "ComputeMesh_waiting_for_nodes",
+                "Les tâches parallélisables peuvent être distribuées simultanément à plusieurs nœuds compatibles."
             ),
             Capability(
                 "brain_backend_router",
                 true,
-                "BrainRouter",
-                "Cerveaux interchangeables selon disponibilité et ressources."
+                "BrainRouter 0.1.0",
+                "Les modèles sont des ressources interchangeables ; l'identité Jade reste dans le Core."
             ),
             Capability(
-                "node_manager",
+                "cognitive_core",
                 true,
-                "NodeManager protocol 0.0.6",
-                "Registre les nœuds et découvre dynamiquement les capacités du runtime, dont LocalPCBrain 0.0.8."
+                "CognitiveCore 0.1.0",
+                "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
+            ),
+            Capability(
+                "reflection_engine",
+                activeBrain.backendType != BrainBackendType.PROTOTYPE,
+                if (activeBrain.backendType != BrainBackendType.PROTOTYPE) {
+                    "Cognitive verifier"
+                } else {
+                    "waiting_for_generative_backend"
+                },
+                "Les requêtes complexes peuvent recevoir une seconde passe de contrôle structurée sans stocker de chaîne de pensée privée."
+            ),
+            Capability(
+                "learning_candidates",
+                true,
+                "LearningEngine v1",
+                "Les échecs et latences répétées produisent des candidats d'amélioration mesurables ; ils ne sont pas appliqués automatiquement."
             ),
             Capability(
                 "task_router",
                 true,
-                "AdaptiveTaskRouter 0.0.6",
-                "Classe les nœuds par ressources, charge et historique mesuré, puis essaie les alternatives."
+                "AdaptiveTaskRouter + DeviceRegistry v2",
+                "Classe les nœuds par ressources, capacité et historique, puis utilise les routes enregistrées."
             ),
             Capability(
                 "task_ledger",
                 true,
-                "TaskLedger 0.0.6",
-                "Conserve résultats, durées, échecs et fallbacks pour améliorer le routage futur."
+                "TaskLedger",
+                "Conserve succès, durées, échecs et fallbacks."
             ),
             Capability(
                 "task_queue",
                 true,
-                "PersistentTaskQueue 0.0.6",
-                "Conserve l'état PENDING/RUNNING/COMPLETED/FAILED des tâches distribuées et récupère les exécutions interrompues."
+                "PersistentTaskQueue",
+                "Suit PENDING/RUNNING/COMPLETED/FAILED côté Android."
             ),
             Capability(
-                "adaptive_routing",
-                true,
-                "MeasuredExecutionHistory",
-                "Le routage utilise réellement les succès, échecs et durées précédemment mesurés."
+                "async_remote_tasks",
+                onlineAsyncNode,
+                if (onlineAsyncNode) "NodeRuntime async_tasks_v1" else "legacy_sync_runtime",
+                "brain_chat peut continuer sur le nœud sans maintenir une socket HTTP ouverte pendant toute la génération."
             ),
             Capability(
                 "memory_consolidation",
@@ -124,115 +157,93 @@ class SelfModelBuilder {
                     "DistributedMemoryConsolidation"
                 } else {
                     "LocalMemoryConsolidation"
-                },
-                "La consolidation reste distribuable ; Memory Lifecycle 0.0.7 décide d'abord si le lot a réellement changé."
+                }
             ),
             Capability(
                 "distributed_execution",
                 onlineTaskNode,
-                if (onlineTaskNode) {
-                    "TaskRouter_remote_ready_v3"
-                } else {
-                    "TaskRouter_local_fallback_only"
-                },
-                "La 0.0.6 utilise un protocole de tâches v3 avec queue persistante et fallback multi-nœuds."
+                if (onlineTaskNode) "TaskRouter_remote_ready_v3" else "local_fallback_only"
             ),
             Capability(
                 "generic_task_runtime",
                 onlineGenericTaskNode,
-                if (onlineGenericTaskNode) {
-                    "NodeRuntime_0.0.6"
-                } else {
-                    "NodeRuntime_upgrade_required"
-                },
-                "Tâches autorisées : genesis_probe, text_analysis, memory_consolidation et brain_chat quand Ollama local est prêt."
+                if (onlineGenericTaskNode) "NodeRuntime_ready" else "runtime_upgrade_or_node_required"
             ),
             Capability(
-                "distributed_memory_consolidation",
-                onlineConsolidationNode,
-                if (onlineConsolidationNode) {
-                    "NodeRuntime_memory_consolidation_ready"
-                } else {
-                    "local_only_until_remote_upgrade"
-                }
-            ),
-            Capability(
-                "local_pc_brain",
+                "distributed_local_brain",
                 onlineLocalBrainNode,
-                if (onlineLocalBrainNode) {
-                    "LocalPCBrain 0.0.8 + Ollama"
-                } else {
-                    "PrototypeBrain_fallback"
-                },
-                "Le modèle tourne localement sur le PC ; le Pixel transporte seulement le contexte et la réponse via le Node Runtime authentifié."
+                if (onlineLocalBrainNode) "DistributedLocalBrain + Ollama" else "PrototypeBrain_fallback",
+                "Tout PC/VPS qui annonce local_brain + brain_chat peut devenir une ressource générative."
             ),
             Capability(
                 "generative_ai",
                 activeBrain.backendType != BrainBackendType.PROTOTYPE,
                 activeBrain.displayName,
                 if (activeBrain.backendType != BrainBackendType.PROTOTYPE) {
-                    "Backend génératif local actif."
+                    "Backend génératif actif."
                 } else {
-                    "Backend de secours à règles actif."
+                    "Cerveau de secours à règles actif."
                 }
+            ),
+            Capability(
+                "diagnostics",
+                true,
+                "DiagnosticLogger 0.1.0",
+                "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
+            ),
+            Capability(
+                "admin_mode",
+                true,
+                "Local PIN gate",
+                "Les détails de diagnostic sont séparés de l'interface normale."
+            ),
+            Capability(
+                "runtime_manager",
+                runtimeManagedNode,
+                if (runtimeManagedNode) "RuntimeManager protocol ready" else "legacy_runtime_detected",
+                "La version et le canal des runtimes sont suivis. L'exécution automatique des mises à jour reste volontairement désactivée dans cette première V0.1."
             ),
             Capability("microphone", false, "not_requested_yet"),
             Capability("camera", false, "not_requested_yet"),
             Capability(
                 "pc_node",
                 onlinePc,
-                if (onlinePc) {
-                    "NodeManager_online"
-                } else if (pcNodes.isNotEmpty()) {
-                    "NodeManager_registered_offline"
+                if (onlinePc) "DeviceRegistry_online" else if (pcNodes.isNotEmpty()) {
+                    "DeviceRegistry_registered_offline"
                 } else {
-                    "NodeManager_no_pc_registered"
+                    "DeviceRegistry_no_pc"
                 }
             ),
             Capability(
                 "vps_node",
                 onlineVps,
-                if (onlineVps) {
-                    "NodeManager_online"
-                } else if (vpsNodes.isNotEmpty()) {
-                    "NodeManager_registered_offline"
+                if (onlineVps) "DeviceRegistry_online" else if (vpsNodes.isNotEmpty()) {
+                    "DeviceRegistry_registered_offline"
                 } else {
-                    "NodeManager_no_vps_registered"
+                    "DeviceRegistry_no_vps"
                 }
             )
         )
 
         val limits = mutableListOf(
-            "Memory Lifecycle 0.0.7 classe les contradictions et l'obsolescence comme des candidats à vérifier ; il ne tranche ni ne supprime automatiquement une mémoire.",
-            "La détection de contradiction reste déterministe et heuristique : elle produit un signal, pas une vérité.",
-            "Le runtime reste sur une liste blanche : genesis_probe, text_analysis, memory_consolidation et brain_chat ; aucune commande système arbitraire n'est exposée.",
-            "La file persistante 0.0.6 suit et récupère l'état des tâches, mais l'ordonnancement autonome en arrière-plan viendra plus tard.",
-            "Jade ne réécrit pas encore seule son code ni les poids d'un modèle.",
-            "Le lien LAN de développement utilise HTTP local avec un jeton de Node Runtime ; le chiffrement et l'appairage renforcé viendront plus tard.",
-            "Le budget mémoire est une recommandation de fonctionnement sûr, pas une limite physique absolue d'Android.",
-            "Caméra et micro seront ajoutés dans une étape ultérieure."
+            "Le Cognitive Core 0.1.0 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
+            "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
+            "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
+            "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",
+            "La protection Admin utilise un PIN local dans cette V0.1 ; l'intégration biométrique pourra la remplacer.",
+            "Le runtime conserve une liste blanche stricte : genesis_probe, text_analysis, memory_consolidation et brain_chat ; aucune commande shell arbitraire.",
+            "Memory Lifecycle 0.0.7 ne supprime jamais automatiquement une mémoire contradictoire ou obsolète.",
+            "Tailscale fournit le transport privé quand il est actif ; Jade ne contourne pas un réseau absent."
         )
 
         if (!onlineLocalBrainNode) {
             limits.add(
                 0,
-                "LocalPCBrain n'est pas disponible : le PC doit être en ligne, Ollama joignable et au moins un modèle conversationnel installé."
-            )
-        } else {
-            limits.add(
-                "LocalPCBrain 0.0.8 est conversationnel : pas encore de tool-calling autonome ni d'exécution de commandes."
+                "Aucun nœud génératif n'est actuellement disponible : Jade utilise son cerveau de secours jusqu'au retour d'un PC/VPS avec Ollama."
             )
         }
-
-        if (
-            knownNodes.none {
-                it.kind != NodeKind.PHONE &&
-                    it.status == NodeStatus.ONLINE
-            }
-        ) {
-            limits.add(
-                "Aucun nœud distant n'est actuellement en ligne."
-            )
+        if (onlineRemote.isEmpty()) {
+            limits.add("Aucun nœud distant n'est actuellement en ligne.")
         }
 
         return SelfModel(

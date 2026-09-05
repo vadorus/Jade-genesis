@@ -20,18 +20,18 @@ class LocalPCBrain(
 ) : BrainBackend {
 
     override val info = BrainInfo(
-        id = "local-pc-brain-0.0.8",
-        displayName = "Local PC Brain — Ollama",
+        id = "distributed-local-brain-0.1.0",
+        displayName = "Distributed Local Brain",
         backendType = BrainBackendType.LOCAL_NODE,
-        location = "pc",
+        location = "compute-mesh",
         resourceClass = BrainResourceClass.HEAVY,
         requiresNetwork = true,
         paidApi = false,
         available = true,
-        priority = 100,
+        priority = 110,
         details =
-            "Backend génératif local via le Node Runtime PC et Ollama. " +
-                "Aucune API payante n'est requise."
+            "Backend génératif distribué via un Node Runtime et un modèle local. " +
+                "Le nœud peut être un PC ou un VPS, sans API payante obligatoire."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
@@ -52,14 +52,14 @@ class LocalPCBrain(
             )
             .firstOrNull()
             ?: error(
-                "Aucun PC en ligne n'annonce la capacité brain_chat."
+                "Aucun nœud génératif en ligne n'annonce brain_chat."
             )
 
         val memories = context.memories
             .sortedBy {
                 if (it.source.startsWith("JADE_CONSOLIDATION_")) 1 else 0
             }
-            .take(8)
+            .take(10)
 
         val payload = JSONObject().apply {
             put(
@@ -70,7 +70,10 @@ class LocalPCBrain(
                     put("version", context.selfModel.identity.version)
                 }
             )
-            put("user_input", context.userInput.take(8_000))
+            put("operation", context.operation)
+            put("user_input", context.userInput.take(10_000))
+            put("draft_response", context.draftResponse?.take(14_000) ?: "")
+            put("review_note", context.reviewNote?.take(2_000) ?: "")
             put(
                 "self",
                 JSONObject().apply {
@@ -89,14 +92,54 @@ class LocalPCBrain(
                         context.selfModel.resourceBudget.mode.name
                     )
                     put(
+                        "preferred_compute_node_id",
+                        preferredId ?: ""
+                    )
+                    put(
                         "preferred_compute_node",
                         context.selfModel.knownNodes
-                            .firstOrNull {
-                                it.nodeId == preferredId
-                            }
+                            .firstOrNull { it.nodeId == preferredId }
                             ?.name
                             ?: "aucun"
                     )
+                }
+            )
+            put(
+                "nodes",
+                JSONArray().apply {
+                    context.selfModel.knownNodes.forEach { known ->
+                        put(
+                            JSONObject().apply {
+                                put("node_id", known.nodeId)
+                                put("name", known.name)
+                                put("kind", known.kind.name)
+                                put("status", known.status.name)
+                                put("cpu_cores", known.cpuCores)
+                                put("ram_total_gb", known.ramTotalGb)
+                                put("ram_available_gb", known.ramAvailableGb)
+                                put("runtime_version", known.runtimeVersion)
+                                put("brain_backend", known.brainBackend)
+                                put("brain_model", known.brainModel)
+                                put("capabilities", JSONArray(known.capabilities))
+                                put(
+                                    "routes",
+                                    JSONArray().apply {
+                                        known.routes.forEach { route ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("kind", route.kind.name)
+                                                    put("host", route.host)
+                                                    put("port", route.port)
+                                                    put("status", route.status.name)
+                                                    put("latency_ms", route.latencyMs ?: -1L)
+                                                }
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        )
+                    }
                 }
             )
             put(
@@ -131,10 +174,15 @@ class LocalPCBrain(
         val json = JSONObject(response.output)
         val text = json.optString("text").trim()
         if (text.isBlank()) {
-            error("Le backend Ollama a renvoyé une réponse vide.")
+            error("Le backend génératif a renvoyé une réponse vide.")
         }
 
-        return BrainResult(text = text)
+        return BrainResult(
+            text = text,
+            backendId = info.id,
+            backendDisplayName = info.displayName,
+            model = json.optString("model")
+        )
     }
 
     private fun compatibleNodes(

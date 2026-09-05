@@ -17,23 +17,19 @@ class BrainRouter(backends: List<BrainBackend>) {
         require(this.backends.isNotEmpty()) {
             "BrainRouter nécessite au moins un BrainBackend."
         }
-
         require(
-            this.backends.map { it.info.id }.distinct().size ==
-                this.backends.size
+            this.backends.map { it.info.id }.distinct().size == this.backends.size
         ) {
             "Chaque BrainBackend doit avoir un ID unique."
         }
     }
 
-    fun allInfos(): List<BrainInfo> =
-        backends.map { it.info }
+    fun allInfos(): List<BrainInfo> = backends.map { it.info }
 
     fun activeInfo(
         resourceBudget: ResourceBudget,
         nodes: List<GenesisNode>
-    ): BrainInfo =
-        select(resourceBudget, nodes).info
+    ): BrainInfo = select(resourceBudget, nodes).info
 
     suspend fun think(context: BrainContext): BrainResult {
         val nodes = context.selfModel.knownNodes
@@ -43,7 +39,7 @@ class BrainRouter(backends: List<BrainBackend>) {
         )
 
         return try {
-            primary.think(context)
+            decorate(primary, primary.think(context))
         } catch (primaryError: Exception) {
             val fallback = backends.firstOrNull {
                 it !== primary &&
@@ -52,27 +48,32 @@ class BrainRouter(backends: List<BrainBackend>) {
                     it.availableFor(nodes)
             } ?: throw primaryError
 
-            val fallbackResult = fallback.think(context)
-            BrainResult(
+            val fallbackResult = decorate(fallback, fallback.think(context))
+            fallbackResult.copy(
                 text = buildString {
                     append(
-                        "Mon cerveau local PC n'a pas pu répondre à cette requête. " +
-                            "J'utilise mon cerveau de secours pour rester disponible."
+                        "Je fonctionne momentanément avec mon cerveau de secours. "
                     )
-                    val reason = primaryError.message
-                        ?.trim()
-                        ?.take(160)
-                        .orEmpty()
-                    if (reason.isNotBlank()) {
-                        append(" Raison : $reason")
-                    }
-                    append("\n\n")
                     append(fallbackResult.text)
                 },
-                toolName = fallbackResult.toolName
+                fallbackUsed = true,
+                fallbackReason = primaryError.message
+                    ?.trim()
+                    ?.take(180)
+                    ?: primaryError::class.java.simpleName
             )
         }
     }
+
+    private fun decorate(
+        backend: BrainBackend,
+        result: BrainResult
+    ): BrainResult = result.copy(
+        backendId = result.backendId.ifBlank { backend.info.id },
+        backendDisplayName = result.backendDisplayName.ifBlank {
+            backend.info.displayName
+        }
+    )
 
     private fun select(
         resourceBudget: ResourceBudget,
@@ -99,26 +100,23 @@ class BrainRouter(backends: List<BrainBackend>) {
                     backend.info.location == "phone"
 
             !runsOnPhone ||
-                backend.info.resourceClass.ordinal <=
-                maximumPhoneClass.ordinal
+                backend.info.resourceClass.ordinal <= maximumPhoneClass.ordinal
         }
 
         val candidates = if (eligible.isNotEmpty()) {
             eligible
         } else {
-            listOf(
-                available.minBy { it.info.resourceClass.ordinal }
-            )
+            listOf(available.minBy { it.info.resourceClass.ordinal })
         }
 
         fun locationScore(backend: BrainBackend): Int =
             when (backend.info.backendType) {
                 BrainBackendType.LOCAL_NODE,
                 BrainBackendType.REMOTE_NODE ->
-                    if (resourceBudget.preferRemoteCompute) 120 else 100
+                    if (resourceBudget.preferRemoteCompute) 140 else 115
 
                 BrainBackendType.LOCAL_PHONE ->
-                    if (resourceBudget.preferRemoteCompute) 20 else 90
+                    if (resourceBudget.preferRemoteCompute) 25 else 95
 
                 BrainBackendType.CLOUD_OPTIONAL ->
                     if (resourceBudget.preferRemoteCompute) 70 else 40

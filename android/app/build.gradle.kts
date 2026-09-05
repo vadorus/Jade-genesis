@@ -16,8 +16,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 8
-        versionName = "0.0.8"
+        versionCode = 10
+        versionName = "0.1.0"
     }
 
     buildFeatures {

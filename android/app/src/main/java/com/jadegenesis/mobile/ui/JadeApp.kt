@@ -108,8 +108,8 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                 )
 
                 Text(
-                    "Adaptive Learning Core Prototype " +
-                        (state.selfModel?.identity?.version ?: "0.0.7"),
+                    "Distributed Local Brain Prototype " +
+                        (state.selfModel?.identity?.version ?: "0.0.8"),
                     style = MaterialTheme.typography.titleMedium
                 )
 

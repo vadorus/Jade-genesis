@@ -96,6 +96,7 @@ class NodeManager(
             "device_inspection",
             "resource_governor",
             "prototype_brain",
+            "local_pc_brain_client",
             "task_execution_v1",
             "task_execution_v2",
             "task_execution_v3",
@@ -269,10 +270,14 @@ class NodeManager(
             put("iterations", request.iterations)
         }.toString().toByteArray(Charsets.UTF_8)
 
-        val readTimeoutMs = when (request.workload) {
-            TaskWorkload.LIGHT -> 8_000
-            TaskWorkload.MEDIUM -> 15_000
-            TaskWorkload.HEAVY -> 45_000
+        val readTimeoutMs = if (request.taskKind == "brain_chat") {
+            120_000
+        } else {
+            when (request.workload) {
+                TaskWorkload.LIGHT -> 8_000
+                TaskWorkload.MEDIUM -> 15_000
+                TaskWorkload.HEAVY -> 45_000
+            }
         }
 
         val connection = (

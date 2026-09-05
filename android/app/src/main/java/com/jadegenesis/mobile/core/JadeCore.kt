@@ -1,8 +1,8 @@
 package com.jadegenesis.mobile.core
 
 import android.content.Context
-import com.jadegenesis.mobile.brain.BrainBackend
 import com.jadegenesis.mobile.brain.BrainRouter
+import com.jadegenesis.mobile.brain.LocalPCBrain
 import com.jadegenesis.mobile.brain.PrototypeBrain
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.identity.IdentityManager
@@ -34,10 +34,7 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.UUID
 
-class JadeCore(
-    context: Context,
-    brainBackends: List<BrainBackend> = listOf(PrototypeBrain())
-) {
+class JadeCore(context: Context) {
     private val appContext = context.applicationContext
     private val identityManager = IdentityManager(appContext)
     private val profiler = DeviceProfiler(appContext)
@@ -48,8 +45,13 @@ class JadeCore(
     )
     private val memoryLifecycle = MemoryLifecycleManager(appContext)
     private val selfModelBuilder = SelfModelBuilder()
-    private val brainRouter = BrainRouter(brainBackends)
     private val nodeManager = NodeManager(appContext, profiler)
+    private val brainRouter = BrainRouter(
+        listOf(
+            LocalPCBrain(nodeManager),
+            PrototypeBrain()
+        )
+    )
     private val taskLedger = TaskLedger(appContext)
     private val taskQueue = TaskQueue(appContext)
     private val taskRouter = TaskRouter(
@@ -73,10 +75,13 @@ class JadeCore(
         val activeIdentity = activeIdentity()
         val device = profiler.capture()
         val resourceBudget = resourceGovernor.evaluate(device)
-        val activeBrain = brainRouter.activeInfo(resourceBudget)
         val nodes = nodeManager.nodes(
             device = device,
             refreshRemote = false
+        )
+        val activeBrain = brainRouter.activeInfo(
+            resourceBudget = resourceBudget,
+            nodes = nodes
         )
         val preferredNode = nodeManager.preferredComputeNode(
             nodes = nodes,
@@ -223,6 +228,9 @@ class JadeCore(
     suspend fun memoryCount(): Int = memory.count()
 
     suspend fun ask(userInput: String): String {
+        runCatching {
+            nodeManager.refreshRemoteNodes()
+        }
         val self = selfModel()
 
         val context = BrainContext(

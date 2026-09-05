@@ -11,8 +11,8 @@ import com.jadegenesis.mobile.model.NodeStatus
 class PrototypeBrain : BrainBackend {
 
     override val info = BrainInfo(
-        id = "prototype-brain-0.0.6",
-        displayName = "Prototype Brain",
+        id = "prototype-brain-0.0.8",
+        displayName = "Prototype Brain — secours",
         backendType = BrainBackendType.PROTOTYPE,
         location = "distributed-core",
         resourceClass = BrainResourceClass.MINIMAL,
@@ -280,7 +280,7 @@ class PrototypeBrain : BrainBackend {
 
         return BrainResult(
             text =
-                "Mon cerveau 0.0.6 reste un backend local minimal, mais mon runtime distribué sait maintenant " +
+                "Mon cerveau de secours 0.0.8 reste un backend local minimal. Mon runtime distribué sait " +
                     "mettre les tâches en file, choisir un nœud, mesurer le résultat, utiliser un fallback " +
                     "et consolider ma mémoire sans changer mon identité."
         )

@@ -53,6 +53,13 @@ class SelfModelBuilder {
                 "task_execution_v3" in it.capabilities &&
                 "memory_consolidation" in it.capabilities
         }
+        val onlineLocalBrainNode = knownNodes.any {
+            it.kind != NodeKind.PHONE &&
+                it.status == NodeStatus.ONLINE &&
+                "task_execution_v3" in it.capabilities &&
+                "local_brain" in it.capabilities &&
+                "brain_chat" in it.capabilities
+        }
 
         val capabilities = listOf(
             Capability("persistent_identity", true, "DataStore"),
@@ -83,8 +90,8 @@ class SelfModelBuilder {
             Capability(
                 "node_manager",
                 true,
-                "NodeManager 0.0.6",
-                "Registre les nœuds, mesure disponibilité, protocole, ressources et capacités."
+                "NodeManager protocol 0.0.6",
+                "Registre les nœuds et découvre dynamiquement les capacités du runtime, dont LocalPCBrain 0.0.8."
             ),
             Capability(
                 "task_router",
@@ -138,7 +145,7 @@ class SelfModelBuilder {
                 } else {
                     "NodeRuntime_upgrade_required"
                 },
-                "Tâches autorisées : genesis_probe, text_analysis et memory_consolidation."
+                "Tâches autorisées : genesis_probe, text_analysis, memory_consolidation et brain_chat quand Ollama local est prêt."
             ),
             Capability(
                 "distributed_memory_consolidation",
@@ -150,9 +157,24 @@ class SelfModelBuilder {
                 }
             ),
             Capability(
+                "local_pc_brain",
+                onlineLocalBrainNode,
+                if (onlineLocalBrainNode) {
+                    "LocalPCBrain 0.0.8 + Ollama"
+                } else {
+                    "PrototypeBrain_fallback"
+                },
+                "Le modèle tourne localement sur le PC ; le Pixel transporte seulement le contexte et la réponse via le Node Runtime authentifié."
+            ),
+            Capability(
                 "generative_ai",
                 activeBrain.backendType != BrainBackendType.PROTOTYPE,
-                activeBrain.displayName
+                activeBrain.displayName,
+                if (activeBrain.backendType != BrainBackendType.PROTOTYPE) {
+                    "Backend génératif local actif."
+                } else {
+                    "Backend de secours à règles actif."
+                }
             ),
             Capability("microphone", false, "not_requested_yet"),
             Capability("camera", false, "not_requested_yet"),
@@ -181,16 +203,26 @@ class SelfModelBuilder {
         )
 
         val limits = mutableListOf(
-            "Aucun modèle génératif n'est encore connecté.",
             "Memory Lifecycle 0.0.7 classe les contradictions et l'obsolescence comme des candidats à vérifier ; il ne tranche ni ne supprime automatiquement une mémoire.",
             "La détection de contradiction reste déterministe et heuristique : elle produit un signal, pas une vérité.",
-            "Le runtime reste sur une liste blanche : genesis_probe, text_analysis et memory_consolidation uniquement ; aucune commande système arbitraire n'est exposée.",
+            "Le runtime reste sur une liste blanche : genesis_probe, text_analysis, memory_consolidation et brain_chat ; aucune commande système arbitraire n'est exposée.",
             "La file persistante 0.0.6 suit et récupère l'état des tâches, mais l'ordonnancement autonome en arrière-plan viendra plus tard.",
             "Jade ne réécrit pas encore seule son code ni les poids d'un modèle.",
             "Le lien LAN de développement utilise HTTP local avec un jeton de Node Runtime ; le chiffrement et l'appairage renforcé viendront plus tard.",
             "Le budget mémoire est une recommandation de fonctionnement sûr, pas une limite physique absolue d'Android.",
             "Caméra et micro seront ajoutés dans une étape ultérieure."
         )
+
+        if (!onlineLocalBrainNode) {
+            limits.add(
+                0,
+                "LocalPCBrain n'est pas disponible : le PC doit être en ligne, Ollama joignable et au moins un modèle conversationnel installé."
+            )
+        } else {
+            limits.add(
+                "LocalPCBrain 0.0.8 est conversationnel : pas encore de tool-calling autonome ni d'exécution de commandes."
+            )
+        }
 
         if (
             knownNodes.none {

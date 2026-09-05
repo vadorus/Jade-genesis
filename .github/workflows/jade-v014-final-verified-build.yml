@@ -1,0 +1,425 @@
+name: Jade V0.1.4 Final Verified Build
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - ".github/workflows/jade-v014-final-verified-build.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  diagnostic-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up real Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.6.0"
+          cache-disabled: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 37 and Build Tools 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --channel=3 \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+      - name: Restore stable Jade signing key
+        shell: bash
+        env:
+          JADE_SIGNING_BUNDLE_B64: ${{ secrets.JADE_SIGNING_BUNDLE_B64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JADE_SIGNING_BUNDLE_B64:-}" ]; then
+            echo "ERROR: GitHub secret JADE_SIGNING_BUNDLE_B64 is missing."
+            exit 1
+          fi
+
+          SIGN_DIR="$RUNNER_TEMP/jade-signing"
+          mkdir -p "$SIGN_DIR"
+
+          printf '%s' "$JADE_SIGNING_BUNDLE_B64" | base64 -d > "$SIGN_DIR/signing.tar.gz"
+          tar -xzf "$SIGN_DIR/signing.tar.gz" -C "$SIGN_DIR"
+
+          test -f "$SIGN_DIR/jade-genesis-dev.jks"
+          test -f "$SIGN_DIR/password.txt"
+          test -f "$SIGN_DIR/alias.txt"
+
+          PASSWORD="$(cat "$SIGN_DIR/password.txt")"
+          ALIAS="$(cat "$SIGN_DIR/alias.txt")"
+
+          echo "::add-mask::$PASSWORD"
+          echo "JADE_KEYSTORE_PATH=$SIGN_DIR/jade-genesis-dev.jks" >> "$GITHUB_ENV"
+          echo "JADE_KEYSTORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "JADE_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Extract exact V0.1.4 source scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET=".github/workflows/jade-v014-targeted-observation-research-v2.yml"
+          test -f "$TARGET"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          target = Path(".github/workflows/jade-v014-targeted-observation-research-v2.yml")
+          lines = target.read_text(encoding="utf-8").splitlines(True)
+
+          def extract_run(step_name: str, output: str) -> None:
+              name_index = None
+              expected = f"- name: {step_name}"
+
+              for i, line in enumerate(lines):
+                  if line.strip() == expected:
+                      name_index = i
+                      break
+
+              if name_index is None:
+                  raise SystemExit(f"ERROR: step not found: {step_name}")
+
+              run_index = None
+              run_indent = None
+
+              for i in range(name_index + 1, len(lines)):
+                  stripped = lines[i].lstrip(" ")
+                  indent = len(lines[i]) - len(stripped)
+
+                  if stripped.startswith("- name:") and indent <= 6:
+                      break
+
+                  if stripped.rstrip("\r\n") == "run: |":
+                      run_index = i
+                      run_indent = indent
+                      break
+
+              if run_index is None or run_indent is None:
+                  raise SystemExit(f"ERROR: run block not found: {step_name}")
+
+              script_indent = run_indent + 2
+              out = []
+
+              for i in range(run_index + 1, len(lines)):
+                  line = lines[i]
+
+                  if line.strip() == "":
+                      out.append("\n")
+                      continue
+
+                  stripped = line.lstrip(" ")
+                  indent = len(line) - len(stripped)
+
+                  if indent <= run_indent:
+                      break
+
+                  out.append(line[script_indent:])
+
+              if not out:
+                  raise SystemExit(f"ERROR: empty run block: {step_name}")
+
+              Path(output).write_text("".join(out), encoding="utf-8")
+              print(f"Extracted {step_name} -> {output} ({len(out)} lines)")
+
+          extract_run(
+              "Add targeted observation, image sharing and Research v2",
+              "/tmp/jade-v014-features.sh",
+          )
+          extract_run(
+              "Patch Jade Core, UI and version to V0.1.4",
+              "/tmp/jade-v014-core-version.sh",
+          )
+          extract_run(
+              "Verify V0.1.4 source before build",
+              "/tmp/jade-v014-source-verify.sh",
+          )
+          extract_run(
+              "Remove every stale Android build",
+              "/tmp/jade-v014-clean.sh",
+          )
+          PY
+
+          chmod +x \
+            /tmp/jade-v014-features.sh \
+            /tmp/jade-v014-core-version.sh \
+            /tmp/jade-v014-source-verify.sh \
+            /tmp/jade-v014-clean.sh
+
+          grep -F 'class ScreenObserverRepository' /tmp/jade-v014-features.sh >/dev/null
+          grep -F 'versionCode = 14' /tmp/jade-v014-core-version.sh >/dev/null
+          grep -F 'versionCode = 14' /tmp/jade-v014-source-verify.sh >/dev/null
+          grep -F 'rm -rf android/.gradle android/build android/app/build' /tmp/jade-v014-clean.sh >/dev/null
+
+      - name: Apply V0.1.4 targeted observation and Research v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash /tmp/jade-v014-features.sh
+
+      - name: Apply V0.1.4 Core UI and version patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash /tmp/jade-v014-core-version.sh
+
+      - name: Fix FocusCropActivity Toast context
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          FILE="android/app/src/main/java/com/jadegenesis/mobile/screen/FocusCropActivity.kt"
+          test -f "$FILE"
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/app/src/main/java/com/jadegenesis/mobile/screen/FocusCropActivity.kt")
+          text = path.read_text(encoding="utf-8")
+
+          success_pattern = re.compile(
+              r'Toast\.makeText\(\s*this,\s*'
+              r'"Zone prête\. Dans Jade, touche « Analyser l\'image ciblée »\.",'
+          )
+          failure_pattern = re.compile(
+              r'Toast\.makeText\(\s*this,\s*'
+              r'error\.message \?: "Impossible de préparer cette zone\.",'
+          )
+
+          text, success_count = success_pattern.subn(
+              'Toast.makeText(\n'
+              '                                  this@FocusCropActivity,\n'
+              '                                  "Zone prête. Dans Jade, touche « Analyser l\'image ciblée ».",',
+              text,
+              count=1,
+          )
+          text, failure_count = failure_pattern.subn(
+              'Toast.makeText(\n'
+              '                                  this@FocusCropActivity,\n'
+              '                                  error.message ?: "Impossible de préparer cette zone.",',
+              text,
+              count=1,
+          )
+
+          if success_count != 1 or failure_count != 1:
+              raise SystemExit(
+                  "ERROR: expected exactly one success Toast and one failure Toast; "
+                  f"got success={success_count}, failure={failure_count}"
+              )
+
+          path.write_text(text, encoding="utf-8")
+          print("Fixed both nested Toast contexts in FocusCropActivity.kt")
+          PY
+
+          COUNT="$(grep -cF 'this@FocusCropActivity' "$FILE")"
+          if [ "$COUNT" -ne 2 ]; then
+            echo "ERROR: expected exactly 2 this@FocusCropActivity markers, got $COUNT"
+            exit 1
+          fi
+
+          grep -F 'Zone prête. Dans Jade, touche « Analyser l'"'"'image ciblée ».' "$FILE" >/dev/null
+          grep -F 'error.message ?: "Impossible de préparer cette zone."' "$FILE" >/dev/null
+
+          echo "FocusCropActivity Toast context fix verified."
+
+      - name: Show critical V0.1.4 version markers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== build.gradle.kts version markers ==="
+          grep -nE 'versionCode|versionName' android/app/build.gradle.kts
+
+          echo "=== IdentityManager CURRENT_VERSION ==="
+          grep -nF 'CURRENT_VERSION' \
+            android/app/src/main/java/com/jadegenesis/mobile/identity/IdentityManager.kt
+
+          echo "=== NodeManager runtimeVersion ==="
+          grep -nF 'runtimeVersion' \
+            android/app/src/main/java/com/jadegenesis/mobile/node/NodeManager.kt
+
+      - name: Verify exact V0.1.4 generated sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash /tmp/jade-v014-source-verify.sh
+
+      - name: Clean stale Android builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash /tmp/jade-v014-clean.sh
+
+      - name: Build V0.1.4 with persistent Gradle log
+        id: gradle_build
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          LOG="$RUNNER_TEMP/v014-build.log"
+
+          echo "=== Jade Genesis V0.1.4 diagnostic Android build ===" | tee "$LOG"
+          echo "run_id=$GITHUB_RUN_ID" | tee -a "$LOG"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" | tee -a "$LOG"
+          echo "commit=$GITHUB_SHA" | tee -a "$LOG"
+          echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG"
+          echo | tee -a "$LOG"
+
+          set +e
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --console=plain \
+            -p android \
+            :app:assembleDebug 2>&1 | tee -a "$LOG"
+          GRADLE_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          echo | tee -a "$LOG"
+          echo "gradle_exit_code=$GRADLE_STATUS" | tee -a "$LOG"
+          echo "finished_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$LOG"
+
+          exit "$GRADLE_STATUS"
+
+      - name: Upload Gradle log on failure
+        if: failure() && steps.gradle_build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: jade-v014-gradle-failure-log
+          path: ${{ runner.temp }}/v014-build.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Verify APK version 0.1.4
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          test -f "$APK"
+
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" \
+            | tee "$RUNNER_TEMP/v014-badging.txt"
+
+          grep -F "package: name='com.jadegenesis.mobile'" "$RUNNER_TEMP/v014-badging.txt"
+          grep -F "versionCode='14'" "$RUNNER_TEMP/v014-badging.txt"
+          grep -F "versionName='0.1.4'" "$RUNNER_TEMP/v014-badging.txt"
+
+          sha256sum "$APK" | tee "$RUNNER_TEMP/v014-apk.sha256"
+
+      - name: Verify stable Jade APK signature
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          SIGNATURE_FILE="$RUNNER_TEMP/v014-signature.txt"
+          EXPECTED_DIGEST="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" \
+            verify \
+            --verbose \
+            --print-certs \
+            "$APK" \
+            | tee "$SIGNATURE_FILE"
+
+          grep -F "Number of signers: 1" "$SIGNATURE_FILE" >/dev/null
+
+          ACTUAL_DIGEST="$(
+            sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' "$SIGNATURE_FILE" \
+              | head -n 1 \
+              | tr '[:upper:]' '[:lower:]' \
+              | tr -d ':[:space:]'
+          )"
+
+          if [ -z "$ACTUAL_DIGEST" ] || [ "$ACTUAL_DIGEST" != "$EXPECTED_DIGEST" ]; then
+            echo "ERROR: APK signer fingerprint does not match the stable Jade key."
+            exit 1
+          fi
+
+          echo "Stable Jade signing fingerprint verified."
+
+      - name: Package verified V0.1.4 sources
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$RUNNER_TEMP/jade-v014-sources"
+          mkdir -p "$OUT"
+
+          cp android/app/build.gradle.kts "$OUT/build.gradle.kts"
+          cp -R android/app/src/main "$OUT/main"
+
+          {
+            echo "Jade Genesis V0.1.4 verified sources"
+            echo "source_commit=$GITHUB_SHA"
+            echo "workflow_run=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "versionCode=14"
+            echo "versionName=0.1.4"
+            echo "apk_sha256=$(cut -d' ' -f1 "$RUNNER_TEMP/v014-apk.sha256")"
+            echo "signing_sha256=0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+          } > "$OUT/VERIFIED.txt"
+
+      - name: Upload verified V0.1.4 sources
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jade-Genesis-0.1.4-verified-sources
+          path: ${{ runner.temp }}/jade-v014-sources/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Package verified V0.1.4
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$RUNNER_TEMP/jade-v014-verified"
+          mkdir -p "$OUT"
+
+          cp \
+            android/app/build/outputs/apk/debug/app-debug.apk \
+            "$OUT/Jade-Genesis-0.1.4.apk"
+
+          cp \
+            "$RUNNER_TEMP/v014-apk.sha256" \
+            "$OUT/Jade-Genesis-0.1.4.apk.sha256.txt"
+
+          cp \
+            "$RUNNER_TEMP/v014-signature.txt" \
+            "$OUT/Jade-Genesis-0.1.4.signature.txt"
+
+      - name: Upload verified V0.1.4 APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jade-Genesis-0.1.4-verified
+          path: ${{ runner.temp }}/jade-v014-verified/
+          if-no-files-found: error
+          retention-days: 30

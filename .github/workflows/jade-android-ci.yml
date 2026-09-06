@@ -1,4 +1,4 @@
-name: Jade Android CI Repo-First + Eval
+name: Jade Android CI Repo-First + Eval + Release
 
 on:
   push:
@@ -15,19 +15,32 @@ on:
       - "android/**"
       - ".github/workflows/jade-android-ci.yml"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "ci"
+        type: choice
+        options:
+          - ci
+          - stable-release
+      release_version:
+        description: "Expected versionName for stable-release (example: 0.1.5)"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: jade-android-ci-${{ github.ref }}
+  group: jade-android-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Test, evaluate and build repository sources
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repository
@@ -115,6 +128,98 @@ jobs:
           echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
           echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
 
+      - name: Guard stable signed release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        shell: bash
+        env:
+          RELEASE_VERSION_INPUT: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "ERROR: stable-signed releases are allowed only from main."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_VERSION_INPUT" ]; then
+            echo "ERROR: release_version is required for stable-release mode."
+            exit 1
+          fi
+
+          if [ "$RELEASE_VERSION_INPUT" != "$VERSION_NAME" ]; then
+            echo "ERROR: release_version does not match repository versionName."
+            exit 1
+          fi
+
+          echo "Stable release gate verified for Jade Genesis $VERSION_NAME."
+
+      - name: Restore stable Jade signing key
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        shell: bash
+        env:
+          JADE_SIGNING_BUNDLE_B64: ${{ secrets.JADE_SIGNING_BUNDLE_B64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${JADE_SIGNING_BUNDLE_B64:-}" ]; then
+            echo "ERROR: GitHub secret JADE_SIGNING_BUNDLE_B64 is missing."
+            exit 1
+          fi
+
+          SIGN_DIR="$RUNNER_TEMP/jade-signing"
+          mkdir -p "$SIGN_DIR"
+
+          printf '%s' "$JADE_SIGNING_BUNDLE_B64" | base64 -d > "$SIGN_DIR/signing.tar.gz"
+          tar -xzf "$SIGN_DIR/signing.tar.gz" -C "$SIGN_DIR"
+
+          test -f "$SIGN_DIR/jade-genesis-dev.jks"
+          test -f "$SIGN_DIR/password.txt"
+          test -f "$SIGN_DIR/alias.txt"
+
+          PASSWORD="$(cat "$SIGN_DIR/password.txt")"
+          ALIAS="$(cat "$SIGN_DIR/alias.txt")"
+
+          test -n "$PASSWORD"
+          test -n "$ALIAS"
+
+          chmod 600 "$SIGN_DIR/jade-genesis-dev.jks"
+          echo "::add-mask::$PASSWORD"
+
+          echo "JADE_KEYSTORE_PATH=$SIGN_DIR/jade-genesis-dev.jks" >> "$GITHUB_ENV"
+          echo "JADE_KEYSTORE_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+          echo "JADE_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+
+      - name: Verify stable signing bundle identity
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          EXPECTED_SHA256="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+          KEYTOOL_OUT="$RUNNER_TEMP/jade-keytool.txt"
+
+          keytool \
+            -list \
+            -v \
+            -keystore "$JADE_KEYSTORE_PATH" \
+            -storepass "$JADE_KEYSTORE_PASSWORD" \
+            -alias "$JADE_KEY_ALIAS" \
+            > "$KEYTOOL_OUT"
+
+          ACTUAL_SHA256="$(
+            sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' "$KEYTOOL_OUT" \
+              | head -n 1 \
+              | tr '[:upper:]' '[:lower:]' \
+              | tr -d ':[:space:]'
+          )"
+
+          if [ -z "$ACTUAL_SHA256" ] || [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "ERROR: signing bundle does not contain the expected stable Jade certificate."
+            exit 1
+          fi
+
+          echo "Stable Jade signing bundle fingerprint verified."
+
       - name: Record tracked-source state before build
         shell: bash
         run: |
@@ -142,7 +247,11 @@ jobs:
           set -euo pipefail
 
           EVAL_REPORT="$(
-            find android               -type f               -path '*/build/reports/jade-eval/research-query-planner-v1.txt'               -print               -quit
+            find android \
+              -type f \
+              -path '*/build/reports/jade-eval/research-query-planner-v1.txt' \
+              -print \
+              -quit
           )"
 
           if [ -z "$EVAL_REPORT" ] || [ ! -f "$EVAL_REPORT" ]; then
@@ -156,24 +265,59 @@ jobs:
           cat "$RUNNER_TEMP/jade-eval-report.txt"
 
           EVAL_SCORE="$(
-            sed -n 's/^overall_score=//p' "$RUNNER_TEMP/jade-eval-report.txt"               | head -n 1
+            sed -n 's/^overall_score=//p' "$RUNNER_TEMP/jade-eval-report.txt" \
+              | head -n 1
           )"
 
           BASELINE_SCORE="$(
-            sed -n 's/^baseline_score=//p' "$RUNNER_TEMP/jade-eval-report.txt"               | head -n 1
+            sed -n 's/^baseline_score=//p' "$RUNNER_TEMP/jade-eval-report.txt" \
+              | head -n 1
           )"
 
           TARGET_SCORE="$(
-            sed -n 's/^target_score=//p' "$RUNNER_TEMP/jade-eval-report.txt"               | head -n 1
+            sed -n 's/^target_score=//p' "$RUNNER_TEMP/jade-eval-report.txt" \
+              | head -n 1
+          )"
+
+          PROTECTED_FAILURES="$(
+            sed -n 's/^protected_failures=//p' "$RUNNER_TEMP/jade-eval-report.txt" \
+              | head -n 1
+          )"
+
+          PASSED_CASES="$(
+            sed -n 's/^passed=//p' "$RUNNER_TEMP/jade-eval-report.txt" \
+              | head -n 1
           )"
 
           test -n "$EVAL_SCORE"
           test -n "$BASELINE_SCORE"
           test -n "$TARGET_SCORE"
+          test -n "$PROTECTED_FAILURES"
+          test -n "$PASSED_CASES"
 
           echo "EVAL_SCORE=$EVAL_SCORE" >> "$GITHUB_ENV"
           echo "EVAL_BASELINE_SCORE=$BASELINE_SCORE" >> "$GITHUB_ENV"
           echo "EVAL_TARGET_SCORE=$TARGET_SCORE" >> "$GITHUB_ENV"
+          echo "EVAL_PROTECTED_FAILURES=$PROTECTED_FAILURES" >> "$GITHUB_ENV"
+          echo "EVAL_PASSED_CASES=$PASSED_CASES" >> "$GITHUB_ENV"
+
+      - name: Enforce release evaluation gate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "$EVAL_SCORE" != "$EVAL_TARGET_SCORE" ]; then
+            echo "ERROR: stable release requires evaluation score to equal target score."
+            exit 1
+          fi
+
+          if [ "$EVAL_PROTECTED_FAILURES" != "0" ]; then
+            echo "ERROR: stable release has protected evaluation failures."
+            exit 1
+          fi
+
+          echo "Stable release evaluation gate passed: $EVAL_SCORE / 100, protected failures: 0."
 
       - name: Prove build did not rewrite tracked sources
         shell: bash
@@ -193,13 +337,16 @@ jobs:
 
           echo "Build left tracked repository sources unchanged."
 
-      - name: Verify APK matches repository version
+      - name: Verify APK version and signing mode
         shell: bash
+        env:
+          JADE_WORKFLOW_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
 
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
           REPORT="$RUNNER_TEMP/jade-ci-report.txt"
+          STABLE_SHA256="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
 
           test -f "$APK"
 
@@ -227,34 +374,88 @@ jobs:
               | tr -d ':[:space:]'
           )"
 
-          STABLE_SHA256="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
-
           if [ -z "$SIGNER_SHA256" ]; then
-            echo "ERROR: unable to read CI APK signer."
+            echo "ERROR: unable to read APK signer."
             exit 1
           fi
 
-          if [ "$SIGNER_SHA256" = "$STABLE_SHA256" ]; then
-            echo "ERROR: CI build unexpectedly used the stable Jade signing identity."
-            exit 1
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$JADE_WORKFLOW_MODE" = "stable-release" ]; then
+            if [ "$SIGNER_SHA256" != "$STABLE_SHA256" ]; then
+              echo "ERROR: signed release APK does not use the stable Jade signing identity."
+              exit 1
+            fi
+            STABLE_USED=true
+            INSTALLABLE_OVER_STABLE=true
+          else
+            if [ "$SIGNER_SHA256" = "$STABLE_SHA256" ]; then
+              echo "ERROR: regular CI unexpectedly used the stable Jade signing identity."
+              exit 1
+            fi
+            STABLE_USED=false
+            INSTALLABLE_OVER_STABLE=false
           fi
 
           {
             echo "Jade Genesis repo-first CI"
             echo "commit=$(cat "$RUNNER_TEMP/source-commit.txt")"
             echo "ref=$GITHUB_REF"
+            echo "event=$GITHUB_EVENT_NAME"
             echo "versionCode=$VERSION_CODE"
             echo "versionName=$VERSION_NAME"
             echo "package=com.jadegenesis.mobile"
             echo "apk_sha256=$APK_SHA256"
-            echo "ci_signer_sha256=$SIGNER_SHA256"
-            echo "stable_signing_key_used=false"
+            echo "signer_sha256=$SIGNER_SHA256"
+            echo "stable_signing_key_used=$STABLE_USED"
             echo "repository_sources_unchanged=true"
-            echo "installable_over_stable_jade=false"
+            echo "installable_over_stable_jade=$INSTALLABLE_OVER_STABLE"
             echo "eval_score=$EVAL_SCORE"
             echo "eval_baseline_score=$EVAL_BASELINE_SCORE"
             echo "eval_target_score=$EVAL_TARGET_SCORE"
+            echo "eval_protected_failures=$EVAL_PROTECTED_FAILURES"
+            echo "eval_passed_cases=$EVAL_PASSED_CASES"
           } | tee "$REPORT"
+
+          echo "APK_SHA256=$APK_SHA256" >> "$GITHUB_ENV"
+          echo "APK_SIGNER_SHA256=$SIGNER_SHA256" >> "$GITHUB_ENV"
+          echo "STABLE_SIGNING_KEY_USED=$STABLE_USED" >> "$GITHUB_ENV"
+          echo "INSTALLABLE_OVER_STABLE_JADE=$INSTALLABLE_OVER_STABLE" >> "$GITHUB_ENV"
+
+      - name: Package stable-signed Jade APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$RUNNER_TEMP/jade-stable-release"
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+
+          mkdir -p "$OUT"
+
+          cp "$APK" "$OUT/Jade-Genesis-$VERSION_NAME.apk"
+          cp "$RUNNER_TEMP/apk-signature.txt" "$OUT/Jade-Genesis-$VERSION_NAME.signature.txt"
+          cp "$RUNNER_TEMP/jade-eval-report.txt" "$OUT/Jade-Genesis-$VERSION_NAME.eval.txt"
+          cp "$RUNNER_TEMP/jade-ci-report.txt" "$OUT/Jade-Genesis-$VERSION_NAME.ci.txt"
+
+          printf '%s  %s\n' \
+            "$APK_SHA256" \
+            "Jade-Genesis-$VERSION_NAME.apk" \
+            > "$OUT/Jade-Genesis-$VERSION_NAME.apk.sha256.txt"
+
+          {
+            echo "Jade Genesis stable signed release"
+            echo "commit=$GITHUB_SHA"
+            echo "versionCode=$VERSION_CODE"
+            echo "versionName=$VERSION_NAME"
+            echo "package=com.jadegenesis.mobile"
+            echo "apk_sha256=$APK_SHA256"
+            echo "signer_sha256=$APK_SIGNER_SHA256"
+            echo "research_eval=$EVAL_SCORE"
+            echo "research_target=$EVAL_TARGET_SCORE"
+            echo "protected_failures=$EVAL_PROTECTED_FAILURES"
+            echo "passed_cases=$EVAL_PASSED_CASES"
+            echo "repository_sources_unchanged=true"
+            echo "installable_over_stable_jade=true"
+          } > "$OUT/VERIFIED.txt"
 
       - name: Upload CI and evaluation reports
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -268,21 +469,42 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Upload stable-signed Jade APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'stable-release' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Jade-Genesis-${{ steps.version.outputs.name }}-stable-signed
+          path: ${{ runner.temp }}/jade-stable-release/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Final summary
         shell: bash
         run: |
           set -euo pipefail
+
+          if [ "$STABLE_SIGNING_KEY_USED" = "true" ]; then
+            MODE="stable signed release"
+            INSTALL_NOTE="yes — same stable Jade signing identity"
+          else
+            MODE="regular CI"
+            INSTALL_NOTE="no — debug CI signer"
+          fi
+
           {
             echo "### Jade Genesis — Repo-First CI"
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Version: \`$VERSION_NAME\`"
             echo "- VersionCode: \`$VERSION_CODE\`"
+            echo "- Mode: **$MODE**"
             echo "- Research eval: **$EVAL_SCORE / 100**"
+            echo "- Protected failures: **$EVAL_PROTECTED_FAILURES**"
+            echo "- Passed cases: **$EVAL_PASSED_CASES**"
             echo "- Verified V0.1.4 baseline: **$EVAL_BASELINE_SCORE / 100**"
             echo "- Target: **$EVAL_TARGET_SCORE / 100**"
             echo "- Kotlin/source source of truth: **repository**"
             echo "- Source generation/patching by CI: **none**"
-            echo "- Stable signing secret used: **no**"
-            echo "- APK produced only for internal CI verification: **do not install it over stable Jade**"
+            echo "- Stable signing secret used: **$STABLE_SIGNING_KEY_USED**"
+            echo "- Installable over stable Jade: **$INSTALL_NOTE**"
           } >> "$GITHUB_STEP_SUMMARY"

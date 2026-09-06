@@ -60,6 +60,7 @@ data class JadeUiState(
     val runtimes: List<RuntimeNodeSnapshot> = emptyList(),
     val toolCandidates: List<ToolCandidateSnapshot> = emptyList(),
     val screenBusy: Boolean = false,
+    val screenArmed: Boolean = false,
     val screenMessage: String = "",
     val researchBusy: Boolean = false,
     val researchMessage: String = "",
@@ -272,6 +273,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 screenBusy = true,
+                screenArmed = false,
                 screenMessage = "Capture Pixel autorisée. Jade attend l'image puis cherche un nœud vision…",
                 researchMessage = "",
                 error = null
@@ -298,9 +300,60 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun onPhoneScreenArmed() {
+        _state.value = _state.value.copy(
+            screenBusy = false,
+            screenArmed = true,
+            screenMessage =
+                "Observation armée. Va dans l'application voulue puis utilise la notification Jade → Capturer maintenant. " +
+                    "Après la capture, tu pourras choisir une zone et préciser ce que Jade doit regarder.",
+            researchMessage = "",
+            error = null
+        )
+    }
+
+    fun onPhoneScreenArmUnavailable() {
+        _state.value = _state.value.copy(
+            screenBusy = false,
+            screenArmed = false,
+            screenMessage = "Le mode observation armée nécessite l'autorisation de notification Android.",
+            error = null
+        )
+    }
+
+    fun analyzePreparedVisual() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                screenBusy = true,
+                screenMessage = "Jade analyse la dernière image/zone préparée…",
+                researchMessage = "",
+                error = null
+            )
+            runCatching { core.analyzeLatestPhoneScreen(0L) }
+                .onSuccess { answer ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        screenArmed = false,
+                        screenMessage = answer,
+                        selfModel = core.selfModel(),
+                        diagnostics = core.recentDiagnostics(),
+                        error = null
+                    )
+                }
+                .onFailure { e ->
+                    _state.value = _state.value.copy(
+                        screenBusy = false,
+                        diagnostics = core.recentDiagnostics(),
+                        error = e.message ?: e.toString()
+                    )
+                }
+        }
+    }
+
     fun onPhoneScreenCaptureDenied() {
         _state.value = _state.value.copy(
             screenBusy = false,
+            screenArmed = false,
             screenMessage = "Capture d'écran annulée. Aucune image n'a été transmise à Jade.",
             error = null
         )

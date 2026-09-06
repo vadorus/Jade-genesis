@@ -8,6 +8,7 @@ import org.json.JSONObject
 data class VisualObservationRecord(
     val imageSha256: String,
     val source: String,
+    val focusInstruction: String,
     val visionText: String,
     val observedAt: Long,
     val researchQuery: String = "",
@@ -31,6 +32,7 @@ class VisualLearningStore(context: Context) {
     fun recordVision(
         imageSha256: String,
         source: String,
+        focusInstruction: String,
         visionText: String
     ): VisualObservationRecord {
         val current = records().toMutableList()
@@ -38,12 +40,14 @@ class VisualLearningStore(context: Context) {
         val record = if (existingIndex >= 0) {
             current[existingIndex].copy(
                 source = source,
+                focusInstruction = focusInstruction.trim().take(1_200),
                 visionText = visionText.trim()
             )
         } else {
             VisualObservationRecord(
                 imageSha256 = imageSha256,
                 source = source,
+                focusInstruction = focusInstruction.trim().take(1_200),
                 visionText = visionText.trim(),
                 observedAt = System.currentTimeMillis()
             )
@@ -91,16 +95,19 @@ class VisualLearningStore(context: Context) {
     fun candidates(limit: Int = 6): List<LearningCandidate> =
         records()
             .map { record ->
+                val focusEvidence = record.focusInstruction.takeIf { it.isNotBlank() }
+                    ?.let { " • cible: ${it.take(80)}" }
+                    .orEmpty()
                 if (record.researchedAt > 0L) {
                     LearningCandidate(
                         id = "visual-${record.imageSha256.take(16)}-researched",
                         title = "Apprentissage visuel à consolider",
                         description =
-                            "Une observation visuelle a été confrontée à des sources publiques. " +
+                            "Une observation visuelle ciblée a été confrontée à des sources publiques. " +
                                 "Elle reste candidate tant que Jade ne dispose pas d'assez de confirmations indépendantes.",
                         evidence =
-                            "${record.researchEvidenceCount} élément(s) de preuve • " +
-                                "image ${record.imageSha256.take(12)}… • ${record.source}",
+                            "${record.researchEvidenceCount} source(s) • " +
+                                "image ${record.imageSha256.take(12)}… • ${record.source}$focusEvidence",
                         confidence = record.researchConfidence,
                         createdAt = record.researchedAt
                     )
@@ -109,9 +116,9 @@ class VisualLearningStore(context: Context) {
                         id = "visual-${record.imageSha256.take(16)}-pending",
                         title = "Observation visuelle à vérifier",
                         description =
-                            "Jade a observé l'écran mais cette observation n'a pas encore été recoupée avec des données externes.",
+                            "Jade a observé une image ou une zone ciblée mais cette observation n'a pas encore été recoupée avec des données externes.",
                         evidence =
-                            "image ${record.imageSha256.take(12)}… • ${record.source}",
+                            "image ${record.imageSha256.take(12)}… • ${record.source}$focusEvidence",
                         confidence = 0.55,
                         createdAt = record.observedAt
                     )
@@ -134,6 +141,7 @@ class VisualLearningStore(context: Context) {
                         VisualObservationRecord(
                             imageSha256 = sha,
                             source = item.optString("source", "unknown"),
+                            focusInstruction = item.optString("focus_instruction", ""),
                             visionText = text,
                             observedAt = item.optLong("observed_at", 0L),
                             researchQuery = item.optString("research_query"),
@@ -161,6 +169,7 @@ class VisualLearningStore(context: Context) {
                     JSONObject().apply {
                         put("image_sha256", record.imageSha256)
                         put("source", record.source)
+                        put("focus_instruction", record.focusInstruction)
                         put("vision_text", record.visionText)
                         put("observed_at", record.observedAt)
                         put("research_query", record.researchQuery)

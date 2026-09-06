@@ -101,7 +101,7 @@ class JadeCore(context: Context) {
         diagnostics.log(
             DiagnosticLevel.INFO,
             "jade_initialize",
-            "Jade Genesis 0.1.3 initialisée.",
+            "Jade Genesis 0.1.4 initialisée.",
             mapOf("jade_id" to identity?.jadeId)
         )
         return selfModel()
@@ -305,8 +305,13 @@ class JadeCore(context: Context) {
         return candidate
     }
 
-    suspend fun analyzeLatestPhoneScreen(captureRequestedAt: Long): String {
-        val frame = screenObserver.awaitAndConsumeFrameAfter(captureRequestedAt)
+    suspend fun analyzeLatestPhoneScreen(captureRequestedAt: Long = 0L): String {
+        val frame = if (captureRequestedAt > 0L) {
+            screenObserver.awaitFrameAfter(captureRequestedAt)
+        } else {
+            screenObserver.latestFrame()
+                ?: error("Aucune image Pixel/partagée récente n'est prête à analyser.")
+        }
         val device = profiler.capture()
         val nodes = nodeManager.nodes(device = device, refreshRemote = true)
         val target = nodes
@@ -321,23 +326,35 @@ class JadeCore(context: Context) {
                     .thenBy { it.cpuCores }
             )
             ?: error(
-                "Aucun nœud en ligne ne dispose encore d'un modèle vision compatible. " +
-                    "Le Screen Observer a capturé l'écran, mais il faut un PC/VPS avec vision_analyze pour l'interpréter."
+                "Aucun nœud en ligne ne dispose d'un modèle vision compatible. " +
+                    "L'image reste enregistrée localement pour une analyse ultérieure."
             )
 
-        val payload = JSONObject().apply {
-            put(
-                "prompt",
-                "IMPORTANT : réponds exclusivement en français. Analyse uniquement cette image précise de l'écran Pixel. " +
+        val focus = frame.focusInstruction.trim().take(1_200)
+        val prompt = buildString {
+            append(
+                "IMPORTANT : réponds exclusivement en français. Analyse uniquement cette image précise. " +
                     "Décris seulement les éléments réellement visibles et lisibles. N'infère aucune fonction, donnée cachée, " +
-                    "intention ou signification à partir d'une icône, d'une position ou d'un élément ambigu. " +
-                    "Si tu n'es pas sûr, écris explicitement 'incertain'. Structure la réponse en trois sections courtes : " +
-                    "Visible, Incertain, Conseil. Pour chaque observation importante, indique une confiance élevée, moyenne ou faible. " +
-                    "Ne décris pas les capacités théoriques de Jade et n'invente aucun texte absent de l'image."
+                    "intention ou signification à partir d'une icône ou d'un élément ambigu. "
             )
+            if (focus.isNotBlank()) {
+                append(
+                    "PRIORITÉ UTILISATEUR : $focus. Concentre d'abord ton analyse sur cette demande et sur la zone déjà cadrée. " +
+                        "N'élargis à d'autres éléments que s'ils sont indispensables pour répondre. "
+                )
+            }
+            append(
+                "Si tu n'es pas sûr, écris explicitement 'incertain'. Structure la réponse en trois sections courtes : " +
+                    "Visible, Incertain, Conseil. Pour chaque observation importante, indique une confiance élevée, moyenne ou faible. " +
+                    "N'invente aucun texte absent de l'image."
+            )
+        }
+
+        val payload = JSONObject().apply {
+            put("prompt", prompt)
             put("image_b64", Base64.encodeToString(frame.bytes, Base64.NO_WRAP))
             put("image_sha256", frame.sha256)
-            put("source", "pixel_screen")
+            put("source", frame.source)
         }.toString()
 
         val response = nodeManager.executeTask(
@@ -358,14 +375,18 @@ class JadeCore(context: Context) {
         val wasKnown = visualLearning.hasObservation(frame.sha256)
         visualLearning.recordVision(
             imageSha256 = frame.sha256,
-            source = "pixel_screen",
+            source = frame.source,
+            focusInstruction = focus,
             visionText = answer
         )
         if (!wasKnown) {
             memory.remember(
                 type = MemoryType.OBSERVATION,
-                content = answer,
-                source = "VISION_PIXEL:${frame.sha256.take(16)}",
+                content = buildString {
+                    if (focus.isNotBlank()) appendLine("Cible utilisateur : $focus")
+                    append(answer)
+                },
+                source = "VISION_TARGETED:${frame.source}:${frame.sha256.take(16)}",
                 confidence = 0.68,
                 originNode = response.nodeId
             )
@@ -373,11 +394,13 @@ class JadeCore(context: Context) {
 
         diagnostics.log(
             DiagnosticLevel.INFO,
-            "screen_pixel_analyzed",
-            "Capture Pixel analysée par un nœud vision.",
+            "screen_targeted_analyzed",
+            "Image ciblée analysée par un nœud vision.",
             mapOf(
                 "node_id" to response.nodeId,
                 "image_sha256" to frame.sha256,
+                "image_source" to frame.source,
+                "focus_defined" to focus.isNotBlank(),
                 "duration_ms" to response.durationMs
             )
         )
@@ -438,6 +461,7 @@ class JadeCore(context: Context) {
         visualLearning.recordVision(
             imageSha256 = pcImageSha,
             source = "pc_screen",
+            focusInstruction = "",
             visionText = answer
         )
         if (!wasKnown) {
@@ -463,94 +487,104 @@ class JadeCore(context: Context) {
     }
 
     suspend fun deepResearchLastVisualObservation(): String {
-    val observation = visualLearning.last()
-        ?: error("Aucune observation visuelle récente à approfondir.")
+        val observation = visualLearning.last()
+            ?: error("Aucune observation visuelle récente à approfondir.")
 
-    val report = researchEngine.investigate(observation.visionText)
-    val synthesis = if (report.evidence.isNotEmpty()) {
-        val self = selfModel()
-        val prompt = buildString {
-            appendLine("Tu es le module de synthèse de Jade Genesis.")
-            appendLine("Réponds exclusivement en français.")
-            appendLine("Ne prétends jamais qu'une information est confirmée si les sources ne la confirment pas.")
-            appendLine("Sépare : Faits confirmés, Probable, Non vérifié, Conclusion.")
-            appendLine("Observation visuelle locale :")
-            appendLine(observation.visionText.take(6_000))
-            appendLine()
-            appendLine("Données publiques récupérées :")
-            appendLine(report.renderForModel())
-            appendLine()
-            appendLine("Cite les numéros [1], [2]... des sources quand tu t'appuies dessus.")
+        val report = researchEngine.investigate(
+            observation = observation.visionText,
+            focusInstruction = observation.focusInstruction
+        )
+        val synthesis = if (report.evidence.isNotEmpty()) {
+            val self = selfModel()
+            val prompt = buildString {
+                appendLine("Tu es le module de synthèse de Jade Genesis.")
+                appendLine("Réponds exclusivement en français.")
+                appendLine("Ne prétends jamais qu'une information est confirmée si les sources ne la confirment pas.")
+                appendLine("Ne recopie pas la liste des sources : elle sera affichée séparément.")
+                appendLine("Sépare : Faits confirmés, Probable, Non vérifié, Conclusion.")
+                if (observation.focusInstruction.isNotBlank()) {
+                    appendLine("Question/cible de l'utilisateur : ${observation.focusInstruction.take(1_200)}")
+                }
+                appendLine("Observation visuelle locale :")
+                appendLine(observation.visionText.take(6_000))
+                appendLine()
+                appendLine("Données publiques récupérées :")
+                appendLine(report.renderForModel())
+                appendLine()
+                appendLine("Cite [1], [2]... seulement quand la source soutient réellement le fait.")
+            }
+            val result = brainRouter.think(
+                BrainContext(
+                    userInput = prompt,
+                    selfModel = self,
+                    memories = memory.latest(8),
+                    tools = tools.describe(),
+                    operation = "visual_research_synthesis"
+                )
+            )
+            result.text.trim().ifBlank {
+                "Des sources ont été trouvées mais la synthèse générative n'a pas produit de texte exploitable."
+            }
+        } else {
+            "Je n'ai pas trouvé assez de données publiques pour confirmer cette observation avec les fournisseurs disponibles."
         }
-        val result = brainRouter.think(
-            BrainContext(
-                userInput = prompt,
-                selfModel = self,
-                memories = memory.latest(8),
-                tools = tools.describe(),
-                operation = "visual_research_synthesis"
+
+        if (report.evidence.isNotEmpty()) {
+            memory.remember(
+                type = MemoryType.HYPOTHESIS,
+                content = synthesis,
+                source = "RESEARCH_CANDIDATE_V2:${report.providerSummary()}",
+                confidence = report.confidence,
+                originNode = profiler.nodeId()
+            )
+        }
+
+        visualLearning.recordResearch(
+            imageSha256 = observation.imageSha256,
+            query = report.query,
+            researchText = synthesis,
+            evidenceCount = report.evidence.size,
+            confidence = report.confidence
+        )
+
+        diagnostics.log(
+            if (report.evidence.isNotEmpty()) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
+            "visual_research_v2_completed",
+            if (report.evidence.isNotEmpty()) {
+                "Recherche ciblée terminée ; résultat conservé comme hypothèse candidate."
+            } else {
+                "Recherche ciblée terminée sans corroboration suffisante."
+            },
+            mapOf(
+                "image_sha256" to observation.imageSha256,
+                "source" to observation.source,
+                "focus_defined" to observation.focusInstruction.isNotBlank(),
+                "research_query" to report.query.take(240),
+                "evidence_count" to report.evidence.size,
+                "provider_count" to report.providerCount,
+                "providers" to report.providerSummary(),
+                "confidence" to report.confidence
             )
         )
-        result.text.trim().ifBlank { report.renderForUser() }
-    } else {
-        buildString {
-            appendLine("Je n'ai pas trouvé assez de données publiques pour confirmer cette observation.")
-            appendLine(report.renderForUser())
+
+        return buildString {
+            appendLine("ANALYSE APPROFONDIE")
+            if (observation.focusInstruction.isNotBlank()) {
+                appendLine("Cible : ${observation.focusInstruction}")
+                appendLine()
+            }
+            appendLine(synthesis)
+            appendLine()
+            appendLine("SOURCES CONSULTÉES")
+            appendLine(report.renderSourcesForUser())
+            appendLine()
+            appendLine("Statut mémoire : HYPOTHÈSE candidate — pas encore connaissance stable.")
+            append(
+                "Confidentialité : l'image n'a pas été envoyée aux sources Internet publiques ; " +
+                    "seules des requêtes texte ciblées et filtrées ont été utilisées."
+            )
         }.trim()
     }
-
-    // V0.1.3 ne promeut jamais automatiquement une recherche web en connaissance stable.
-    // Elle reste une hypothèse candidate jusqu'à une validation/consolidation ultérieure.
-    if (report.evidence.isNotEmpty()) {
-        memory.remember(
-            type = MemoryType.HYPOTHESIS,
-            content = synthesis,
-            source = "RESEARCH_CANDIDATE_V1:${report.providerSummary()}",
-            confidence = report.confidence,
-            originNode = profiler.nodeId()
-        )
-    }
-
-    visualLearning.recordResearch(
-        imageSha256 = observation.imageSha256,
-        query = report.query,
-        researchText = synthesis,
-        evidenceCount = report.evidence.size,
-        confidence = report.confidence
-    )
-
-    diagnostics.log(
-        if (report.evidence.isNotEmpty()) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
-        "visual_research_completed",
-        if (report.evidence.isNotEmpty()) {
-            "Observation visuelle recoupée ; résultat conservé comme hypothèse candidate."
-        } else {
-            "Observation visuelle recherchée mais non corroborée."
-        },
-        mapOf(
-            "image_sha256" to observation.imageSha256,
-            "source" to observation.source,
-            "research_query" to report.query.take(180),
-            "evidence_count" to report.evidence.size,
-            "provider_count" to report.providerCount,
-            "providers" to report.providerSummary(),
-            "confidence" to report.confidence
-        )
-    )
-
-    return buildString {
-        appendLine("ANALYSE APPROFONDIE")
-        appendLine(synthesis)
-        appendLine()
-        appendLine(report.renderForUser())
-        appendLine()
-        appendLine("Statut mémoire : HYPOTHÈSE candidate — pas encore connaissance stable.")
-        appendLine(
-            "Confidentialité : l'image n'a pas été envoyée aux sources Internet ; " +
-                "seule une requête texte raccourcie et filtrée a été utilisée."
-        )
-    }.trim()
-}
 
     fun isAdminConfigured(): Boolean = adminGate.isConfigured()
 

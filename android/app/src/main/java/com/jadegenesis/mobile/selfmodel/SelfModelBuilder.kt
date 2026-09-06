@@ -114,7 +114,7 @@ class SelfModelBuilder {
             Capability(
                 "cognitive_core",
                 true,
-                "CognitiveCore 0.1.3",
+                "CognitiveCore 0.1.4",
                 "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
             ),
             Capability(
@@ -130,20 +130,20 @@ class SelfModelBuilder {
             Capability(
     "learning_candidates",
     true,
-    "LearningEngine + VisualLearning v1",
+    "LearningEngine + VisualLearning v2 targeted",
     "Les échecs, latences et observations visuelles recoupées produisent des candidats d'apprentissage mesurables ; ils ne sont pas appliqués automatiquement."
 ),
 Capability(
     "research_engine",
     true,
-    "ResearchEngine v1 public-data",
-    "Après une observation visuelle, Jade peut rechercher des données publiques via des fournisseurs interchangeables. V1 utilise Wikipedia, Wikidata et GitHub pour les sujets techniques."
+    "ResearchEngine v2 targeted-planner",
+    "Research v2 extrait 1 à 3 requêtes ciblées depuis la consigne utilisateur et les éléments visuels à fort signal, puis recoupe Wikipedia, Wikidata, DuckDuckGo et GitHub pour les sujets techniques."
 ),
 Capability(
     "visual_learning",
     true,
-    "VisualLearningStore v1",
-    "Jade conserve la provenance d'une observation, son empreinte d'image, la recherche associée et le niveau de corroboration avant consolidation."
+    "VisualLearningStore v2",
+    "Jade conserve la provenance, l'empreinte, la consigne de ciblage, la recherche associée et le niveau de corroboration avant consolidation."
 ),
             Capability(
                 "task_router",
@@ -207,7 +207,7 @@ Capability(
             Capability(
                 "diagnostics",
                 true,
-                "DiagnosticLogger 0.1.3",
+                "DiagnosticLogger 0.1.4",
                 "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
             ),
             Capability(
@@ -225,8 +225,8 @@ Capability(
             Capability(
                 "screen_observer",
                 true,
-                if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_1_grounded" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
-                "Le Pixel attend la disparition de l'overlay MediaProjection avant capture et demande une analyse factuelle en français. Le runtime PC 0.1.1 reste compatible."
+                if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_2_targeted" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
+                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime PC 0.1.1 reste compatible."
             ),
             Capability(
                 "vision_analysis",
@@ -263,7 +263,7 @@ Capability(
         )
 
         val limits = mutableListOf(
-            "Le Cognitive Core 0.1.1 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
+            "Le Cognitive Core 0.1.4 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",

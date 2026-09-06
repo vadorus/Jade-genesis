@@ -180,10 +180,14 @@ class NodeManager(
             "memory_consolidation",
             "task_queue_v1",
             "research_engine_v1",
-            "visual_learning_v1"
+            "visual_learning_v1",
+            "research_engine_v2",
+            "visual_learning_v2",
+            "screen_targeting_v1",
+            "shared_image_input_v1"
         ),
         lastSeenAt = System.currentTimeMillis(),
-        runtimeVersion = "0.1.3",
+        runtimeVersion = "0.1.4",
         runtimeChannel = "android"
     )
 

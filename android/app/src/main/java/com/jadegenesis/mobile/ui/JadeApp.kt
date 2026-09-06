@@ -1,7 +1,9 @@
 package com.jadegenesis.mobile.ui
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
@@ -53,6 +55,7 @@ import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeRouteStatus
 import com.jadegenesis.mobile.model.NodeStatus
+import com.jadegenesis.mobile.screen.FocusCropActivity
 import com.jadegenesis.mobile.screen.ScreenCaptureService
 
 private const val LOCAL_NETWORK_PERMISSION =
@@ -91,20 +94,41 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
     val projectionManager = remember(context) {
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
     }
+    var captureMode by remember { mutableStateOf(ScreenCaptureService.MODE_IMMEDIATE) }
+    var pendingArmedPermission by remember { mutableStateOf(false) }
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val data = result.data
         if (result.resultCode == Activity.RESULT_OK && data != null) {
             val requestedAt = System.currentTimeMillis()
+            val requestedMode = captureMode
             ScreenCaptureService.startCapture(
                 context = context,
                 resultCode = result.resultCode,
-                resultData = data
+                resultData = data,
+                mode = requestedMode
             )
-            vm.onPhoneScreenCaptureStarted(requestedAt)
+            if (requestedMode == ScreenCaptureService.MODE_ARMED) {
+                vm.onPhoneScreenArmed()
+            } else {
+                vm.onPhoneScreenCaptureStarted(requestedAt)
+            }
+            captureMode = ScreenCaptureService.MODE_IMMEDIATE
         } else {
             vm.onPhoneScreenCaptureDenied()
+        }
+    }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val shouldArm = pendingArmedPermission
+        pendingArmedPermission = false
+        if (granted && shouldArm) {
+            captureMode = ScreenCaptureService.MODE_ARMED
+            screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+        } else if (shouldArm) {
+            vm.onPhoneScreenArmUnavailable()
         }
     }
 
@@ -143,9 +167,34 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
                     JadeTab.JADE -> JadeHome(
                         state = state,
                         vm = vm,
-                        requestPhoneScreenCapture = {
+                        requestImmediateCapture = {
+                            captureMode = ScreenCaptureService.MODE_IMMEDIATE
                             screenCaptureLauncher.launch(
                                 projectionManager.createScreenCaptureIntent()
+                            )
+                        },
+                        requestArmedCapture = {
+                            val needsNotificationPermission =
+                                Build.VERSION.SDK_INT >= 33 &&
+                                    ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    ) != PackageManager.PERMISSION_GRANTED
+                            if (needsNotificationPermission) {
+                                pendingArmedPermission = true
+                                notificationPermissionLauncher.launch(
+                                    Manifest.permission.POST_NOTIFICATIONS
+                                )
+                            } else {
+                                captureMode = ScreenCaptureService.MODE_ARMED
+                                screenCaptureLauncher.launch(
+                                    projectionManager.createScreenCaptureIntent()
+                                )
+                            }
+                        },
+                        openFocusCrop = {
+                            context.startActivity(
+                                Intent(context, FocusCropActivity::class.java)
                             )
                         },
                         modifier = Modifier.padding(innerPadding)
@@ -189,7 +238,9 @@ fun JadeApp(vm: JadeViewModel = viewModel()) {
 private fun JadeHome(
     state: JadeUiState,
     vm: JadeViewModel,
-    requestPhoneScreenCapture: () -> Unit,
+    requestImmediateCapture: () -> Unit,
+    requestArmedCapture: () -> Unit,
+    openFocusCrop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var input by remember { mutableStateOf("") }
@@ -205,7 +256,7 @@ private fun JadeHome(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Cognitive Core ${self?.identity?.version ?: "0.1.3"}",
+            "Cognitive Core ${self?.identity?.version ?: "0.1.4"}",
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))
@@ -221,54 +272,81 @@ private fun JadeHome(
         }
 
         Spacer(Modifier.height(10.dp))
-        InfoCard("Perception + Research v1") {
-    Text(
-        "Observation à la demande uniquement : Jade ne capture aucun écran en secret. " +
-            "Le Pixel affiche l'autorisation Android avant chaque session."
-    )
-    Spacer(Modifier.height(8.dp))
-    Button(
-        onClick = requestPhoneScreenCapture,
-        enabled = !state.screenBusy && !state.researchBusy,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser l'écran Pixel")
-    }
-    Spacer(Modifier.height(6.dp))
-    OutlinedButton(
-        onClick = { vm.analyzePcScreen() },
-        enabled = !state.screenBusy && !state.researchBusy,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text("Analyser l'écran du PC")
-    }
-    if (state.screenMessage.isNotBlank()) {
-        Spacer(Modifier.height(8.dp))
-        Text(state.screenMessage)
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { vm.deepResearchLastVisualObservation() },
-            enabled = !state.screenBusy && !state.researchBusy,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        InfoCard("Perception ciblée + Research v2") {
             Text(
-                if (state.researchBusy) {
-                    "Recherche + vérification en cours…"
-                } else {
-                    "Approfondir avec des données publiques"
-                }
+                "Choisis comment Jade reçoit l'image. Rien n'est capturé en secret : le mode armé reste visible dans une notification Android."
             )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = requestImmediateCapture,
+                enabled = !state.screenBusy && !state.researchBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.screenBusy) "Observation en cours…" else "Capturer + analyser maintenant")
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = requestArmedCapture,
+                enabled = !state.screenBusy && !state.researchBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (state.screenArmed) "Observation armée" else "Armer l'observation d'une autre appli")
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = openFocusCrop,
+                enabled = !state.screenBusy && !state.researchBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Choisir une zone + donner une consigne")
+            }
+            Spacer(Modifier.height(6.dp))
+            Button(
+                onClick = { vm.analyzePreparedVisual() },
+                enabled = !state.screenBusy && !state.researchBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Analyser la dernière image ciblée")
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = { vm.analyzePcScreen() },
+                enabled = !state.screenBusy && !state.researchBusy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Analyser l'écran du PC")
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Astuce : depuis n'importe quelle appli, tu peux aussi faire une capture Android puis Partager → Jade Genesis. Jade ouvre alors le cadrage avant l'analyse."
+            )
+            if (state.screenMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(state.screenMessage)
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { vm.deepResearchLastVisualObservation() },
+                    enabled = !state.screenBusy && !state.researchBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (state.researchBusy) {
+                            "Recherche + vérification en cours…"
+                        } else {
+                            "Approfondir avec des données publiques"
+                        }
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "L'image reste dans Jade/son nœud vision. Research v2 reçoit uniquement des requêtes texte ciblées et filtrées."
+                )
+            }
+            if (state.researchMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(state.researchMessage)
+            }
         }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "L'image reste dans Jade/son nœud vision. La recherche Internet reçoit seulement une requête texte raccourcie et filtrée."
-        )
-    }
-    if (state.researchMessage.isNotBlank()) {
-        Spacer(Modifier.height(8.dp))
-        Text(state.researchMessage)
-    }
-}
 
         if (state.chatBusy) {
             Spacer(Modifier.height(12.dp))

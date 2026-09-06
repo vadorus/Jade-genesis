@@ -1,0 +1,241 @@
+name: Jade Android CI Repo-First
+
+on:
+  push:
+    branches:
+      - main
+      - "jade/**"
+    paths:
+      - "android/**"
+      - ".github/workflows/jade-android-ci.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "android/**"
+      - ".github/workflows/jade-android-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jade-android-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build repository sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a
+        with:
+          gradle-version: "9.6.0"
+          cache-disabled: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Install Android API 37 and Build Tools 36
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --channel=3 \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+      - name: Verify repo-first source layout
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f android/build.gradle.kts
+          test -f android/settings.gradle.kts
+          test -f android/app/build.gradle.kts
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/java/com/jadegenesis/mobile/MainActivity.kt
+          test -f android/app/src/main/java/com/jadegenesis/mobile/core/JadeCore.kt
+          test -f android/app/src/main/java/com/jadegenesis/mobile/identity/IdentityManager.kt
+
+          if grep -R --line-number --include='*.kt' \
+            -E '^[[:space:]]*(cat|printf)[[:space:]].*\.kt|<<[[:space:]]*EOF' \
+            android/app/src/main; then
+            echo "ERROR: source tree contains source-generation shell markers."
+            exit 1
+          fi
+
+          echo "Repository source layout verified."
+
+      - name: Read repository version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY' > "$RUNNER_TEMP/jade-version.env"
+          from pathlib import Path
+          import re
+
+          text = Path("android/app/build.gradle.kts").read_text(encoding="utf-8")
+
+          code = re.search(r'versionCode\s*=\s*(\d+)', text)
+          name = re.search(r'versionName\s*=\s*"([^"]+)"', text)
+
+          if not code or not name:
+              raise SystemExit("ERROR: versionCode/versionName not found in repository source.")
+
+          print(f"VERSION_CODE={code.group(1)}")
+          print(f"VERSION_NAME={name.group(1)}")
+          PY
+
+          cat "$RUNNER_TEMP/jade-version.env"
+          cat "$RUNNER_TEMP/jade-version.env" >> "$GITHUB_ENV"
+
+          VERSION_CODE="$(sed -n 's/^VERSION_CODE=//p' "$RUNNER_TEMP/jade-version.env")"
+          VERSION_NAME="$(sed -n 's/^VERSION_NAME=//p' "$RUNNER_TEMP/jade-version.env")"
+
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Record tracked-source state before build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git status --porcelain --untracked-files=no
+          git rev-parse HEAD | tee "$RUNNER_TEMP/source-commit.txt"
+
+      - name: Run unit tests and assemble APK from repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --console=plain \
+            -p android \
+            :app:testDebugUnitTest \
+            :app:assembleDebug
+
+      - name: Prove build did not rewrite tracked sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! git diff --exit-code; then
+            echo "ERROR: the build modified tracked repository files."
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "ERROR: tracked repository state changed during build."
+            git status --short
+            exit 1
+          fi
+
+          echo "Build left tracked repository sources unchanged."
+
+      - name: Verify APK matches repository version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="android/app/build/outputs/apk/debug/app-debug.apk"
+          REPORT="$RUNNER_TEMP/jade-ci-report.txt"
+
+          test -f "$APK"
+
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" \
+            | tee "$RUNNER_TEMP/apk-badging.txt"
+
+          grep -F "package: name='com.jadegenesis.mobile'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "versionCode='$VERSION_CODE'" "$RUNNER_TEMP/apk-badging.txt"
+          grep -F "versionName='$VERSION_NAME'" "$RUNNER_TEMP/apk-badging.txt"
+
+          APK_SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" \
+            verify \
+            --verbose \
+            --print-certs \
+            "$APK" \
+            | tee "$RUNNER_TEMP/apk-signature.txt"
+
+          SIGNER_SHA256="$(
+            sed -n 's/^Signer #1 certificate SHA-256 digest:[[:space:]]*//p' \
+              "$RUNNER_TEMP/apk-signature.txt" \
+              | head -n 1 \
+              | tr '[:upper:]' '[:lower:]' \
+              | tr -d ':[:space:]'
+          )"
+
+          STABLE_SHA256="0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+
+          if [ -z "$SIGNER_SHA256" ]; then
+            echo "ERROR: unable to read CI APK signer."
+            exit 1
+          fi
+
+          if [ "$SIGNER_SHA256" = "$STABLE_SHA256" ]; then
+            echo "ERROR: CI build unexpectedly used the stable Jade signing identity."
+            exit 1
+          fi
+
+          {
+            echo "Jade Genesis repo-first CI"
+            echo "commit=$(cat "$RUNNER_TEMP/source-commit.txt")"
+            echo "ref=$GITHUB_REF"
+            echo "versionCode=$VERSION_CODE"
+            echo "versionName=$VERSION_NAME"
+            echo "package=com.jadegenesis.mobile"
+            echo "apk_sha256=$APK_SHA256"
+            echo "ci_signer_sha256=$SIGNER_SHA256"
+            echo "stable_signing_key_used=false"
+            echo "repository_sources_unchanged=true"
+            echo "installable_over_stable_jade=false"
+          } | tee "$REPORT"
+
+      - name: Upload CI verification report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Jade-CI-report-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/jade-ci-report.txt
+            ${{ runner.temp }}/apk-badging.txt
+            ${{ runner.temp }}/apk-signature.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Final summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Jade Genesis — Repo-First CI"
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Version: \`$VERSION_NAME\`"
+            echo "- VersionCode: \`$VERSION_CODE\`"
+            echo "- Kotlin/source source of truth: **repository**"
+            echo "- Source generation/patching by CI: **none**"
+            echo "- Stable signing secret used: **no**"
+            echo "- APK produced only for internal CI verification: **do not install it over stable Jade**"
+          } >> "$GITHUB_STEP_SUMMARY"

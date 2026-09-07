@@ -404,6 +404,12 @@ class JadeCore(context: Context) {
                 "duration_ms" to response.durationMs
             )
         )
+
+        // Ne supprime que l'image qui vient réellement d'être analysée.
+        // Si une nouvelle capture a été créée entre-temps, son SHA-256 diffère
+        // et elle reste intacte pour une analyse ultérieure.
+        screenObserver.deleteLatestIfMatches(frame.sha256)
+
         return answer
     }
 

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.jadegenesis.mobile.BuildConfig
 import com.jadegenesis.mobile.model.JadeIdentity
 import kotlinx.coroutines.flow.first
 import java.util.UUID
@@ -21,7 +22,8 @@ class IdentityManager(private val context: Context) {
     }
 
     private companion object {
-        const val CURRENT_VERSION = "0.1.5"
+        val CURRENT_VERSION: String
+            get() = BuildConfig.VERSION_NAME
     }
 
     suspend fun loadOrCreate(): JadeIdentity {

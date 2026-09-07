@@ -17,6 +17,8 @@ import com.jadegenesis.mobile.model.ResourceBudget
 import com.jadegenesis.mobile.model.TaskWorkload
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -33,6 +35,7 @@ class NodeManager(
         "jade_genesis_nodes",
         Context.MODE_PRIVATE
     )
+    private val registryMutex = Mutex()
 
     companion object {
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
@@ -198,16 +201,17 @@ class NodeManager(
         if (refreshRemote) {
             refreshRemoteNodes()
         }
+        val remoteNodes = registryMutex.withLock {
+            loadStoredNodesUnsafe()
+                .sortedWith(
+                    compareBy<StoredNode> { it.kind.ordinal }
+                        .thenBy { it.name.lowercase() }
+                )
+                .map { currentPublicNode(it) }
+        }
         return buildList {
             add(localNode(device))
-            addAll(
-                loadStoredNodes()
-                    .sortedWith(
-                        compareBy<StoredNode> { it.kind.ordinal }
-                            .thenBy { it.name.lowercase() }
-                    )
-                    .map { currentPublicNode(it) }
-            )
+            addAll(remoteNodes)
         }
     }
 
@@ -215,13 +219,13 @@ class NodeManager(
         host: String,
         port: Int,
         token: String
-    ): GenesisNode {
+    ): GenesisNode = registryMutex.withLock {
         val cleanHost = normalizeHost(host)
         require(cleanHost.isNotBlank()) { "Adresse du nœud vide." }
         require(port in 1..65535) { "Port invalide." }
         require(token.isNotBlank()) { "Jeton du Node Runtime vide." }
 
-        val existingNodes = loadStoredNodes().toMutableList()
+        val existingNodes = loadStoredNodesUnsafe().toMutableList()
         val routeOwner = existingNodes.firstOrNull { node ->
             node.routes.any {
                 it.host.equals(cleanHost, ignoreCase = true) && it.port == port
@@ -302,7 +306,7 @@ class NodeManager(
                 }
         }
         existingNodes.add(merged)
-        saveStoredNodes(existingNodes)
+        saveStoredNodesUnsafe(existingNodes)
 
         logger?.log(
             if (merged.status == NodeStatus.ONLINE) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
@@ -316,7 +320,7 @@ class NodeManager(
             )
         )
 
-        return currentPublicNode(merged)
+        currentPublicNode(merged)
     }
 
     suspend fun registerPcNode(
@@ -325,12 +329,12 @@ class NodeManager(
         token: String
     ): GenesisNode = registerNode(host, port, token)
 
-    suspend fun refreshRemoteNodes(): List<GenesisNode> {
-        val current = loadStoredNodes()
+    suspend fun refreshRemoteNodes(): List<GenesisNode> = registryMutex.withLock {
+        val current = loadStoredNodesUnsafe()
         val refreshed = current.map { node -> probeNode(node) }
         val normalized = deduplicateStoredNodes(refreshed)
-        saveStoredNodes(normalized)
-        return normalized.map { currentPublicNode(it) }
+        saveStoredNodesUnsafe(normalized)
+        normalized.map { currentPublicNode(it) }
     }
 
     fun preferredComputeNode(
@@ -369,12 +373,19 @@ class NodeManager(
             }
         }
 
-        var node = loadStoredNodes().firstOrNull { it.nodeId == nodeId }
-            ?: error("Nœud distant inconnu : $nodeId")
+        var node = registryMutex.withLock {
+            loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId }
+                ?: error("Nœud distant inconnu : $nodeId")
+        }
 
         if (node.status != NodeStatus.ONLINE || routeCandidates(node).isEmpty()) {
-            node = probeNode(node)
-            replaceStoredNode(node)
+            node = registryMutex.withLock {
+                val latest = loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId }
+                    ?: error("Nœud distant inconnu : $nodeId")
+                val probed = probeNode(latest)
+                replaceStoredNodeUnsafe(probed)
+                probed
+            }
         }
         if (node.status != NodeStatus.ONLINE) {
             error("Le nœud ${node.name} n'est pas en ligne.")
@@ -840,20 +851,22 @@ class NodeManager(
         return node.publicNode(stale)
     }
 
-    private fun markActiveRoute(nodeId: String, routeId: String) {
-        val nodes = loadStoredNodes().toMutableList()
-        val index = nodes.indexOfFirst { it.nodeId == nodeId }
-        if (index < 0) return
-        val node = nodes[index]
-        nodes[index] = node.copy(activeRouteId = routeId)
-        saveStoredNodes(nodes)
+    private suspend fun markActiveRoute(nodeId: String, routeId: String) {
+        registryMutex.withLock {
+            val nodes = loadStoredNodesUnsafe().toMutableList()
+            val index = nodes.indexOfFirst { it.nodeId == nodeId }
+            if (index < 0) return@withLock
+            val node = nodes[index]
+            nodes[index] = node.copy(activeRouteId = routeId)
+            saveStoredNodesUnsafe(nodes)
+        }
     }
 
-    private fun replaceStoredNode(node: StoredNode) {
-        val nodes = loadStoredNodes().toMutableList()
+    private fun replaceStoredNodeUnsafe(node: StoredNode) {
+        val nodes = loadStoredNodesUnsafe().toMutableList()
         nodes.removeAll { it.nodeId == node.nodeId }
         nodes.add(node)
-        saveStoredNodes(nodes)
+        saveStoredNodesUnsafe(nodes)
     }
 
     private fun protocolAccepted(value: String): Boolean =
@@ -919,13 +932,13 @@ class NodeManager(
         }
     }
 
-    private fun loadStoredNodes(): List<StoredNode> {
+    private fun loadStoredNodesUnsafe(): List<StoredNode> {
         val rawV2 = prefs.getString(KEY_REMOTE_NODES_V2, null)
         if (!rawV2.isNullOrBlank()) {
             val parsed = parseV2(rawV2)
             val normalized = deduplicateStoredNodes(parsed)
             if (normalized != parsed) {
-                saveStoredNodes(normalized)
+                saveStoredNodesUnsafe(normalized)
                 logger?.log(
                     DiagnosticLevel.INFO,
                     "node_registry_deduplicated",
@@ -943,7 +956,7 @@ class NodeManager(
             ?: return emptyList()
         val migrated = deduplicateStoredNodes(migrateV1(rawV1))
         if (migrated.isNotEmpty()) {
-            saveStoredNodes(migrated)
+            saveStoredNodesUnsafe(migrated)
             logger?.log(
                 DiagnosticLevel.INFO,
                 "node_registry_migrated",
@@ -1178,7 +1191,7 @@ class NodeManager(
         }
     }.getOrDefault(emptyList())
 
-    private fun saveStoredNodes(nodes: List<StoredNode>) {
+    private fun saveStoredNodesUnsafe(nodes: List<StoredNode>) {
         val array = JSONArray()
         nodes.forEach { node ->
             array.put(

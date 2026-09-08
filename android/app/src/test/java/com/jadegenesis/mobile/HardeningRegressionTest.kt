@@ -64,7 +64,7 @@ class HardeningRegressionTest {
 
         assertTrue(result.text.startsWith("Je suis Jade Genesis 9.9.9."))
         assertTrue(result.text.contains("Mon identité est $jadeId."))
-        assertTrue(result.text.contains("Mon Node Manager connaît 1 nœud(s)."))
+        assertTrue(result.text.contains("mon Node Manager connaît 1 nœud(s)."))
         assertFalse(result.text.contains("${jadeId.take(16)}…"))
     }
 

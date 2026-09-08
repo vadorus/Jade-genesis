@@ -33,10 +33,6 @@ class ScreenObserverRepository(context: Context) {
         private const val MAX_IMPORT_DECODE_WIDTH = MAX_CAPTURE_WIDTH * 2
         private const val TARGET_JPEG_BYTES = 1_050_000
 
-        // Une capture locale reste disponible assez longtemps pour permettre
-        // une analyse différée lorsque le PC/serveur vision est hors ligne.
-        private const val CAPTURE_TTL_MS = 24L * 60L * 60L * 1_000L
-
         // Les fichiers temporaires ne doivent pas rester indéfiniment après
         // une interruption de processus pendant une sauvegarde.
         private const val TEMP_FILE_TTL_MS = 5L * 60L * 1_000L
@@ -63,6 +59,7 @@ class ScreenObserverRepository(context: Context) {
     init {
         purgeExpiredCapture()
         cleanupTemporaryFiles()
+        scheduleExistingCaptureExpiry()
     }
 
     fun latestCaptureTimestamp(): Long =
@@ -301,9 +298,30 @@ class ScreenObserverRepository(context: Context) {
         if (capturedAt <= 0L) return false
 
         val ageMs = now - capturedAt
-        if (ageMs < 0L || ageMs < CAPTURE_TTL_MS) return false
+        if (
+            ageMs < 0L ||
+            ageMs < ScreenCaptureRetention.CAPTURE_TTL_MS
+        ) {
+            return false
+        }
 
         return deleteCaptureFiles()
+    }
+
+    private fun scheduleExistingCaptureExpiry(now: Long = System.currentTimeMillis()) {
+        if (!latestFile.isFile) return
+
+        val metadata = readMetadata()
+        val capturedAt = metadata.optLong("captured_at", latestFile.lastModified())
+            .takeIf { it > 0L }
+            ?: latestFile.lastModified()
+        if (capturedAt <= 0L) return
+
+        val ageMs = (now - capturedAt).coerceAtLeast(0L)
+        val remainingMs = (
+            ScreenCaptureRetention.CAPTURE_TTL_MS - ageMs
+        ).coerceAtLeast(0L)
+        ScreenCaptureRetention.schedule(appContext, remainingMs)
     }
 
     private fun deleteCaptureFiles(): Boolean {
@@ -445,7 +463,7 @@ class ScreenObserverRepository(context: Context) {
 
     private fun decryptFromStorage(stored: ByteArray): ByteArray {
         if (!hasEncryptedMagic(stored)) {
-            // Migration transparente des captures créées avant le chiffrement.
+            // Compatibilité avec les captures créées avant le chiffrement.
             return stored
         }
 

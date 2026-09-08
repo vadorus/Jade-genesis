@@ -23,6 +23,7 @@ data class ScreenFrame(
 class ScreenObserverRepository(context: Context) {
     companion object {
         private const val MAX_CAPTURE_WIDTH = 960
+        private const val MAX_IMPORT_DECODE_WIDTH = MAX_CAPTURE_WIDTH * 2
         private const val TARGET_JPEG_BYTES = 1_050_000
 
         // Une capture locale reste disponible assez longtemps pour permettre
@@ -141,8 +142,11 @@ class ScreenObserverRepository(context: Context) {
         cleanupTemporaryFiles()
 
         val normalized = normalizeWidth(bitmap)
-        val encoded = encodeBoundedJpeg(normalized)
-        if (normalized !== bitmap) normalized.recycle()
+        val encoded = try {
+            encodeBoundedJpeg(normalized)
+        } finally {
+            if (normalized !== bitmap) normalized.recycle()
+        }
 
         val capturedAt = System.currentTimeMillis()
         val imageSha256 = sha256(encoded)
@@ -195,9 +199,11 @@ class ScreenObserverRepository(context: Context) {
     }
 
     fun importSharedImage(uri: Uri): ScreenFrame {
-        val bitmap = appContext.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input)
-        } ?: error("Impossible de lire l'image partagée.")
+        require(uri.scheme.equals("content", ignoreCase = true)) {
+            "Jade accepte uniquement les images partagées via content://."
+        }
+
+        val bitmap = decodeSharedImage(uri)
 
         return try {
             saveBitmap(
@@ -281,6 +287,31 @@ class ScreenObserverRepository(context: Context) {
         }
     }
 
+    private fun decodeSharedImage(uri: Uri): Bitmap {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        appContext.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        } ?: error("Impossible de lire l'image partagée.")
+
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) {
+            "Le fichier partagé n'est pas une image décodable."
+        }
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > MAX_IMPORT_DECODE_WIDTH) {
+            sampleSize *= 2
+        }
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+        }
+        return appContext.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, options)
+        } ?: error("Impossible de décoder l'image partagée.")
+    }
+
     private fun normalizeWidth(bitmap: Bitmap): Bitmap {
         if (bitmap.width <= MAX_CAPTURE_WIDTH) return bitmap
 
@@ -307,15 +338,16 @@ class ScreenObserverRepository(context: Context) {
 
             widths.forEach { targetWidth ->
                 if (working.width != targetWidth) {
-                    if (ownsWorking) working.recycle()
-
-                    val ratio = targetWidth.toDouble() / working.width.toDouble()
-                    working = Bitmap.createScaledBitmap(
-                        working,
+                    val previous = working
+                    val ratio = targetWidth.toDouble() / previous.width.toDouble()
+                    val scaled = Bitmap.createScaledBitmap(
+                        previous,
                         targetWidth,
-                        (working.height * ratio).roundToInt().coerceAtLeast(1),
+                        (previous.height * ratio).roundToInt().coerceAtLeast(1),
                         true
                     )
+                    if (ownsWorking) previous.recycle()
+                    working = scaled
                     ownsWorking = true
                 }
 

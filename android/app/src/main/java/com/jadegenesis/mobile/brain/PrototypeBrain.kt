@@ -27,6 +27,31 @@ class PrototypeBrain : BrainBackend {
         val text = context.userInput.lowercase().trim()
 
         if (
+            "qui es-tu" in text ||
+            "qui es tu" in text ||
+            "où es-tu" in text ||
+            "ou es tu" in text ||
+            "où fonctionnes" in text ||
+            "ou fonctionnes" in text
+        ) {
+            val self = context.selfModel
+            return BrainResult(
+                text = buildString {
+                    append("Je suis ${self.identity.name} ${self.identity.version}. ")
+                    append("Mon identité est ${self.identity.jadeId}. ")
+                    append("Mon nœud d'interface actuel est ${self.nodeId}, ")
+                    append("${self.device.manufacturer} ${self.device.model}. ")
+                    append(
+                        "Je suis conçue comme une seule identité distribuée sur plusieurs nœuds. " +
+                            "Mon cerveau actif est ${self.activeBrain.displayName}, mon Resource Governor " +
+                            "est en mode ${self.resourceBudget.mode} et mon Node Manager connaît " +
+                            "${self.knownNodes.size} nœud(s)."
+                    )
+                }
+            )
+        }
+
+        if (
             "consolid" in text ||
             "mémoire" in text ||
             "memoire" in text ||
@@ -44,7 +69,7 @@ class PrototypeBrain : BrainBackend {
             return BrainResult(
                 text = buildString {
                     append(
-                        "En 0.0.6 je peux consolider un lot de mes mémoires : " +
+                        "Je peux consolider un lot de mes mémoires : " +
                             "regrouper les doublons exacts, relever des contradictions potentielles, " +
                             "extraire des thèmes dominants et enregistrer une nouvelle connaissance consolidée. "
                     )
@@ -88,7 +113,7 @@ class PrototypeBrain : BrainBackend {
             return BrainResult(
                 text = buildString {
                     append(
-                        "Mon Adaptive Task Router 0.0.6 place chaque tâche dans une file persistante, " +
+                        "Mon Adaptive Task Router place chaque tâche dans une file persistante, " +
                             "puis classe les nœuds à partir de mes ressources actuelles, de la capacité demandée " +
                             "et de l'historique mesuré de mes exécutions. "
                     )
@@ -120,7 +145,7 @@ class PrototypeBrain : BrainBackend {
         ) {
             return BrainResult(
                 text =
-                    "En 0.0.6 mon amélioration mesurable combine deux boucles : " +
+                    "Mon amélioration mesurable combine deux boucles : " +
                         "j'apprends quels nœuds sont efficaces grâce aux succès, échecs et durées mesurés, " +
                         "et je peux consolider ma mémoire pour réduire les doublons et faire remonter " +
                         "des contradictions potentielles. Je ne modifie pas encore seule mon code ni " +
@@ -250,31 +275,6 @@ class PrototypeBrain : BrainBackend {
             return BrainResult(
                 text = "Je vais inspecter mon appareil pour répondre avec mes données réelles.",
                 toolName = "inspect_device"
-            )
-        }
-
-        if (
-            "qui es-tu" in text ||
-            "qui es tu" in text ||
-            "où es-tu" in text ||
-            "ou es tu" in text ||
-            "où fonctionnes" in text ||
-            "ou fonctionnes" in text
-        ) {
-            val self = context.selfModel
-            return BrainResult(
-                text = buildString {
-                    append("Je suis ${self.identity.name} ${self.identity.version}. ")
-                    append("Mon identité est ${self.identity.jadeId.take(16)}… ")
-                    append("Mon nœud d'interface actuel est ${self.nodeId}, ")
-                    append("${self.device.manufacturer} ${self.device.model}. ")
-                    append(
-                        "Je suis conçue comme une seule identité distribuée sur plusieurs nœuds. " +
-                            "Mon cerveau actif est ${self.activeBrain.displayName}, mon Resource Governor " +
-                            "est en mode ${self.resourceBudget.mode} et mon Node Manager connaît " +
-                            "${self.knownNodes.size} nœud(s)."
-                    )
-                }
             )
         }
 

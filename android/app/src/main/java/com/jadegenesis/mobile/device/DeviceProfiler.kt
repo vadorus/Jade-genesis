@@ -2,6 +2,8 @@ package com.jadegenesis.mobile.device
 
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Environment
@@ -9,6 +11,7 @@ import android.os.PowerManager
 import android.os.StatFs
 import com.jadegenesis.mobile.model.DeviceProfile
 import kotlin.math.round
+import kotlin.math.roundToInt
 
 class DeviceProfiler(private val context: Context) {
 
@@ -23,10 +26,11 @@ class DeviceProfiler(private val context: Context) {
         val batteryManager = context.getSystemService(BatteryManager::class.java)
         val powerManager = context.getSystemService(PowerManager::class.java)
 
-        val batteryPercent =
-            batteryManager
-                .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                .coerceIn(0, 100)
+        val propertyBatteryPercent =
+            batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val batteryPercent = propertyBatteryPercent
+            .takeIf { it in 0..100 }
+            ?: batteryPercentFromStickyIntent()
 
         return DeviceProfile(
             manufacturer = Build.MANUFACTURER,
@@ -55,6 +59,21 @@ class DeviceProfiler(private val context: Context) {
             thermalStatus = thermalStatusName(powerManager.currentThermalStatus),
             capturedAt = System.currentTimeMillis()
         )
+    }
+
+    private fun batteryPercentFromStickyIntent(): Int {
+        val status = context.registerReceiver(
+            null,
+            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        ) ?: return -1
+
+        val level = status.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = status.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return -1
+
+        return ((level.toDouble() / scale.toDouble()) * 100.0)
+            .roundToInt()
+            .coerceIn(0, 100)
     }
 
     private fun bytesToGb(bytes: Long): Double =

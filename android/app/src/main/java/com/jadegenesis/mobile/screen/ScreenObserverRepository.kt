@@ -188,6 +188,7 @@ class ScreenObserverRepository(context: Context) {
         }
 
         latestFile.setLastModified(capturedAt)
+        ScreenCaptureRetention.schedule(appContext)
 
         return ScreenFrame(
             bytes = encoded,
@@ -241,8 +242,8 @@ class ScreenObserverRepository(context: Context) {
     }
 
     /**
-     * TTL opportuniste : la capture est purgée dès qu'un composant Jade
-     * réaccède au repository après 24 h.
+     * Garde-fou opportuniste en complément du Worker planifié : tout accès
+     * au repository purge aussi immédiatement une capture âgée de 24 h.
      */
     fun purgeExpiredCapture(now: Long = System.currentTimeMillis()): Boolean {
         if (!latestFile.isFile) {

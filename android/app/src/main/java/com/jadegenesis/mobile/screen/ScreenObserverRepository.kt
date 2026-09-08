@@ -4,12 +4,19 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.KeyStore
 import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlin.math.roundToInt
 
 data class ScreenFrame(
@@ -33,6 +40,17 @@ class ScreenObserverRepository(context: Context) {
         // Les fichiers temporaires ne doivent pas rester indéfiniment après
         // une interruption de processus pendant une sauvegarde.
         private const val TEMP_FILE_TTL_MS = 5L * 60L * 1_000L
+
+        private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+        private const val CAPTURE_KEY_ALIAS = "jade_screen_capture_aes_v1"
+        private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val GCM_TAG_BITS = 128
+        private val ENCRYPTED_MAGIC = byteArrayOf(
+            'J'.code.toByte(),
+            'G'.code.toByte(),
+            'E'.code.toByte(),
+            '1'.code.toByte()
+        )
     }
 
     private val appContext = context.applicationContext
@@ -56,8 +74,10 @@ class ScreenObserverRepository(context: Context) {
     }
 
     fun latestBitmap(): Bitmap? =
-        latestImageFile()?.let { file ->
-            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+        latestFrame()?.bytes?.let { bytes ->
+            runCatching {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
         }
 
     fun latestSource(): String {
@@ -77,8 +97,16 @@ class ScreenObserverRepository(context: Context) {
         purgeExpiredCapture()
         if (!latestFile.isFile) return null
 
-        val bytes = runCatching { latestFile.readBytes() }.getOrNull()
+        val storedBytes = runCatching { latestFile.readBytes() }.getOrNull()
             ?: return null
+        if (storedBytes.isEmpty()) return null
+
+        val bytes = try {
+            decryptFromStorage(storedBytes)
+        } catch (_: Exception) {
+            deleteCaptureFiles()
+            return null
+        }
         if (bytes.isEmpty()) return null
 
         val currentSha256 = sha256(bytes)
@@ -152,23 +180,31 @@ class ScreenObserverRepository(context: Context) {
         val imageSha256 = sha256(encoded)
         val cleanSource = source.trim().ifBlank { "unknown_image" }
         val cleanFocus = focusInstruction.trim().take(1_200)
+        val encryptedImage = encryptForStorage(encoded)
+        val metadataJson = JSONObject().apply {
+            put("source", cleanSource)
+            put("focus_instruction", cleanFocus)
+            put("captured_at", capturedAt)
+            put("image_sha256", imageSha256)
+            put("storage_encrypted", true)
+            put("storage_format", "AES_GCM_V1")
+        }.toString()
+        val encryptedMetadata = encryptForStorage(
+            metadataJson.toByteArray(Charsets.UTF_8)
+        )
 
         runCatching { tempImageFile.delete() }
         runCatching { tempMetadataFile.delete() }
 
         FileOutputStream(tempImageFile).use { stream ->
-            stream.write(encoded)
+            stream.write(encryptedImage)
             stream.flush()
         }
 
-        tempMetadataFile.writeText(
-            JSONObject().apply {
-                put("source", cleanSource)
-                put("focus_instruction", cleanFocus)
-                put("captured_at", capturedAt)
-                put("image_sha256", imageSha256)
-            }.toString()
-        )
+        FileOutputStream(tempMetadataFile).use { stream ->
+            stream.write(encryptedMetadata)
+            stream.flush()
+        }
 
         if (latestFile.exists()) {
             check(latestFile.delete()) {
@@ -188,6 +224,7 @@ class ScreenObserverRepository(context: Context) {
         }
 
         latestFile.setLastModified(capturedAt)
+        metadataFile.takeIf { it.isFile }?.setLastModified(capturedAt)
         ScreenCaptureRetention.schedule(appContext)
 
         return ScreenFrame(
@@ -231,10 +268,13 @@ class ScreenObserverRepository(context: Context) {
         purgeExpiredCapture()
         if (!latestFile.isFile) return false
 
-        val currentBytes = runCatching { latestFile.readBytes() }.getOrNull()
+        val storedBytes = runCatching { latestFile.readBytes() }.getOrNull()
             ?: return false
-        if (currentBytes.isEmpty()) return false
+        if (storedBytes.isEmpty()) return false
 
+        val currentBytes = runCatching {
+            decryptFromStorage(storedBytes)
+        }.getOrNull() ?: return false
         val currentSha256 = sha256(currentBytes)
         if (currentSha256 != expected) return false
 
@@ -378,8 +418,91 @@ class ScreenObserverRepository(context: Context) {
 
     private fun readMetadata(): JSONObject = runCatching {
         if (!metadataFile.isFile) return@runCatching JSONObject()
-        JSONObject(metadataFile.readText())
+        val stored = metadataFile.readBytes()
+        if (stored.isEmpty()) return@runCatching JSONObject()
+        val clear = decryptFromStorage(stored)
+        JSONObject(clear.toString(Charsets.UTF_8))
     }.getOrDefault(JSONObject())
+
+    private fun encryptForStorage(clear: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, captureKey())
+        val iv = cipher.iv
+        require(iv.isNotEmpty() && iv.size <= 255) {
+            "IV de chiffrement invalide."
+        }
+        val encrypted = cipher.doFinal(clear)
+
+        return ByteArrayOutputStream(
+            ENCRYPTED_MAGIC.size + 1 + iv.size + encrypted.size
+        ).apply {
+            write(ENCRYPTED_MAGIC)
+            write(iv.size)
+            write(iv)
+            write(encrypted)
+        }.toByteArray()
+    }
+
+    private fun decryptFromStorage(stored: ByteArray): ByteArray {
+        if (!hasEncryptedMagic(stored)) {
+            // Migration transparente des captures créées avant le chiffrement.
+            return stored
+        }
+
+        require(stored.size > ENCRYPTED_MAGIC.size + 1) {
+            "Capture chiffrée tronquée."
+        }
+        val ivLength = stored[ENCRYPTED_MAGIC.size].toInt() and 0xff
+        require(ivLength in 8..32) {
+            "IV de capture invalide."
+        }
+        val ivStart = ENCRYPTED_MAGIC.size + 1
+        val cipherStart = ivStart + ivLength
+        require(cipherStart < stored.size) {
+            "Capture chiffrée incomplète."
+        }
+
+        val iv = stored.copyOfRange(ivStart, cipherStart)
+        val encrypted = stored.copyOfRange(cipherStart, stored.size)
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            captureKey(),
+            GCMParameterSpec(GCM_TAG_BITS, iv)
+        )
+        return cipher.doFinal(encrypted)
+    }
+
+    private fun hasEncryptedMagic(value: ByteArray): Boolean =
+        value.size >= ENCRYPTED_MAGIC.size &&
+            value.copyOfRange(0, ENCRYPTED_MAGIC.size)
+                .contentEquals(ENCRYPTED_MAGIC)
+
+    private fun captureKey(): SecretKey = synchronized(ScreenObserverRepository::class.java) {
+        val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply {
+            load(null)
+        }
+        val existing = keyStore.getKey(CAPTURE_KEY_ALIAS, null) as? SecretKey
+        if (existing != null) {
+            return@synchronized existing
+        }
+
+        val generator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            KEYSTORE_PROVIDER
+        )
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                CAPTURE_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        generator.generateKey()
+    }
 
     private fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256")

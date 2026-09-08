@@ -10,6 +10,7 @@ import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.ResourceGovernor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -23,18 +24,35 @@ class ComputeMesh(
     suspend fun runParallelProbe(device: DeviceProfile): MeshProbeSummary {
         val startedAt = System.currentTimeMillis()
         val nodes = nodeManager.nodes(device = device, refreshRemote = true)
-        val candidates = nodes.filter {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities &&
-                "genesis_probe" in it.capabilities
-        }
+        val budget = ResourceGovernor().evaluate(device)
+        val compatible = nodes
+            .filter {
+                it.kind != NodeKind.PHONE &&
+                    it.status == NodeStatus.ONLINE &&
+                    "task_execution_v3" in it.capabilities &&
+                    "genesis_probe" in it.capabilities
+            }
+            .sortedWith(
+                compareByDescending<com.jadegenesis.mobile.model.GenesisNode> {
+                    it.ramAvailableGb
+                }.thenByDescending {
+                    it.cpuCores
+                }
+            )
+        val candidates = compatible.take(
+            budget.maxParallelTasks.coerceAtLeast(1)
+        )
 
         logger.log(
             DiagnosticLevel.INFO,
             "mesh_probe_start",
             "Benchmark parallèle du Compute Mesh.",
-            mapOf("candidate_count" to candidates.size)
+            mapOf(
+                "candidate_count" to candidates.size,
+                "compatible_count" to compatible.size,
+                "max_parallel_tasks" to budget.maxParallelTasks,
+                "resource_mode" to budget.mode.name
+            )
         )
 
         val results = coroutineScope {

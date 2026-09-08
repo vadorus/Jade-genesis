@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.research
 
+import com.jadegenesis.mobile.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -604,7 +605,7 @@ class ResearchEngine {
             connection.setRequestProperty("Accept", accept)
             connection.setRequestProperty(
                 "User-Agent",
-                "JadeGenesis/0.1.4-research-v3-candidate (personal research assistant; public-data research)"
+                "JadeGenesis/${BuildConfig.VERSION_NAME}-research-v3 (personal research assistant; public-data research)"
             )
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream

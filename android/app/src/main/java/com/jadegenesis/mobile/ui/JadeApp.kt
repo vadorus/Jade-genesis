@@ -51,6 +51,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.jadegenesis.mobile.BuildConfig
 import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeRouteStatus
@@ -256,7 +257,7 @@ private fun JadeHome(
             fontWeight = FontWeight.Bold
         )
         Text(
-            "Cognitive Core ${self?.identity?.version ?: "0.1.4"}",
+            "Cognitive Core ${self?.identity?.version ?: BuildConfig.VERSION_NAME}",
             style = MaterialTheme.typography.titleMedium
         )
         Spacer(Modifier.height(12.dp))
@@ -272,7 +273,7 @@ private fun JadeHome(
         }
 
         Spacer(Modifier.height(10.dp))
-        InfoCard("Perception ciblée + Research v2") {
+        InfoCard("Perception ciblée + Research v3") {
             Text(
                 "Choisis comment Jade reçoit l'image. Rien n'est capturé en secret : le mode armé reste visible dans une notification Android."
             )
@@ -339,7 +340,7 @@ private fun JadeHome(
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "L'image reste dans Jade/son nœud vision. Research v2 reçoit uniquement des requêtes texte ciblées et filtrées."
+                    "L'image reste dans Jade/son nœud vision. Research v3 reçoit uniquement des requêtes texte ciblées et filtrées, avec priorité aux sources primaires lorsqu'une cible GitHub est détectée."
                 )
             }
             if (state.researchMessage.isNotBlank()) {
@@ -399,7 +400,7 @@ private fun JadeHome(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             OutlinedButton(
-                onClick = { vm.send("Qui es-tu et quels nœuds connais-tu ?") },
+                onClick = { vm.send("Qui es-tu ?") },
                 enabled = !state.chatBusy,
                 modifier = Modifier.weight(1f)
             ) {
@@ -773,6 +774,14 @@ private fun AdminScreen(
             return@PageColumn
         }
 
+        val self = state.selfModel
+        InfoCard("Identité Jade") {
+            Text("Version : ${self?.identity?.version ?: BuildConfig.VERSION_NAME}")
+            Text("Jade ID : ${self?.identity?.jadeId ?: "indisponible"}")
+            Text("Nœud d'interface : ${self?.nodeId ?: "inconnu"}")
+        }
+
+        Spacer(Modifier.height(10.dp))
         InfoCard("Tool Lab v1") {
             Text(
                 "Jade peut maintenant concevoir du code d'outil candidat. " +

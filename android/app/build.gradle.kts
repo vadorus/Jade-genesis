@@ -16,8 +16,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 15
-        versionName = "0.1.5"
+        versionCode = 16
+        versionName = "0.1.6"
     }
 
     buildFeatures {
@@ -35,7 +35,7 @@ android {
             !jadeKeystorePath.isNullOrBlank() &&
             !jadeKeystorePassword.isNullOrBlank()
         ) {
-            create("jadeDev") {
+            create("jadeStable") {
                 storeFile = file(jadeKeystorePath)
                 storePassword = jadeKeystorePassword
                 keyAlias = jadeKeyAlias
@@ -46,7 +46,15 @@ android {
 
     buildTypes {
         getByName("debug") {
-            signingConfigs.findByName("jadeDev")?.let {
+            isDebuggable = true
+        }
+
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = false
+            isShrinkResources = false
+
+            signingConfigs.findByName("jadeStable")?.let {
                 signingConfig = it
             }
         }

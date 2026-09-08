@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -30,6 +31,7 @@ class FocusCropActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         repository = ScreenObserverRepository(this)
         val bitmap = repository.latestBitmap()
         if (bitmap == null) {
@@ -127,15 +129,15 @@ class FocusCropActivity : Activity() {
                     }
                 }.onSuccess {
                     Toast.makeText(
-                                  this@FocusCropActivity,
-                                  "Zone prête. Dans Jade, touche « Analyser l'image ciblée ».",
+                        this@FocusCropActivity,
+                        "Zone prête. Dans Jade, touche « Analyser l'image ciblée ».",
                         Toast.LENGTH_LONG
                     ).show()
                     openJadeAndFinish()
                 }.onFailure { error ->
                     Toast.makeText(
-                                  this@FocusCropActivity,
-                                  error.message ?: "Impossible de préparer cette zone.",
+                        this@FocusCropActivity,
+                        error.message ?: "Impossible de préparer cette zone.",
                         Toast.LENGTH_LONG
                     ).show()
                 }

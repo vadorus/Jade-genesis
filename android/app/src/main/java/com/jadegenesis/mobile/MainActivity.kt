@@ -9,9 +9,14 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
 import com.jadegenesis.mobile.screen.FocusCropActivity
 import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.ui.JadeApp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
 
@@ -67,16 +72,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun importConfirmedSharedImage(uri: Uri) {
-        runCatching {
-            ScreenObserverRepository(this).importSharedImage(uri)
-        }.onSuccess {
-            startActivity(Intent(this, FocusCropActivity::class.java))
-        }.onFailure { error ->
-            Toast.makeText(
-                this,
-                error.message ?: "Impossible d'importer l'image partagée.",
-                Toast.LENGTH_LONG
-            ).show()
+        lifecycleScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    ScreenObserverRepository(applicationContext).importSharedImage(uri)
+                }
+                startActivity(Intent(this@MainActivity, FocusCropActivity::class.java))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Toast.makeText(
+                    this@MainActivity,
+                    error.message ?: "Impossible d'importer l'image partagée.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 

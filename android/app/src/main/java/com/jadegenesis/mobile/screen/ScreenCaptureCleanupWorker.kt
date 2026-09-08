@@ -10,11 +10,14 @@ import java.util.concurrent.TimeUnit
 
 internal object ScreenCaptureRetention {
     private const val UNIQUE_WORK_NAME = "jade-screen-capture-expiry"
-    private const val CAPTURE_TTL_HOURS = 24L
+    const val CAPTURE_TTL_MS = 24L * 60L * 60L * 1_000L
 
-    fun schedule(context: Context) {
+    fun schedule(
+        context: Context,
+        delayMs: Long = CAPTURE_TTL_MS
+    ) {
         val request = OneTimeWorkRequestBuilder<ScreenCaptureCleanupWorker>()
-            .setInitialDelay(CAPTURE_TTL_HOURS, TimeUnit.HOURS)
+            .setInitialDelay(delayMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
             .build()
 
         WorkManager.getInstance(context.applicationContext)

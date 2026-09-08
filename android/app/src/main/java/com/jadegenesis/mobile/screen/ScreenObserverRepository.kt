@@ -4,12 +4,19 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.KeyStore
 import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 import kotlin.math.roundToInt
 
 data class ScreenFrame(
@@ -23,15 +30,23 @@ data class ScreenFrame(
 class ScreenObserverRepository(context: Context) {
     companion object {
         private const val MAX_CAPTURE_WIDTH = 960
+        private const val MAX_IMPORT_DECODE_WIDTH = MAX_CAPTURE_WIDTH * 2
         private const val TARGET_JPEG_BYTES = 1_050_000
-
-        // Une capture locale reste disponible assez longtemps pour permettre
-        // une analyse différée lorsque le PC/serveur vision est hors ligne.
-        private const val CAPTURE_TTL_MS = 24L * 60L * 60L * 1_000L
 
         // Les fichiers temporaires ne doivent pas rester indéfiniment après
         // une interruption de processus pendant une sauvegarde.
         private const val TEMP_FILE_TTL_MS = 5L * 60L * 1_000L
+
+        private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
+        private const val CAPTURE_KEY_ALIAS = "jade_screen_capture_aes_v1"
+        private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val GCM_TAG_BITS = 128
+        private val ENCRYPTED_MAGIC = byteArrayOf(
+            'J'.code.toByte(),
+            'G'.code.toByte(),
+            'E'.code.toByte(),
+            '1'.code.toByte()
+        )
     }
 
     private val appContext = context.applicationContext
@@ -44,6 +59,7 @@ class ScreenObserverRepository(context: Context) {
     init {
         purgeExpiredCapture()
         cleanupTemporaryFiles()
+        scheduleExistingCaptureExpiry()
     }
 
     fun latestCaptureTimestamp(): Long =
@@ -55,8 +71,10 @@ class ScreenObserverRepository(context: Context) {
     }
 
     fun latestBitmap(): Bitmap? =
-        latestImageFile()?.let { file ->
-            runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+        latestFrame()?.bytes?.let { bytes ->
+            runCatching {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }.getOrNull()
         }
 
     fun latestSource(): String {
@@ -76,8 +94,16 @@ class ScreenObserverRepository(context: Context) {
         purgeExpiredCapture()
         if (!latestFile.isFile) return null
 
-        val bytes = runCatching { latestFile.readBytes() }.getOrNull()
+        val storedBytes = runCatching { latestFile.readBytes() }.getOrNull()
             ?: return null
+        if (storedBytes.isEmpty()) return null
+
+        val bytes = try {
+            decryptFromStorage(storedBytes)
+        } catch (_: Exception) {
+            deleteCaptureFiles()
+            return null
+        }
         if (bytes.isEmpty()) return null
 
         val currentSha256 = sha256(bytes)
@@ -141,30 +167,41 @@ class ScreenObserverRepository(context: Context) {
         cleanupTemporaryFiles()
 
         val normalized = normalizeWidth(bitmap)
-        val encoded = encodeBoundedJpeg(normalized)
-        if (normalized !== bitmap) normalized.recycle()
+        val encoded = try {
+            encodeBoundedJpeg(normalized)
+        } finally {
+            if (normalized !== bitmap) normalized.recycle()
+        }
 
         val capturedAt = System.currentTimeMillis()
         val imageSha256 = sha256(encoded)
         val cleanSource = source.trim().ifBlank { "unknown_image" }
         val cleanFocus = focusInstruction.trim().take(1_200)
+        val encryptedImage = encryptForStorage(encoded)
+        val metadataJson = JSONObject().apply {
+            put("source", cleanSource)
+            put("focus_instruction", cleanFocus)
+            put("captured_at", capturedAt)
+            put("image_sha256", imageSha256)
+            put("storage_encrypted", true)
+            put("storage_format", "AES_GCM_V1")
+        }.toString()
+        val encryptedMetadata = encryptForStorage(
+            metadataJson.toByteArray(Charsets.UTF_8)
+        )
 
         runCatching { tempImageFile.delete() }
         runCatching { tempMetadataFile.delete() }
 
         FileOutputStream(tempImageFile).use { stream ->
-            stream.write(encoded)
+            stream.write(encryptedImage)
             stream.flush()
         }
 
-        tempMetadataFile.writeText(
-            JSONObject().apply {
-                put("source", cleanSource)
-                put("focus_instruction", cleanFocus)
-                put("captured_at", capturedAt)
-                put("image_sha256", imageSha256)
-            }.toString()
-        )
+        FileOutputStream(tempMetadataFile).use { stream ->
+            stream.write(encryptedMetadata)
+            stream.flush()
+        }
 
         if (latestFile.exists()) {
             check(latestFile.delete()) {
@@ -184,6 +221,8 @@ class ScreenObserverRepository(context: Context) {
         }
 
         latestFile.setLastModified(capturedAt)
+        metadataFile.takeIf { it.isFile }?.setLastModified(capturedAt)
+        ScreenCaptureRetention.schedule(appContext)
 
         return ScreenFrame(
             bytes = encoded,
@@ -195,9 +234,11 @@ class ScreenObserverRepository(context: Context) {
     }
 
     fun importSharedImage(uri: Uri): ScreenFrame {
-        val bitmap = appContext.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input)
-        } ?: error("Impossible de lire l'image partagée.")
+        require(uri.scheme.equals("content", ignoreCase = true)) {
+            "Jade accepte uniquement les images partagées via content://."
+        }
+
+        val bitmap = decodeSharedImage(uri)
 
         return try {
             saveBitmap(
@@ -224,10 +265,13 @@ class ScreenObserverRepository(context: Context) {
         purgeExpiredCapture()
         if (!latestFile.isFile) return false
 
-        val currentBytes = runCatching { latestFile.readBytes() }.getOrNull()
+        val storedBytes = runCatching { latestFile.readBytes() }.getOrNull()
             ?: return false
-        if (currentBytes.isEmpty()) return false
+        if (storedBytes.isEmpty()) return false
 
+        val currentBytes = runCatching {
+            decryptFromStorage(storedBytes)
+        }.getOrNull() ?: return false
         val currentSha256 = sha256(currentBytes)
         if (currentSha256 != expected) return false
 
@@ -235,8 +279,8 @@ class ScreenObserverRepository(context: Context) {
     }
 
     /**
-     * TTL opportuniste : la capture est purgée dès qu'un composant Jade
-     * réaccède au repository après 24 h.
+     * Garde-fou opportuniste en complément du Worker planifié : tout accès
+     * au repository purge aussi immédiatement une capture âgée de 24 h.
      */
     fun purgeExpiredCapture(now: Long = System.currentTimeMillis()): Boolean {
         if (!latestFile.isFile) {
@@ -254,9 +298,30 @@ class ScreenObserverRepository(context: Context) {
         if (capturedAt <= 0L) return false
 
         val ageMs = now - capturedAt
-        if (ageMs < 0L || ageMs < CAPTURE_TTL_MS) return false
+        if (
+            ageMs < 0L ||
+            ageMs < ScreenCaptureRetention.CAPTURE_TTL_MS
+        ) {
+            return false
+        }
 
         return deleteCaptureFiles()
+    }
+
+    private fun scheduleExistingCaptureExpiry(now: Long = System.currentTimeMillis()) {
+        if (!latestFile.isFile) return
+
+        val metadata = readMetadata()
+        val capturedAt = metadata.optLong("captured_at", latestFile.lastModified())
+            .takeIf { it > 0L }
+            ?: latestFile.lastModified()
+        if (capturedAt <= 0L) return
+
+        val ageMs = (now - capturedAt).coerceAtLeast(0L)
+        val remainingMs = (
+            ScreenCaptureRetention.CAPTURE_TTL_MS - ageMs
+        ).coerceAtLeast(0L)
+        ScreenCaptureRetention.schedule(appContext, remainingMs)
     }
 
     private fun deleteCaptureFiles(): Boolean {
@@ -279,6 +344,31 @@ class ScreenObserverRepository(context: Context) {
                 runCatching { file.delete() }
             }
         }
+    }
+
+    private fun decodeSharedImage(uri: Uri): Bitmap {
+        val bounds = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        appContext.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        } ?: error("Impossible de lire l'image partagée.")
+
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) {
+            "Le fichier partagé n'est pas une image décodable."
+        }
+
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > MAX_IMPORT_DECODE_WIDTH) {
+            sampleSize *= 2
+        }
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+        }
+        return appContext.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, options)
+        } ?: error("Impossible de décoder l'image partagée.")
     }
 
     private fun normalizeWidth(bitmap: Bitmap): Bitmap {
@@ -307,15 +397,16 @@ class ScreenObserverRepository(context: Context) {
 
             widths.forEach { targetWidth ->
                 if (working.width != targetWidth) {
-                    if (ownsWorking) working.recycle()
-
-                    val ratio = targetWidth.toDouble() / working.width.toDouble()
-                    working = Bitmap.createScaledBitmap(
-                        working,
+                    val previous = working
+                    val ratio = targetWidth.toDouble() / previous.width.toDouble()
+                    val scaled = Bitmap.createScaledBitmap(
+                        previous,
                         targetWidth,
-                        (working.height * ratio).roundToInt().coerceAtLeast(1),
+                        (previous.height * ratio).roundToInt().coerceAtLeast(1),
                         true
                     )
+                    if (ownsWorking) previous.recycle()
+                    working = scaled
                     ownsWorking = true
                 }
 
@@ -345,8 +436,91 @@ class ScreenObserverRepository(context: Context) {
 
     private fun readMetadata(): JSONObject = runCatching {
         if (!metadataFile.isFile) return@runCatching JSONObject()
-        JSONObject(metadataFile.readText())
+        val stored = metadataFile.readBytes()
+        if (stored.isEmpty()) return@runCatching JSONObject()
+        val clear = decryptFromStorage(stored)
+        JSONObject(clear.toString(Charsets.UTF_8))
     }.getOrDefault(JSONObject())
+
+    private fun encryptForStorage(clear: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, captureKey())
+        val iv = cipher.iv
+        require(iv.isNotEmpty() && iv.size <= 255) {
+            "IV de chiffrement invalide."
+        }
+        val encrypted = cipher.doFinal(clear)
+
+        return ByteArrayOutputStream(
+            ENCRYPTED_MAGIC.size + 1 + iv.size + encrypted.size
+        ).apply {
+            write(ENCRYPTED_MAGIC)
+            write(iv.size)
+            write(iv)
+            write(encrypted)
+        }.toByteArray()
+    }
+
+    private fun decryptFromStorage(stored: ByteArray): ByteArray {
+        if (!hasEncryptedMagic(stored)) {
+            // Compatibilité avec les captures créées avant le chiffrement.
+            return stored
+        }
+
+        require(stored.size > ENCRYPTED_MAGIC.size + 1) {
+            "Capture chiffrée tronquée."
+        }
+        val ivLength = stored[ENCRYPTED_MAGIC.size].toInt() and 0xff
+        require(ivLength in 8..32) {
+            "IV de capture invalide."
+        }
+        val ivStart = ENCRYPTED_MAGIC.size + 1
+        val cipherStart = ivStart + ivLength
+        require(cipherStart < stored.size) {
+            "Capture chiffrée incomplète."
+        }
+
+        val iv = stored.copyOfRange(ivStart, cipherStart)
+        val encrypted = stored.copyOfRange(cipherStart, stored.size)
+        val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            captureKey(),
+            GCMParameterSpec(GCM_TAG_BITS, iv)
+        )
+        return cipher.doFinal(encrypted)
+    }
+
+    private fun hasEncryptedMagic(value: ByteArray): Boolean =
+        value.size >= ENCRYPTED_MAGIC.size &&
+            value.copyOfRange(0, ENCRYPTED_MAGIC.size)
+                .contentEquals(ENCRYPTED_MAGIC)
+
+    private fun captureKey(): SecretKey = synchronized(ScreenObserverRepository::class.java) {
+        val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply {
+            load(null)
+        }
+        val existing = keyStore.getKey(CAPTURE_KEY_ALIAS, null) as? SecretKey
+        if (existing != null) {
+            return@synchronized existing
+        }
+
+        val generator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            KEYSTORE_PROVIDER
+        )
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                CAPTURE_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .build()
+        )
+        generator.generateKey()
+    }
 
     private fun sha256(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256")

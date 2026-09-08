@@ -110,14 +110,18 @@ class TaskQueue(context: Context) {
     private fun recoverInterrupted() {
         val now = System.currentTimeMillis()
         val recovered = load().map { item ->
-            if (item.status == QueueTaskStatus.RUNNING) {
-                item.copy(
+            when (item.status) {
+                QueueTaskStatus.PENDING -> item.copy(
+                    status = QueueTaskStatus.FAILED,
+                    error = "Tâche interrompue avant démarrage confirmé.",
+                    updatedAt = now
+                )
+                QueueTaskStatus.RUNNING -> item.copy(
                     status = QueueTaskStatus.FAILED,
                     error = "Exécution interrompue avant confirmation.",
                     updatedAt = now
                 )
-            } else {
-                item
+                else -> item
             }
         }
         save(recovered)

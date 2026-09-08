@@ -120,6 +120,34 @@ class HardeningRegressionTest {
     }
 
     @Test
+    fun resourceGovernorDoesNotTreatUnknownBatteryAsZeroPercent() {
+        val budget = ResourceGovernor().evaluate(
+            healthyDevice(
+                batteryPercent = -1,
+                charging = false
+            )
+        )
+
+        assertEquals(ResourceMode.BALANCED, budget.mode)
+        assertFalse(budget.preferRemoteCompute)
+    }
+
+    @Test
+    fun resourceGovernorDoesNotForceEcoWithNineGbFreeOnLargeStorage() {
+        val budget = ResourceGovernor().evaluate(
+            healthyDevice(
+                batteryPercent = 90,
+                charging = true,
+                storageTotalGb = 512.0,
+                storageFreeGb = 9.0
+            )
+        )
+
+        assertEquals(ResourceMode.PERFORMANCE, budget.mode)
+        assertFalse(budget.preferRemoteCompute)
+    }
+
+    @Test
     fun resourceGovernorEntersPerformanceModeOnlyWithHealthyChargingDevice() {
         val budget = ResourceGovernor().evaluate(
             healthyDevice(
@@ -151,7 +179,9 @@ class HardeningRegressionTest {
         processHeapMaxMb: Double = 512.0,
         thermalStatus: String = "NONE",
         powerSaveMode: Boolean = false,
-        ramLow: Boolean = false
+        ramLow: Boolean = false,
+        storageTotalGb: Double = 128.0,
+        storageFreeGb: Double = 64.0
     ): DeviceProfile = DeviceProfile(
         manufacturer = "Google",
         model = "Pixel Test",
@@ -168,8 +198,8 @@ class HardeningRegressionTest {
         appMemoryClassMb = 512,
         processHeapUsedMb = processHeapUsedMb,
         processHeapMaxMb = processHeapMaxMb,
-        storageTotalGb = 128.0,
-        storageFreeGb = 64.0,
+        storageTotalGb = storageTotalGb,
+        storageFreeGb = storageFreeGb,
         batteryPercent = batteryPercent,
         charging = charging,
         powerSaveMode = powerSaveMode,

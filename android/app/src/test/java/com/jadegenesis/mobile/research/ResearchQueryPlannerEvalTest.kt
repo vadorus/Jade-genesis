@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.research
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -70,6 +71,33 @@ class ResearchQueryPlannerEvalTest {
                 "$BASELINE_SCORE.\n$report",
             overallScore + EPSILON >= BASELINE_SCORE
         )
+    }
+
+    @Test
+    fun githubTargetExtractionRejectsSourcePathsAndDates() {
+        val engine = ResearchEngine()
+        val targets = engine.extractGithubRepositories(
+            """
+                Visible : app/build.gradle.kts dans un projet Android.
+                Visible : mise à jour prévue le 24/09.
+                Visible : dépôt GitHub ouvert dans l'IDE.
+            """.trimIndent()
+        )
+
+        assertTrue(targets.isEmpty())
+    }
+
+    @Test
+    fun githubTargetExtractionKeepsRealRepositoryPair() {
+        val engine = ResearchEngine()
+        val targets = engine.extractGithubRepositories(
+            """
+                Visible : .github/workflows/jade-android-ci.yml
+                Visible : vadorus/Jade-genesis
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("vadorus/Jade-genesis"), targets.map { it.canonical })
     }
 
     private fun evaluate(

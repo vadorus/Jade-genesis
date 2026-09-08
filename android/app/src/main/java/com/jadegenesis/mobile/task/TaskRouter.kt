@@ -13,6 +13,7 @@ import com.jadegenesis.mobile.model.TaskExecutionLocation
 import com.jadegenesis.mobile.model.TaskStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -290,6 +291,17 @@ class TaskRouter(
                         )
                     )
                 }
+            }
+
+            val cancellation = attempt.exceptionOrNull()
+            if (cancellation is CancellationException) {
+                queue.markFailed(
+                    taskId = request.taskId,
+                    nodeName = node.name,
+                    attempts = index + 1,
+                    error = "Tâche annulée."
+                )
+                throw cancellation
             }
 
             attempt.getOrNull()?.let { (output, elapsed, executedNode) ->

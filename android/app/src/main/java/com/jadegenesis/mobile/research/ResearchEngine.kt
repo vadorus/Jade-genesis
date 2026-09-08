@@ -5,6 +5,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -110,6 +112,10 @@ data class ResearchReport(
 }
 
 class ResearchEngine {
+
+    private companion object {
+        const val MAX_HTTP_RESPONSE_BYTES = 2 * 1024 * 1024
+    }
 
     suspend fun investigate(
         observation: String,
@@ -280,23 +286,45 @@ class ResearchEngine {
             addGithubTarget(output, owner, repository)
         }
 
-        if (safeText.contains("github", ignoreCase = true)) {
+        if (looksLikeGithubContext(safeText)) {
             val pairRegex = Regex(
                 """\b([A-Za-z0-9](?:[A-Za-z0-9-]{1,38}))\s*/\s*([A-Za-z0-9_.-]{2,100})\b"""
             )
             pairRegex.findAll(safeText).forEach { match ->
                 val candidateOwner = match.groupValues[1]
                 val candidateRepo = match.groupValues[2]
-                if (
-                    candidateOwner.lowercase() !in setOf("http", "https", "github", "com", "www") &&
-                    candidateRepo.lowercase() !in setOf("workflows", "issues", "pulls", "actions")
-                ) {
+                if (isPlausibleBareGithubPair(candidateOwner, candidateRepo)) {
                     addGithubTarget(output, candidateOwner, candidateRepo)
                 }
             }
         }
 
         return output.distinctBy { it.canonical.lowercase() }.take(4)
+    }
+
+    private fun isPlausibleBareGithubPair(owner: String, repository: String): Boolean {
+        val ownerLower = owner.lowercase()
+        val repositoryLower = repository.lowercase()
+        if (owner.all(Char::isDigit) || repository.all(Char::isDigit)) return false
+        if (
+            ownerLower in setOf(
+                "http", "https", "github", "com", "www", "app", "src",
+                "android", "build", "gradle", "workflows", "issues", "pulls", "actions"
+            )
+        ) {
+            return false
+        }
+        if (
+            repositoryLower in setOf("workflows", "issues", "pulls", "actions", "src", "app", "build")
+        ) {
+            return false
+        }
+        val fileSuffixes = listOf(
+            ".kt", ".kts", ".java", ".py", ".js", ".ts", ".tsx", ".jsx",
+            ".json", ".xml", ".yml", ".yaml", ".toml", ".gradle", ".properties"
+        )
+        if (fileSuffixes.any(repositoryLower::endsWith)) return false
+        return true
     }
 
     private fun addGithubTarget(
@@ -609,12 +637,30 @@ class ResearchEngine {
             )
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val body = stream?.use { input ->
+                readBoundedUtf8(input, MAX_HTTP_RESPONSE_BYTES)
+            }.orEmpty()
             if (code !in 200..299) error("HTTP $code ${body.take(120)}")
             body
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun readBoundedUtf8(stream: InputStream, maxBytes: Int): String {
+        val output = ByteArrayOutputStream(minOf(maxBytes, 16 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        var total = 0
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > maxBytes) {
+                error("Réponse de recherche trop volumineuse : limite $maxBytes octets dépassée.")
+            }
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray().toString(Charsets.UTF_8)
     }
 
     private fun cleanObservationLine(value: String): String =

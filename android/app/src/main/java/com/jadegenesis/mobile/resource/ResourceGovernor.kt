@@ -24,16 +24,21 @@ class ResourceGovernor {
         }
 
         val thermalRank = thermalRank(device.thermalStatus)
+        val batteryKnown = device.batteryPercent in 0..100
 
         val storageLowThresholdGb =
-            max(1.0, device.storageTotalGb * 0.02)
+            max(1.0, min(4.0, device.storageTotalGb * 0.01))
 
         val critical =
             device.ramLow ||
                 ramRatio <= 0.10 ||
                 heapRatio >= 0.90 ||
                 thermalRank >= 3 ||
-                (!device.charging && device.batteryPercent <= 8) ||
+                (
+                    batteryKnown &&
+                        !device.charging &&
+                        device.batteryPercent <= 8
+                    ) ||
                 device.storageFreeGb < 0.75
 
         val eco =
@@ -41,11 +46,16 @@ class ResourceGovernor {
                 ramRatio <= 0.22 ||
                 heapRatio >= 0.75 ||
                 thermalRank >= 2 ||
-                (!device.charging && device.batteryPercent <= 25) ||
+                (
+                    batteryKnown &&
+                        !device.charging &&
+                        device.batteryPercent <= 25
+                    ) ||
                 device.storageFreeGb < storageLowThresholdGb
 
         val performance =
             device.charging &&
+                batteryKnown &&
                 device.batteryPercent >= 60 &&
                 ramRatio >= 0.35 &&
                 heapRatio < 0.60 &&
@@ -164,7 +174,10 @@ class ResourceGovernor {
                     "${(heapRatio * 100.0).roundToInt()}%."
         }
 
-        if (!device.charging && device.batteryPercent <= 25) {
+        if (
+            device.batteryPercent in 0..25 &&
+            !device.charging
+        ) {
             reasons +=
                 "Batterie limitée (${device.batteryPercent}%) sans chargeur."
         }

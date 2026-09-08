@@ -40,8 +40,15 @@ class ToolLab(context: Context) {
         }
 
         val permissions = stringList(json.optJSONArray("permissions"), 24, 80)
+        val staticWarnings = staticWarnings(language, sourceCode, permissions)
+        val warnings = if (staticWarnings.isEmpty()) {
+            listOf(
+                "Scan statique limité : aucun motif connu détecté, mais aucune validation d'exécution n'a été effectuée."
+            )
+        } else {
+            staticWarnings
+        }
         val tests = stringList(json.optJSONArray("tests"), 20, 500)
-        val warnings = staticWarnings(language, sourceCode, permissions)
         val now = System.currentTimeMillis()
         val candidate = ToolCandidateSnapshot(
             id = "tool-${UUID.randomUUID()}",
@@ -51,11 +58,7 @@ class ToolLab(context: Context) {
             permissions = permissions,
             sourceCode = sourceCode,
             tests = tests,
-            status = if (warnings.isEmpty()) {
-                "CANDIDATE_STATIC_OK"
-            } else {
-                "CANDIDATE_REVIEW_REQUIRED"
-            },
+            status = "CANDIDATE_REVIEW_REQUIRED",
             validationWarnings = warnings,
             sourceSha256 = sha256(sourceCode),
             generator = generator.take(120),

@@ -6,6 +6,7 @@ import com.jadegenesis.mobile.model.DiagnosticLogEntry
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -23,6 +24,7 @@ class DiagnosticLogger(context: Context) {
     companion object {
         private const val MAX_LOG_BYTES = 1_500_000L
         private const val MAX_ROTATED_FILES = 3
+        private const val MAX_EXPORTED_BUNDLES = 4
         private const val KEY_DEBUG = "debug_enabled"
     }
 
@@ -75,8 +77,7 @@ class DiagnosticLogger(context: Context) {
         if (!currentLog.exists()) return emptyList()
 
         return runCatching {
-            currentLog.readLines(Charsets.UTF_8)
-                .takeLast(safeLimit)
+            tailLines(currentLog, safeLimit)
                 .mapNotNull { line ->
                     runCatching {
                         val json = JSONObject(line)
@@ -109,6 +110,7 @@ class DiagnosticLogger(context: Context) {
 
     @Synchronized
     fun exportBundle(summaryJson: String): String {
+        pruneOldBundles()
         val output = File(
             directory,
             "Jade-Diagnostic-${System.currentTimeMillis()}.zip"
@@ -135,6 +137,47 @@ class DiagnosticLogger(context: Context) {
             zip.closeEntry()
         }
         return output.absolutePath
+    }
+
+    private fun tailLines(file: File, limit: Int): List<String> {
+        if (limit <= 0 || !file.isFile || file.length() == 0L) return emptyList()
+
+        RandomAccessFile(file, "r").use { raf ->
+            var position = raf.length() - 1L
+            val lines = ArrayList<String>(limit)
+            val current = StringBuilder()
+
+            while (position >= 0L && lines.size < limit) {
+                raf.seek(position)
+                val value = raf.read()
+                if (value == '\n'.code) {
+                    if (current.isNotEmpty()) {
+                        lines += current.reverse().toString()
+                        current.setLength(0)
+                    }
+                } else if (value != '\r'.code) {
+                    current.append(value.toChar())
+                }
+                position -= 1L
+            }
+
+            if (current.isNotEmpty() && lines.size < limit) {
+                lines += current.reverse().toString()
+            }
+            return lines
+        }
+    }
+
+    private fun pruneOldBundles() {
+        val bundles = directory.listFiles { file ->
+            file.isFile &&
+                file.name.startsWith("Jade-Diagnostic-") &&
+                file.name.endsWith(".zip")
+        }?.sortedByDescending { it.lastModified() }.orEmpty()
+
+        bundles.drop(MAX_EXPORTED_BUNDLES - 1).forEach { file ->
+            runCatching { file.delete() }
+        }
     }
 
     private fun rotateIfNeeded() {

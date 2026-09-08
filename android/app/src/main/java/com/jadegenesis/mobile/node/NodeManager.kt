@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.node
 
 import android.content.Context
+import com.jadegenesis.mobile.BuildConfig
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.model.DeviceProfile
@@ -15,13 +16,19 @@ import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.NodeTaskResponse
 import com.jadegenesis.mobile.model.ResourceBudget
 import com.jadegenesis.mobile.model.TaskWorkload
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -39,12 +46,15 @@ class NodeManager(
 
     companion object {
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
+        private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
         private const val KEY_REMOTE_NODES_V1 = "remote_nodes_v1"
         private const val PROTOCOL = "jade-genesis-node/0.0.6"
         private const val LEGACY_PROTOCOL_005 = "jade-genesis-node/0.0.5"
         private const val LEGACY_PROTOCOL_004 = "jade-genesis-node/0.0.4"
         private const val DEFAULT_PORT = 8765
         private const val MAX_PAYLOAD_CHARS = 2_500_000
+        private const val MAX_HEALTH_RESPONSE_BYTES = 256 * 1024
+        private const val MAX_TASK_RESPONSE_BYTES = 4 * 1024 * 1024
         private const val NODE_STALE_MS = 90_000L
         private const val ASYNC_TASK_TIMEOUT_MS = 180_000L
         private const val ASYNC_POLL_MS = 900L
@@ -190,7 +200,7 @@ class NodeManager(
             "shared_image_input_v1"
         ),
         lastSeenAt = System.currentTimeMillis(),
-        runtimeVersion = "0.1.4",
+        runtimeVersion = BuildConfig.VERSION_NAME,
         runtimeChannel = "android"
     )
 
@@ -219,94 +229,113 @@ class NodeManager(
         host: String,
         port: Int,
         token: String
-    ): GenesisNode = registryMutex.withLock {
+    ): GenesisNode {
         val cleanHost = normalizeHost(host)
         require(cleanHost.isNotBlank()) { "Adresse du nœud vide." }
         require(port in 1..65535) { "Port invalide." }
         require(token.isNotBlank()) { "Jeton du Node Runtime vide." }
+        require(classifyRoute(cleanHost) == NodeRouteKind.TAILSCALE) {
+            "Jade 0.1.6.1 exige une adresse Tailscale (100.64.0.0/10 ou *.ts.net) pour protéger le jeton et les données du nœud."
+        }
 
-        val existingNodes = loadStoredNodesUnsafe().toMutableList()
-        val routeOwner = existingNodes.firstOrNull { node ->
-            node.routes.any {
+        val preparation = registryMutex.withLock {
+            val existingNodes = loadStoredNodesUnsafe()
+            val routeOwner = existingNodes.firstOrNull { node ->
+                node.routes.any {
+                    it.host.equals(cleanHost, ignoreCase = true) && it.port == port
+                }
+            }
+            val existingRoute = routeOwner?.routes?.firstOrNull {
                 it.host.equals(cleanHost, ignoreCase = true) && it.port == port
             }
-        }
-        val existingRoute = routeOwner?.routes?.firstOrNull {
-            it.host.equals(cleanHost, ignoreCase = true) && it.port == port
-        }
-        val route = existingRoute?.copy(
-            status = NodeRouteStatus.UNKNOWN,
-            lastError = null
-        ) ?: StoredRoute(
-            routeId = "route-${UUID.randomUUID()}",
-            kind = classifyRoute(cleanHost),
-            host = cleanHost,
-            port = port,
-            status = NodeRouteStatus.UNKNOWN,
-            latencyMs = null,
-            lastSeenAt = 0L,
-            lastError = null
-        )
-
-        val draft = routeOwner?.copy(
-            token = token.trim(),
-            routes = routeOwner.routes.map {
-                if (it.routeId == route.routeId) route else it
-            }
-        ) ?: StoredNode(
-            nodeId = "remote-${UUID.randomUUID()}",
-            name = "Nœud Genesis",
-            kind = NodeKind.UNKNOWN,
-            token = token.trim(),
-            protocol = "",
-            status = NodeStatus.UNKNOWN,
-            osName = "",
-            cpuName = "",
-            cpuCores = 0,
-            ramTotalGb = 0.0,
-            ramAvailableGb = 0.0,
-            storageFreeGb = 0.0,
-            capabilities = emptyList(),
-            lastSeenAt = 0L,
-            lastError = null,
-            routes = listOf(route),
-            activeRouteId = route.routeId,
-            runtimeVersion = "",
-            runtimeChannel = "",
-            brainBackend = "",
-            brainModel = ""
-        )
-
-        val probed = probeNode(draft)
-        val remoteId = probed.nodeId
-        val sameIdentity = existingNodes.firstOrNull {
-            it.nodeId == remoteId && it !== routeOwner
-        }
-
-        val merged = if (sameIdentity != null) {
-            val mergedRoutes = (sameIdentity.routes + probed.routes)
-                .distinctBy { "${it.host.lowercase()}:${it.port}" }
-            probed.copy(
-                routes = mergedRoutes,
-                token = token.trim(),
-                activeRouteId = probed.activeRouteId ?: sameIdentity.activeRouteId
+            val route = existingRoute?.copy(
+                status = NodeRouteStatus.UNKNOWN,
+                lastError = null
+            ) ?: StoredRoute(
+                routeId = "route-${UUID.randomUUID()}",
+                kind = NodeRouteKind.TAILSCALE,
+                host = cleanHost,
+                port = port,
+                status = NodeRouteStatus.UNKNOWN,
+                latencyMs = null,
+                lastSeenAt = 0L,
+                lastError = null
             )
-        } else {
-            probed
+
+            val draft = routeOwner?.copy(
+                token = token.trim(),
+                routes = routeOwner.routes.map {
+                    if (it.routeId == route.routeId) route else it
+                }
+            ) ?: StoredNode(
+                nodeId = "remote-${UUID.randomUUID()}",
+                name = "Nœud Genesis",
+                kind = NodeKind.UNKNOWN,
+                token = token.trim(),
+                protocol = "",
+                status = NodeStatus.UNKNOWN,
+                osName = "",
+                cpuName = "",
+                cpuCores = 0,
+                ramTotalGb = 0.0,
+                ramAvailableGb = 0.0,
+                storageFreeGb = 0.0,
+                capabilities = emptyList(),
+                lastSeenAt = 0L,
+                lastError = null,
+                routes = listOf(route),
+                activeRouteId = route.routeId,
+                runtimeVersion = "",
+                runtimeChannel = "",
+                brainBackend = "",
+                brainModel = ""
+            )
+
+            draft to (routeOwner == null)
         }
 
-        existingNodes.removeAll { existing ->
-            existing === routeOwner ||
-                existing.nodeId == merged.nodeId ||
-                existing.routes.any { oldRoute ->
-                    merged.routes.any {
-                        it.host.equals(oldRoute.host, ignoreCase = true) &&
-                            it.port == oldRoute.port
-                    }
+        val probed = probeNode(
+            node = preparation.first,
+            allowIdentityBinding = preparation.second
+        )
+
+        val merged = registryMutex.withLock {
+            val existingNodes = loadStoredNodesUnsafe().toMutableList()
+            val routeOwner = existingNodes.firstOrNull { node ->
+                node.routes.any {
+                    it.host.equals(cleanHost, ignoreCase = true) && it.port == port
                 }
+            }
+            val sameIdentity = existingNodes.firstOrNull {
+                it.nodeId == probed.nodeId && it !== routeOwner
+            }
+
+            val mergedNode = if (sameIdentity != null) {
+                val mergedRoutes = (sameIdentity.routes + probed.routes)
+                    .distinctBy { "${it.host.lowercase()}:${it.port}" }
+                probed.copy(
+                    routes = mergedRoutes,
+                    token = token.trim(),
+                    activeRouteId = probed.activeRouteId ?: sameIdentity.activeRouteId
+                )
+            } else {
+                probed
+            }
+
+            existingNodes.removeAll { existing ->
+                existing === routeOwner ||
+                    existing.nodeId == mergedNode.nodeId ||
+                    existing.routes.any { oldRoute ->
+                        mergedNode.routes.any {
+                            it.host.equals(oldRoute.host, ignoreCase = true) &&
+                                it.port == oldRoute.port
+                        }
+                    }
+            }
+            existingNodes.add(mergedNode)
+            saveStoredNodesUnsafe(existingNodes)
+            mergedNode
         }
-        existingNodes.add(merged)
-        saveStoredNodesUnsafe(existingNodes)
 
         logger?.log(
             if (merged.status == NodeStatus.ONLINE) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
@@ -320,7 +349,7 @@ class NodeManager(
             )
         )
 
-        currentPublicNode(merged)
+        return currentPublicNode(merged)
     }
 
     suspend fun registerPcNode(
@@ -329,12 +358,31 @@ class NodeManager(
         token: String
     ): GenesisNode = registerNode(host, port, token)
 
-    suspend fun refreshRemoteNodes(): List<GenesisNode> = registryMutex.withLock {
-        val current = loadStoredNodesUnsafe()
-        val refreshed = current.map { node -> probeNode(node) }
-        val normalized = deduplicateStoredNodes(refreshed)
-        saveStoredNodesUnsafe(normalized)
-        normalized.map { currentPublicNode(it) }
+    suspend fun refreshRemoteNodes(): List<GenesisNode> {
+        val current = registryMutex.withLock {
+            loadStoredNodesUnsafe()
+        }
+        val refreshed = coroutineScope {
+            current.map { node ->
+                async(Dispatchers.IO) { probeNode(node) }
+            }.awaitAll()
+        }
+
+        return registryMutex.withLock {
+            val latest = loadStoredNodesUnsafe()
+            val refreshedById = refreshed.associateBy { it.nodeId }
+            val merged = buildList {
+                latest.forEach { node ->
+                    add(refreshedById[node.nodeId] ?: node)
+                }
+                refreshed.forEach { node ->
+                    if (latest.none { it.nodeId == node.nodeId }) add(node)
+                }
+            }
+            val normalized = deduplicateStoredNodes(merged)
+            saveStoredNodesUnsafe(normalized)
+            normalized.map { currentPublicNode(it) }
+        }
     }
 
     fun preferredComputeNode(
@@ -379,16 +427,21 @@ class NodeManager(
         }
 
         if (node.status != NodeStatus.ONLINE || routeCandidates(node).isEmpty()) {
-            node = registryMutex.withLock {
-                val latest = loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId }
+            val latest = registryMutex.withLock {
+                loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId }
                     ?: error("Nœud distant inconnu : $nodeId")
-                val probed = probeNode(latest)
-                replaceStoredNodeUnsafe(probed)
-                probed
             }
+            val probed = probeNode(latest)
+            registryMutex.withLock {
+                replaceStoredNodeUnsafe(probed)
+            }
+            node = probed
         }
         if (node.status != NodeStatus.ONLINE) {
             error("Le nœud ${node.name} n'est pas en ligne.")
+        }
+        if (routeCandidates(node).isEmpty()) {
+            error("Le nœud ${node.name} n'a aucune route Tailscale autorisée.")
         }
         if ("task_execution_v3" !in node.capabilities) {
             error("Le nœud ${node.name} n'annonce pas task_execution_v3.")
@@ -427,7 +480,7 @@ class NodeManager(
         for (route in routeCandidates(node)) {
             val attempt = runCatching {
                 executeSyncOnRoute(node, route, request)
-            }
+            }.rethrowCancellation()
             attempt.getOrNull()?.let { response ->
                 markActiveRoute(node.nodeId, route.routeId)
                 return response
@@ -494,7 +547,7 @@ class NodeManager(
                     connectTimeoutMs = 2_500,
                     readTimeoutMs = 5_000
                 )
-            }
+            }.rethrowCancellation()
             val pair = submission.getOrNull()
             if (pair != null && pair.first in listOf(200, 202)) {
                 val json = JSONObject(pair.second)
@@ -540,7 +593,7 @@ class NodeManager(
                         connectTimeoutMs = 2_500,
                         readTimeoutMs = 5_000
                     )
-                }
+                }.rethrowCancellation()
                 val pair = poll.getOrNull() ?: continue
                 anyRouteReached = true
                 if (pair.first != HttpURLConnection.HTTP_OK) continue
@@ -549,13 +602,18 @@ class NodeManager(
                 if (!json.optBoolean("success", false)) {
                     error(json.optString("error", "Échec de suivi de tâche."))
                 }
+                val responseNodeId = json.optString("node_id", node.nodeId)
+                    .ifBlank { node.nodeId }
+                if (responseNodeId != node.nodeId) {
+                    error("Le Node Runtime a changé d'identité pendant la tâche.")
+                }
                 when (json.optString("status").uppercase()) {
                     "COMPLETED" -> {
                         markActiveRoute(node.nodeId, route.routeId)
                         return NodeTaskResponse(
                             taskId = request.taskId,
                             taskKind = request.taskKind,
-                            nodeId = json.optString("node_id", node.nodeId),
+                            nodeId = node.nodeId,
                             nodeName = json.optString("node_name", node.name)
                                 .ifBlank { node.name },
                             output = json.getString("result"),
@@ -615,11 +673,16 @@ class NodeManager(
         if (json.optString("task_kind") != request.taskKind) {
             error("Le Node Runtime a renvoyé un autre type de tâche.")
         }
+        val responseNodeId = json.optString("node_id", node.nodeId)
+            .ifBlank { node.nodeId }
+        if (responseNodeId != node.nodeId) {
+            error("Le Node Runtime a renvoyé une identité différente du nœud appairé.")
+        }
 
         return NodeTaskResponse(
             taskId = request.taskId,
             taskKind = request.taskKind,
-            nodeId = json.optString("node_id", node.nodeId),
+            nodeId = node.nodeId,
             nodeName = json.optString("node_name", node.name).ifBlank { node.name },
             output = json.getString("result"),
             durationMs = json.optLong("duration_ms", 0L)
@@ -636,86 +699,124 @@ class NodeManager(
             put("iterations", request.iterations)
         }.toString().toByteArray(Charsets.UTF_8)
 
-    private suspend fun probeNode(node: StoredNode): StoredNode =
-        withContext(Dispatchers.IO) {
-            if (node.routes.isEmpty()) {
-                return@withContext node.copy(
-                    status = NodeStatus.OFFLINE,
-                    lastError = "Aucune route enregistrée."
-                )
-            }
-
-            val probes = node.routes.map { route -> probeRoute(node, route) }
-            val successful = probes.filter { it.json != null }
-            if (successful.isEmpty()) {
-                val unauthorized = probes.any { it.unauthorized }
-                val error = probes.mapNotNull { it.route.lastError }
-                    .distinct()
-                    .joinToString(" | ")
-                    .take(300)
-                val updated = node.copy(
-                    routes = probes.map { it.route },
-                    status = if (unauthorized) NodeStatus.ERROR else NodeStatus.OFFLINE,
-                    lastError = error.ifBlank { "Aucune route joignable." }
-                )
-                logger?.log(
-                    DiagnosticLevel.WARN,
-                    "node_probe_offline",
-                    "${node.name} n'est joignable par aucune route.",
-                    mapOf("node_id" to node.nodeId, "route_count" to node.routes.size)
-                )
-                return@withContext updated
-            }
-
-            val best = successful.minBy { probe ->
-                val latency = probe.route.latencyMs ?: Long.MAX_VALUE / 4
-                latency + when (probe.route.kind) {
-                    NodeRouteKind.LAN -> 0L
-                    NodeRouteKind.TAILSCALE -> 5L
-                    NodeRouteKind.MANUAL -> 10L
+    private suspend fun probeNode(
+        node: StoredNode,
+        allowIdentityBinding: Boolean = false
+    ): StoredNode = withContext(Dispatchers.IO) {
+        val secureRoutes = node.routes.filter { it.kind == NodeRouteKind.TAILSCALE }
+        if (secureRoutes.isEmpty()) {
+            return@withContext node.copy(
+                status = NodeStatus.ERROR,
+                lastError = "Aucune route Tailscale sécurisée enregistrée.",
+                routes = node.routes.map { route ->
+                    route.copy(
+                        status = NodeRouteStatus.ERROR,
+                        latencyMs = null,
+                        lastError = "Route désactivée : Tailscale requis."
+                    )
                 }
-            }
-            val json = best.json ?: JSONObject()
-            val protocol = json.optString("protocol")
-            val remoteId = json.optString("node_id", node.nodeId)
-                .ifBlank { node.nodeId }
-            val name = json.optString("name", node.name).ifBlank { node.name }
-            val updated = node.copy(
-                nodeId = remoteId,
-                name = name,
-                kind = parseKind(json.optString("kind", node.kind.name)),
-                protocol = protocol,
-                status = NodeStatus.ONLINE,
-                osName = json.optString("os", node.osName),
-                cpuName = json.optString("cpu", node.cpuName),
-                cpuCores = json.optInt("cpu_cores", node.cpuCores),
-                ramTotalGb = json.optDouble("ram_total_gb", node.ramTotalGb),
-                ramAvailableGb = json.optDouble("ram_available_gb", node.ramAvailableGb),
-                storageFreeGb = json.optDouble("storage_free_gb", node.storageFreeGb),
-                capabilities = parseStringArray(json.optJSONArray("capabilities")),
-                lastSeenAt = System.currentTimeMillis(),
-                lastError = null,
-                routes = probes.map { it.route },
-                activeRouteId = best.route.routeId,
-                runtimeVersion = json.optString("agent_version", node.runtimeVersion),
-                runtimeChannel = json.optString("runtime_channel", node.runtimeChannel),
-                brainBackend = json.optString("brain_backend", node.brainBackend),
-                brainModel = json.optString("brain_model", node.brainModel)
             )
+        }
 
+        val probes = secureRoutes.map { route -> probeRoute(node, route) }
+        val updatedRoutes = node.routes.map { original ->
+            probes.firstOrNull { it.route.routeId == original.routeId }?.route
+                ?: original.copy(
+                    status = NodeRouteStatus.ERROR,
+                    latencyMs = null,
+                    lastError = "Route désactivée : Tailscale requis."
+                )
+        }
+        val successful = probes.filter { it.json != null }
+        if (successful.isEmpty()) {
+            val unauthorized = probes.any { it.unauthorized }
+            val error = probes.mapNotNull { it.route.lastError }
+                .distinct()
+                .joinToString(" | ")
+                .take(300)
+            val updated = node.copy(
+                routes = updatedRoutes,
+                status = if (unauthorized) NodeStatus.ERROR else NodeStatus.OFFLINE,
+                lastError = error.ifBlank { "Aucune route Tailscale joignable." }
+            )
             logger?.log(
-                DiagnosticLevel.DEBUG,
-                "node_probe_online",
-                "${updated.name} joignable via ${best.route.kind}.",
+                DiagnosticLevel.WARN,
+                "node_probe_offline",
+                "${node.name} n'est joignable par aucune route Tailscale.",
+                mapOf("node_id" to node.nodeId, "route_count" to secureRoutes.size)
+            )
+            return@withContext updated
+        }
+
+        val best = successful.minBy { probe ->
+            probe.route.latencyMs ?: Long.MAX_VALUE / 4
+        }
+        val json = best.json ?: JSONObject()
+        val protocol = json.optString("protocol")
+        val advertisedId = json.optString("node_id").trim()
+        if (advertisedId.isBlank()) {
+            return@withContext node.copy(
+                routes = updatedRoutes,
+                status = NodeStatus.ERROR,
+                lastError = "Le Node Runtime n'annonce aucun node_id."
+            )
+        }
+        if (!allowIdentityBinding && advertisedId != node.nodeId) {
+            logger?.log(
+                DiagnosticLevel.WARN,
+                "node_identity_mismatch",
+                "Un nœud a annoncé une identité différente de celle appairée.",
                 mapOf(
-                    "node_id" to updated.nodeId,
-                    "latency_ms" to best.route.latencyMs,
-                    "route_kind" to best.route.kind.name,
-                    "runtime_version" to updated.runtimeVersion
+                    "expected_node_id" to node.nodeId,
+                    "advertised_node_id" to advertisedId,
+                    "route_kind" to best.route.kind.name
                 )
             )
-            updated
+            return@withContext node.copy(
+                routes = updatedRoutes,
+                status = NodeStatus.ERROR,
+                lastError = "Identité distante inattendue : appairage refusé."
+            )
         }
+
+        val boundNodeId = if (allowIdentityBinding) advertisedId else node.nodeId
+        val name = json.optString("name", node.name).ifBlank { node.name }
+        val updated = node.copy(
+            nodeId = boundNodeId,
+            name = name,
+            kind = parseKind(json.optString("kind", node.kind.name)),
+            protocol = protocol,
+            status = NodeStatus.ONLINE,
+            osName = json.optString("os", node.osName),
+            cpuName = json.optString("cpu", node.cpuName),
+            cpuCores = json.optInt("cpu_cores", node.cpuCores),
+            ramTotalGb = finiteDouble(json, "ram_total_gb", node.ramTotalGb),
+            ramAvailableGb = finiteDouble(json, "ram_available_gb", node.ramAvailableGb),
+            storageFreeGb = finiteDouble(json, "storage_free_gb", node.storageFreeGb),
+            capabilities = parseStringArray(json.optJSONArray("capabilities")),
+            lastSeenAt = System.currentTimeMillis(),
+            lastError = null,
+            routes = updatedRoutes,
+            activeRouteId = best.route.routeId,
+            runtimeVersion = json.optString("agent_version", node.runtimeVersion),
+            runtimeChannel = json.optString("runtime_channel", node.runtimeChannel),
+            brainBackend = json.optString("brain_backend", node.brainBackend),
+            brainModel = json.optString("brain_model", node.brainModel)
+        )
+
+        logger?.log(
+            DiagnosticLevel.DEBUG,
+            "node_probe_online",
+            "${updated.name} joignable via Tailscale.",
+            mapOf(
+                "node_id" to updated.nodeId,
+                "latency_ms" to best.route.latencyMs,
+                "route_kind" to best.route.kind.name,
+                "runtime_version" to updated.runtimeVersion
+            )
+        )
+        updated
+    }
 
     private fun probeRoute(node: StoredNode, route: StoredRoute): RouteProbe {
         val startedNs = System.nanoTime()
@@ -727,7 +828,8 @@ class NodeManager(
                 path = "/health",
                 requestBody = null,
                 connectTimeoutMs = 1_800,
-                readTimeoutMs = 2_800
+                readTimeoutMs = 2_800,
+                maxResponseBytes = MAX_HEALTH_RESPONSE_BYTES
             )
             val latency = (System.nanoTime() - startedNs) / 1_000_000L
             if (code == 401) {
@@ -788,8 +890,12 @@ class NodeManager(
         path: String,
         requestBody: ByteArray?,
         connectTimeoutMs: Int,
-        readTimeoutMs: Int
+        readTimeoutMs: Int,
+        maxResponseBytes: Int = MAX_TASK_RESPONSE_BYTES
     ): Pair<Int, String> {
+        require(route.kind == NodeRouteKind.TAILSCALE) {
+            "Transport refusé : Jade exige Tailscale pour les requêtes authentifiées."
+        }
         val connection = (
             URL("http://${route.host}:${route.port}$path")
                 .openConnection() as HttpURLConnection
@@ -817,31 +923,45 @@ class NodeManager(
             } else {
                 connection.errorStream
             }
-            val body = stream?.bufferedReader(Charsets.UTF_8)
-                ?.use { it.readText() }
-                .orEmpty()
+            val body = stream?.use { input ->
+                readBoundedUtf8(input, maxResponseBytes)
+            }.orEmpty()
             code to body
         } finally {
             connection.disconnect()
         }
     }
 
-    private fun routeCandidates(node: StoredNode): List<StoredRoute> =
-        node.routes.sortedWith(
-            compareByDescending<StoredRoute> {
-                it.routeId == node.activeRouteId
-            }.thenByDescending {
-                it.status == NodeRouteStatus.ONLINE
-            }.thenBy {
-                it.latencyMs ?: Long.MAX_VALUE
-            }.thenBy {
-                when (it.kind) {
-                    NodeRouteKind.LAN -> 0
-                    NodeRouteKind.TAILSCALE -> 1
-                    NodeRouteKind.MANUAL -> 2
-                }
+    private fun readBoundedUtf8(stream: InputStream, maxBytes: Int): String {
+        require(maxBytes > 0) { "Limite de réponse HTTP invalide." }
+        val output = ByteArrayOutputStream(minOf(maxBytes, 16 * 1024))
+        val buffer = ByteArray(8 * 1024)
+        var total = 0
+
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > maxBytes) {
+                error("Réponse HTTP trop volumineuse : limite $maxBytes octets dépassée.")
             }
-        )
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray().toString(Charsets.UTF_8)
+    }
+
+    private fun routeCandidates(node: StoredNode): List<StoredRoute> =
+        node.routes
+            .filter { it.kind == NodeRouteKind.TAILSCALE }
+            .sortedWith(
+                compareByDescending<StoredRoute> {
+                    it.routeId == node.activeRouteId
+                }.thenByDescending {
+                    it.status == NodeRouteStatus.ONLINE
+                }.thenBy {
+                    it.latencyMs ?: Long.MAX_VALUE
+                }
+            )
 
     private fun currentPublicNode(node: StoredNode): GenesisNode {
         val stale =
@@ -932,17 +1052,52 @@ class NodeManager(
         }
     }
 
+    private fun finiteDouble(
+        json: JSONObject,
+        name: String,
+        fallback: Double
+    ): Double {
+        val safeFallback = fallback.takeIf { it.isFinite() } ?: 0.0
+        return json.optDouble(name, safeFallback)
+            .takeIf { it.isFinite() }
+            ?: safeFallback
+    }
+
     private fun loadStoredNodesUnsafe(): List<StoredNode> {
         val rawV2 = prefs.getString(KEY_REMOTE_NODES_V2, null)
         if (!rawV2.isNullOrBlank()) {
-            val parsed = parseV2(rawV2)
+            val parsed = runCatching { parseV2(rawV2) }
+                .getOrElse { primaryError ->
+                    val backup = prefs.getString(KEY_REMOTE_NODES_V2_BACKUP, null)
+                    if (backup.isNullOrBlank()) {
+                        throw IllegalStateException(
+                            "Registre de nœuds illisible ; aucune sauvegarde disponible.",
+                            primaryError
+                        )
+                    }
+                    runCatching { parseV2(backup) }
+                        .getOrElse { backupError ->
+                            throw IllegalStateException(
+                                "Registre de nœuds et sauvegarde tous deux illisibles.",
+                                backupError
+                            )
+                        }
+                        .also {
+                            logger?.log(
+                                DiagnosticLevel.WARN,
+                                "node_registry_backup_recovered",
+                                "Le registre principal était illisible ; Jade utilise la dernière sauvegarde valide.",
+                                mapOf("node_count" to it.size)
+                            )
+                        }
+                }
             val normalized = deduplicateStoredNodes(parsed)
             if (normalized != parsed) {
                 saveStoredNodesUnsafe(normalized)
                 logger?.log(
                     DiagnosticLevel.INFO,
                     "node_registry_deduplicated",
-                    "Device Registry v2.2 a fusionné les doublons partageant le même Node ID ou le même jeton de runtime.",
+                    "Device Registry v2.2 a fusionné les doublons partageant le même Node ID.",
                     mapOf(
                         "before" to parsed.size,
                         "after" to normalized.size
@@ -973,18 +1128,9 @@ class NodeManager(
         fun sameLogicalNode(left: StoredNode, right: StoredNode): Boolean {
             val leftId = left.nodeId.trim().lowercase()
             val rightId = right.nodeId.trim().lowercase()
-            if (leftId.isNotBlank() && rightId.isNotBlank() && leftId == rightId) {
-                return true
-            }
-
-            // Historical registrations of the same runtime can have temporary old IDs.
-            // The pairing token is never logged, but equality in memory is a strong
-            // indicator that both records refer to the same physical runtime.
-            val leftToken = left.token.trim()
-            val rightToken = right.token.trim()
-            return leftToken.isNotBlank() &&
-                rightToken.isNotBlank() &&
-                leftToken == rightToken
+            return leftId.isNotBlank() &&
+                rightId.isNotBlank() &&
+                leftId == rightId
         }
 
         val groups = mutableListOf<MutableList<StoredNode>>()
@@ -1078,9 +1224,9 @@ class NodeManager(
         )
     }
 
-    private fun parseV2(raw: String): List<StoredNode> = runCatching {
+    private fun parseV2(raw: String): List<StoredNode> {
         val array = JSONArray(raw)
-        buildList {
+        return buildList {
             for (index in 0 until array.length()) {
                 val json = array.getJSONObject(index)
                 val routesJson = json.optJSONArray("routes") ?: JSONArray()
@@ -1114,9 +1260,9 @@ class NodeManager(
                         osName = json.optString("os"),
                         cpuName = json.optString("cpu"),
                         cpuCores = json.optInt("cpu_cores"),
-                        ramTotalGb = json.optDouble("ram_total_gb"),
-                        ramAvailableGb = json.optDouble("ram_available_gb"),
-                        storageFreeGb = json.optDouble("storage_free_gb"),
+                        ramTotalGb = finiteDouble(json, "ram_total_gb", 0.0),
+                        ramAvailableGb = finiteDouble(json, "ram_available_gb", 0.0),
+                        storageFreeGb = finiteDouble(json, "storage_free_gb", 0.0),
                         capabilities = parseStringArray(json.optJSONArray("capabilities")),
                         lastSeenAt = json.optLong("last_seen_at"),
                         lastError = json.optString("last_error")
@@ -1132,11 +1278,11 @@ class NodeManager(
                 )
             }
         }
-    }.getOrDefault(emptyList())
+    }
 
-    private fun migrateV1(raw: String): List<StoredNode> = runCatching {
+    private fun migrateV1(raw: String): List<StoredNode> {
         val array = JSONArray(raw)
-        buildList {
+        return buildList {
             for (index in 0 until array.length()) {
                 val json = array.getJSONObject(index)
                 val host = json.getString("host")
@@ -1160,9 +1306,9 @@ class NodeManager(
                         osName = json.optString("os"),
                         cpuName = json.optString("cpu"),
                         cpuCores = json.optInt("cpu_cores"),
-                        ramTotalGb = json.optDouble("ram_total_gb"),
-                        ramAvailableGb = json.optDouble("ram_available_gb"),
-                        storageFreeGb = json.optDouble("storage_free_gb"),
+                        ramTotalGb = finiteDouble(json, "ram_total_gb", 0.0),
+                        ramAvailableGb = finiteDouble(json, "ram_available_gb", 0.0),
+                        storageFreeGb = finiteDouble(json, "storage_free_gb", 0.0),
                         capabilities = parseStringArray(json.optJSONArray("capabilities")),
                         lastSeenAt = json.optLong("last_seen_at"),
                         lastError = json.optString("last_error")
@@ -1189,7 +1335,7 @@ class NodeManager(
                 )
             }
         }
-    }.getOrDefault(emptyList())
+    }
 
     private fun saveStoredNodesUnsafe(nodes: List<StoredNode>) {
         val array = JSONArray()
@@ -1205,9 +1351,9 @@ class NodeManager(
                     put("os", node.osName)
                     put("cpu", node.cpuName)
                     put("cpu_cores", node.cpuCores)
-                    put("ram_total_gb", node.ramTotalGb)
-                    put("ram_available_gb", node.ramAvailableGb)
-                    put("storage_free_gb", node.storageFreeGb)
+                    put("ram_total_gb", node.ramTotalGb.takeIf { it.isFinite() } ?: 0.0)
+                    put("ram_available_gb", node.ramAvailableGb.takeIf { it.isFinite() } ?: 0.0)
+                    put("storage_free_gb", node.storageFreeGb.takeIf { it.isFinite() } ?: 0.0)
                     put("capabilities", JSONArray(node.capabilities))
                     put("last_seen_at", node.lastSeenAt)
                     put("last_error", node.lastError ?: "")
@@ -1238,6 +1384,20 @@ class NodeManager(
                 }
             )
         }
-        prefs.edit().putString(KEY_REMOTE_NODES_V2, array.toString()).apply()
+
+        val serialized = array.toString()
+        val previous = prefs.getString(KEY_REMOTE_NODES_V2, null)
+        prefs.edit().apply {
+            if (!previous.isNullOrBlank() && previous != serialized) {
+                putString(KEY_REMOTE_NODES_V2_BACKUP, previous)
+            }
+            putString(KEY_REMOTE_NODES_V2, serialized)
+        }.apply()
+    }
+
+    private fun <T> Result<T>.rethrowCancellation(): Result<T> {
+        val error = exceptionOrNull()
+        if (error is CancellationException) throw error
+        return this
     }
 }

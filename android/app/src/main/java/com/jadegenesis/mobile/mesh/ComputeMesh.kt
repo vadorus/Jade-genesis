@@ -10,6 +10,8 @@ import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.ResourceGovernor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -22,18 +24,35 @@ class ComputeMesh(
     suspend fun runParallelProbe(device: DeviceProfile): MeshProbeSummary {
         val startedAt = System.currentTimeMillis()
         val nodes = nodeManager.nodes(device = device, refreshRemote = true)
-        val candidates = nodes.filter {
-            it.kind != NodeKind.PHONE &&
-                it.status == NodeStatus.ONLINE &&
-                "task_execution_v3" in it.capabilities &&
-                "genesis_probe" in it.capabilities
-        }
+        val budget = ResourceGovernor().evaluate(device)
+        val compatible = nodes
+            .filter {
+                it.kind != NodeKind.PHONE &&
+                    it.status == NodeStatus.ONLINE &&
+                    "task_execution_v3" in it.capabilities &&
+                    "genesis_probe" in it.capabilities
+            }
+            .sortedWith(
+                compareByDescending<com.jadegenesis.mobile.model.GenesisNode> {
+                    it.ramAvailableGb
+                }.thenByDescending {
+                    it.cpuCores
+                }
+            )
+        val candidates = compatible.take(
+            budget.maxParallelTasks.coerceAtLeast(1)
+        )
 
         logger.log(
             DiagnosticLevel.INFO,
             "mesh_probe_start",
             "Benchmark parallèle du Compute Mesh.",
-            mapOf("candidate_count" to candidates.size)
+            mapOf(
+                "candidate_count" to candidates.size,
+                "compatible_count" to compatible.size,
+                "max_parallel_tasks" to budget.maxParallelTasks,
+                "resource_mode" to budget.mode.name
+            )
         )
 
         val results = coroutineScope {
@@ -49,31 +68,29 @@ class ComputeMesh(
                         createdAt = System.currentTimeMillis()
                     )
                     val startedNs = System.nanoTime()
-                    runCatching {
-                        nodeManager.executeTask(node.nodeId, request)
-                    }.fold(
-                        onSuccess = { response ->
-                            MeshNodeResult(
-                                nodeId = response.nodeId,
-                                nodeName = response.nodeName,
-                                success = true,
-                                durationMs = maxOf(
-                                    response.durationMs,
-                                    (System.nanoTime() - startedNs) / 1_000_000L
-                                ),
-                                outputPreview = response.output.take(32)
-                            )
-                        },
-                        onFailure = { error ->
-                            MeshNodeResult(
-                                nodeId = node.nodeId,
-                                nodeName = node.name,
-                                success = false,
-                                durationMs = (System.nanoTime() - startedNs) / 1_000_000L,
-                                error = error.message?.take(180) ?: error::class.java.simpleName
-                            )
-                        }
-                    )
+                    try {
+                        val response = nodeManager.executeTask(node.nodeId, request)
+                        MeshNodeResult(
+                            nodeId = response.nodeId,
+                            nodeName = response.nodeName,
+                            success = true,
+                            durationMs = maxOf(
+                                response.durationMs,
+                                (System.nanoTime() - startedNs) / 1_000_000L
+                            ),
+                            outputPreview = response.output.take(32)
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        MeshNodeResult(
+                            nodeId = node.nodeId,
+                            nodeName = node.name,
+                            success = false,
+                            durationMs = (System.nanoTime() - startedNs) / 1_000_000L,
+                            error = error.message?.take(180) ?: error::class.java.simpleName
+                        )
+                    }
                 }
             }.awaitAll()
         }

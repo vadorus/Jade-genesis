@@ -11,6 +11,7 @@ class CognitiveLedger(context: Context) {
         "jade_genesis_cognitive_ledger",
         Context.MODE_PRIVATE
     )
+    private var cachedEvents: MutableList<CognitiveTraceEvent>? = null
 
     companion object {
         private const val KEY_EVENTS = "events_v1"
@@ -19,18 +20,33 @@ class CognitiveLedger(context: Context) {
 
     @Synchronized
     fun record(event: CognitiveTraceEvent) {
-        val current = recent(MAX_EVENTS - 1).toMutableList()
+        val current = eventsUnsafe()
         current.add(0, event)
-        save(current.take(MAX_EVENTS))
+        while (current.size > MAX_EVENTS) {
+            current.removeAt(current.lastIndex)
+        }
+        save(current)
     }
 
     @Synchronized
     fun recent(limit: Int = 40): List<CognitiveTraceEvent> {
+        val safeLimit = limit.coerceIn(1, MAX_EVENTS)
+        return eventsUnsafe().take(safeLimit)
+    }
+
+    private fun eventsUnsafe(): MutableList<CognitiveTraceEvent> {
+        cachedEvents?.let { return it }
+        val loaded = load().toMutableList()
+        cachedEvents = loaded
+        return loaded
+    }
+
+    private fun load(): List<CognitiveTraceEvent> {
         val raw = prefs.getString(KEY_EVENTS, null) ?: return emptyList()
         return runCatching {
             val array = JSONArray(raw)
             buildList {
-                for (index in 0 until minOf(array.length(), limit.coerceAtLeast(1))) {
+                for (index in 0 until minOf(array.length(), MAX_EVENTS)) {
                     val json = array.getJSONObject(index)
                     add(
                         CognitiveTraceEvent(
@@ -55,7 +71,7 @@ class CognitiveLedger(context: Context) {
 
     private fun save(events: List<CognitiveTraceEvent>) {
         val array = JSONArray()
-        events.forEach { event ->
+        events.take(MAX_EVENTS).forEach { event ->
             array.put(
                 JSONObject().apply {
                     put("id", event.id)

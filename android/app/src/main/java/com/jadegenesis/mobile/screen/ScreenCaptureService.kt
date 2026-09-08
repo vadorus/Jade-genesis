@@ -88,6 +88,12 @@ class ScreenCaptureService : Service() {
 
         if (projection != null) return START_NOT_STICKY
 
+        // Une nouvelle session peut arriver sur la même instance de Service
+        // juste après stopSelf(). Elle doit repartir avec un état vierge.
+        captureStarted.set(false)
+        captured.set(false)
+        finishing.set(false)
+
         mode = intent?.getStringExtra(EXTRA_MODE)
             ?.takeIf { it == MODE_ARMED || it == MODE_IMMEDIATE }
             ?: MODE_IMMEDIATE

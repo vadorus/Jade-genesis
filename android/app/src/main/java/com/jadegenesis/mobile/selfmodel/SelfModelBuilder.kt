@@ -114,7 +114,7 @@ class SelfModelBuilder {
             Capability(
                 "cognitive_core",
                 true,
-                "CognitiveCore 0.1.4",
+                "CognitiveCore ${identity.version}",
                 "Boucle exécutive observable : observer, planifier, exécuter, vérifier si nécessaire, réviser, enregistrer l'expérience."
             ),
             Capability(
@@ -128,23 +128,23 @@ class SelfModelBuilder {
                 "Les requêtes complexes peuvent recevoir une seconde passe de contrôle structurée sans stocker de chaîne de pensée privée."
             ),
             Capability(
-    "learning_candidates",
-    true,
-    "LearningEngine + VisualLearning v2 targeted",
-    "Les échecs, latences et observations visuelles recoupées produisent des candidats d'apprentissage mesurables ; ils ne sont pas appliqués automatiquement."
-),
-Capability(
-    "research_engine",
-    true,
-    "ResearchEngine v2 targeted-planner",
-    "Research v2 extrait 1 à 3 requêtes ciblées depuis la consigne utilisateur et les éléments visuels à fort signal, puis recoupe Wikipedia, Wikidata, DuckDuckGo et GitHub pour les sujets techniques."
-),
-Capability(
-    "visual_learning",
-    true,
-    "VisualLearningStore v2",
-    "Jade conserve la provenance, l'empreinte, la consigne de ciblage, la recherche associée et le niveau de corroboration avant consolidation."
-),
+                "learning_candidates",
+                true,
+                "LearningEngine + VisualLearning v2 targeted",
+                "Les échecs, latences et observations visuelles recoupées produisent des candidats d'apprentissage mesurables ; ils ne sont pas appliqués automatiquement."
+            ),
+            Capability(
+                "research_engine",
+                true,
+                "ResearchEngine v3 repo-first",
+                "Research v3 extrait 1 à 3 requêtes ciblées, détecte les dépôts GitHub structurés et privilégie alors les sources primaires du dépôt (métadonnées, racine et README), avec recherche publique complémentaire filtrée."
+            ),
+            Capability(
+                "visual_learning",
+                true,
+                "VisualLearningStore v2",
+                "Jade conserve la provenance, l'empreinte, la consigne de ciblage, la recherche associée et le niveau de corroboration avant consolidation."
+            ),
             Capability(
                 "task_router",
                 true,
@@ -207,7 +207,7 @@ Capability(
             Capability(
                 "diagnostics",
                 true,
-                "DiagnosticLogger 0.1.4",
+                "DiagnosticLogger ${identity.version}",
                 "Journal local rotatif, secrets masqués et bundle de diagnostic générable depuis le mode Admin."
             ),
             Capability(
@@ -263,7 +263,7 @@ Capability(
         )
 
         val limits = mutableListOf(
-            "Le Cognitive Core 0.1.4 orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
+            "Le Cognitive Core ${identity.version} orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",

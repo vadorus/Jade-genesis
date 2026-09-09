@@ -102,6 +102,12 @@ class SelfModelBuilder {
                 "Les runtimes 0.1.2 peuvent remonter charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
             ),
             Capability(
+                "resource_lease",
+                true,
+                "ResourceAdmissionController 0.1.7.4",
+                "Estime RAM, CPU et VRAM par tâche, vérifie la capacité avant exécution et réserve un lease logique jusqu'à libération. Les leases sont partagés dans le processus Android entre TaskRouter, ComputeMesh et le cerveau local distribué."
+            ),
+            Capability(
                 "device_registry",
                 true,
                 "DeviceRegistry v2.3",
@@ -122,8 +128,8 @@ class SelfModelBuilder {
             Capability(
                 "compute_mesh",
                 onlineTaskNode,
-                if (onlineTaskNode) "ComputeMesh fan-out v1" else "ComputeMesh_waiting_for_nodes",
-                "Les tâches parallélisables peuvent être distribuées simultanément à plusieurs nœuds compatibles."
+                if (onlineTaskNode) "ComputeMesh fan-out + leases" else "ComputeMesh_waiting_for_nodes",
+                "Les tâches parallélisables peuvent être distribuées simultanément à plusieurs nœuds compatibles, sous contrôle d'admission Resource Lease."
             ),
             Capability(
                 "brain_backend_router",
@@ -168,8 +174,8 @@ class SelfModelBuilder {
             Capability(
                 "task_router",
                 true,
-                "AdaptiveTaskRouter + DeviceRegistry v2.3",
-                "Classe les nœuds par capacité, ressources et historique. Le calcul générique peut intégrer la charge dynamique ; le cerveau distribué utilise en plus GPU/VRAM, modèle chargé et débit mesuré."
+                "AdaptiveTaskRouter + Resource Lease",
+                "Classe les nœuds par capacité, ressources et historique, puis exige une admission quantitative avant chaque tentative. Un nœud refusé ou temporairement saturé n'est pas exécuté et le routeur peut essayer le suivant."
             ),
             Capability(
                 "task_ledger",
@@ -212,8 +218,8 @@ class SelfModelBuilder {
             Capability(
                 "distributed_local_brain",
                 onlineLocalBrainNode,
-                if (onlineLocalBrainNode) "DistributedLocalBrain telemetry-aware" else "PrototypeBrain_fallback",
-                "Tout PC/VPS qui annonce local_brain + brain_chat peut devenir une ressource générative ; Resource Intelligence v3 aide à choisir celui qui dispose réellement de la meilleure capacité au moment de la tâche."
+                if (onlineLocalBrainNode) "DistributedLocalBrain lease-aware" else "PrototypeBrain_fallback",
+                "Tout PC/VPS qui annonce local_brain + brain_chat peut devenir une ressource générative ; Resource Intelligence v3 classe les nœuds puis Resource Lease refuse ceux dont la capacité instantanée n'est pas suffisante."
             ),
             Capability(
                 "generative_ai",
@@ -288,6 +294,8 @@ class SelfModelBuilder {
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
             "Resource Intelligence v3 connaît d'abord NVIDIA via nvidia-smi ; AMD, Intel et l'unified memory Apple restent à instrumenter précisément.",
             "Les mesures de débit génératif apprennent des vraies tâches brain_chat ; elles ne remplacent pas encore un benchmark Runtime Eval reproductible.",
+            "Resource Lease 0.1.7.4 réserve de la capacité dans l'orchestrateur Android mais ne crée pas encore une réservation OS/cgroup sur le nœud distant. Le registre de leases est process-local ; sa réplication durable appartient à Shared Genesis State 0.1.7.5.",
+            "Les chemins directs Screen Observer/vision utilisent encore NodeManager hors TaskRouter ; leur unification complète avec l'admission Resource Lease reste à faire.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",
             "La protection Admin utilise un PIN local dans cette V0.1 ; l'intégration biométrique pourra la remplacer.",

@@ -10,6 +10,7 @@ import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.ResourceAdmissionController
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
@@ -19,7 +20,9 @@ import java.util.UUID
 
 class ComputeMesh(
     private val nodeManager: NodeManager,
-    private val logger: DiagnosticLogger
+    private val logger: DiagnosticLogger,
+    private val admissionController: ResourceAdmissionController =
+        ResourceAdmissionController()
 ) {
     suspend fun runParallelProbe(device: DeviceProfile): MeshProbeSummary {
         val startedAt = System.currentTimeMillis()
@@ -46,7 +49,7 @@ class ComputeMesh(
         logger.log(
             DiagnosticLevel.INFO,
             "mesh_probe_start",
-            "Benchmark parallèle du Compute Mesh.",
+            "Benchmark parallèle du Compute Mesh avec Resource Lease.",
             mapOf(
                 "candidate_count" to candidates.size,
                 "compatible_count" to compatible.size,
@@ -67,6 +70,24 @@ class ComputeMesh(
                         iterations = 18_000,
                         createdAt = System.currentTimeMillis()
                     )
+                    val admission = admissionController.tryAcquire(
+                        request = request,
+                        node = node,
+                        budget = budget
+                    )
+                    val lease = admission.lease
+                    if (!admission.admitted || lease == null) {
+                        return@async MeshNodeResult(
+                            nodeId = node.nodeId,
+                            nodeName = node.name,
+                            success = false,
+                            durationMs = 0L,
+                            error =
+                                "Admission ${admission.action}: ${admission.reason}"
+                                    .take(180)
+                        )
+                    }
+
                     val startedNs = System.nanoTime()
                     try {
                         val response = nodeManager.executeTask(node.nodeId, request)
@@ -90,6 +111,8 @@ class ComputeMesh(
                             durationMs = (System.nanoTime() - startedNs) / 1_000_000L,
                             error = error.message?.take(180) ?: error::class.java.simpleName
                         )
+                    } finally {
+                        admissionController.release(lease)
                     }
                 }
             }.awaitAll()

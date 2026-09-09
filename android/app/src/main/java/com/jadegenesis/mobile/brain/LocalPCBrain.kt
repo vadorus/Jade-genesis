@@ -13,16 +13,19 @@ import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.NodeResourceScorer
+import com.jadegenesis.mobile.resource.ResourceAdmissionController
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
 class LocalPCBrain(
-    private val nodeManager: NodeManager
+    private val nodeManager: NodeManager,
+    private val admissionController: ResourceAdmissionController =
+        ResourceAdmissionController()
 ) : BrainBackend {
 
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.3",
+        id = "distributed-local-brain-0.1.4",
         displayName = "Distributed Local Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",
@@ -33,7 +36,8 @@ class LocalPCBrain(
         priority = 110,
         details =
             "Backend génératif distribué via un Node Runtime et un modèle local. " +
-                "La sélection utilise la télémétrie réelle et les performances mesurées quand elles existent."
+                "La sélection utilise la télémétrie réelle, les performances mesurées " +
+                "et un Resource Lease avant exécution."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
@@ -43,23 +47,59 @@ class LocalPCBrain(
         val compatible = compatibleNodes(context.selfModel.knownNodes)
         val preferredId = context.selfModel.preferredComputeNodeId
         val routing = JadeConfigRuntime.current().validated().routing
-        val node = compatible
-            .maxByOrNull { candidate ->
+        val ranked = compatible
+            .sortedByDescending { candidate ->
                 NodeResourceScorer.generativeScore(
                     node = candidate,
                     routing = routing,
                     preferredNodeId = preferredId
                 )
             }
-            ?: error(
-                "Aucun nœud génératif en ligne n'annonce brain_chat."
-            )
+
+        if (ranked.isEmpty()) {
+            error("Aucun nœud génératif en ligne n'annonce brain_chat.")
+        }
 
         val memories = context.memories
             .sortedBy {
                 if (it.source.startsWith("JADE_CONSOLIDATION_")) 1 else 0
             }
             .take(10)
+
+        val taskId = "brain-${UUID.randomUUID()}"
+        val admissionProbe = DistributedTaskRequest(
+            taskId = taskId,
+            taskKind = "brain_chat",
+            payload = context.userInput.take(10_000),
+            requiredCapability = "brain_chat",
+            workload = TaskWorkload.HEAVY,
+            createdAt = System.currentTimeMillis()
+        )
+
+        var selectedNode: GenesisNode? = null
+        var selectedLease: com.jadegenesis.mobile.resource.ResourceLease? = null
+        val admissionFailures = mutableListOf<String>()
+
+        for (candidate in ranked) {
+            val admission = admissionController.tryAcquire(
+                request = admissionProbe,
+                node = candidate,
+                budget = context.selfModel.resourceBudget
+            )
+            if (admission.admitted && admission.lease != null) {
+                selectedNode = candidate
+                selectedLease = admission.lease
+                break
+            }
+            admissionFailures +=
+                "${candidate.name}: ${admission.action} ${admission.reason}"
+        }
+
+        val node = selectedNode ?: error(
+            "Aucun nœud génératif n'a obtenu de Resource Lease. " +
+                admissionFailures.joinToString(" | ").take(700)
+        )
+        val lease = selectedLease ?: error("Resource Lease génératif absent.")
 
         val payload = JSONObject().apply {
             put(
@@ -173,17 +213,14 @@ class LocalPCBrain(
             )
         }.toString()
 
-        val response = nodeManager.executeTask(
-            nodeId = node.nodeId,
-            request = DistributedTaskRequest(
-                taskId = "brain-${UUID.randomUUID()}",
-                taskKind = "brain_chat",
-                payload = payload,
-                requiredCapability = "brain_chat",
-                workload = TaskWorkload.HEAVY,
-                createdAt = System.currentTimeMillis()
+        val response = try {
+            nodeManager.executeTask(
+                nodeId = node.nodeId,
+                request = admissionProbe.copy(payload = payload)
             )
-        )
+        } finally {
+            admissionController.release(lease)
+        }
 
         val json = JSONObject(response.output)
         val text = json.optString("text").trim()

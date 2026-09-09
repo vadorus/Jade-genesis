@@ -17,6 +17,7 @@ import com.jadegenesis.mobile.model.TaskExecutionLocation
 import com.jadegenesis.mobile.model.TaskStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.ResourceAdmissionController
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -29,7 +30,9 @@ class TaskRouter(
     private val nodeManager: NodeManager,
     private val ledger: TaskLedger,
     private val queue: TaskQueue,
-    private val configProvider: () -> JadeConfig = { JadeConfigRuntime.current() }
+    private val configProvider: () -> JadeConfig = { JadeConfigRuntime.current() },
+    private val admissionController: ResourceAdmissionController =
+        ResourceAdmissionController()
 ) {
     companion object {
         private val MEMORY_STOP_WORDS = setOf(
@@ -277,39 +280,66 @@ class TaskRouter(
             } else {
                 TaskExecutionLocation.REMOTE
             }
-            val attemptStartedNs = System.nanoTime()
 
+            val admission = admissionController.tryAcquire(
+                request = request,
+                node = node,
+                budget = budget
+            )
+            val lease = admission.lease
+            if (!admission.admitted || lease == null) {
+                val error =
+                    "Admission ${admission.action}: ${admission.reason}"
+                failures.add("${node.name}: $error")
+                attempts.add(
+                    TaskAttempt(
+                        nodeId = node.nodeId,
+                        nodeName = node.name,
+                        executionLocation = location,
+                        success = false,
+                        durationMs = 0L,
+                        error = error.take(180)
+                    )
+                )
+                continue
+            }
+
+            val attemptStartedNs = System.nanoTime()
             queue.markRunning(
                 taskId = request.taskId,
                 nodeName = node.name,
                 attempts = index + 1
             )
 
-            val attempt = runCatching {
-                if (location == TaskExecutionLocation.LOCAL) {
-                    val output = executeLocal(request)
-                    validateOutput(request, output)
-                    val elapsed = elapsedMs(attemptStartedNs)
-                    Triple(output, elapsed, node)
-                } else {
-                    val response = nodeManager.executeTask(
-                        nodeId = node.nodeId,
-                        request = request
-                    )
-                    validateOutput(request, response.output)
-                    val elapsed = maxOf(
-                        elapsedMs(attemptStartedNs),
-                        response.durationMs
-                    )
-                    Triple(
-                        response.output,
-                        elapsed,
-                        node.copy(
-                            nodeId = response.nodeId,
-                            name = response.nodeName
+            val attempt = try {
+                runCatching {
+                    if (location == TaskExecutionLocation.LOCAL) {
+                        val output = executeLocal(request)
+                        validateOutput(request, output)
+                        val elapsed = elapsedMs(attemptStartedNs)
+                        Triple(output, elapsed, node)
+                    } else {
+                        val response = nodeManager.executeTask(
+                            nodeId = node.nodeId,
+                            request = request
                         )
-                    )
+                        validateOutput(request, response.output)
+                        val elapsed = maxOf(
+                            elapsedMs(attemptStartedNs),
+                            response.durationMs
+                        )
+                        Triple(
+                            response.output,
+                            elapsed,
+                            node.copy(
+                                nodeId = response.nodeId,
+                                name = response.nodeName
+                            )
+                        )
+                    }
                 }
+            } finally {
+                admissionController.release(lease)
             }
 
             val cancellation = attempt.exceptionOrNull()
@@ -563,6 +593,9 @@ class TaskRouter(
                     " Aucun historique antérieur pour ce type de tâche sur ce nœud."
                 )
             }
+            append(
+                " Resource Lease vérifie ensuite la capacité réelle avant chaque tentative."
+            )
         }
     }
 

@@ -35,6 +35,17 @@ object SafetyPolicy {
     const val CRITICAL_BATTERY_PERCENT = 8
     const val CRITICAL_STORAGE_FREE_GB = 0.75
 
+    // Limites physiques du Resource Lease. Elles ne sont pas auto-évolutives.
+    const val MIN_RESOURCE_LEASE_MEMORY_MB = 4
+    const val MAX_RESOURCE_LEASE_MEMORY_MB = 512
+    const val MAX_RESOURCE_LEASE_VRAM_GB = 64.0
+    const val MIN_REMOTE_RAM_RESERVE_GB = 0.5
+    const val REMOTE_RAM_RESERVE_FRACTION = 0.10
+    const val REMOTE_CPU_ADMISSION_CEILING_PERCENT = 95.0
+    const val REMOTE_GPU_ADMISSION_CEILING_PERCENT = 98.0
+    const val MIN_BRAIN_VRAM_HEADROOM_GB = 0.5
+    const val MIN_VISION_VRAM_HEADROOM_GB = 0.5
+
     // Une configuration candidate ne peut pas provoquer une purge agressive.
     const val MIN_EPHEMERAL_MEMORY_RETENTION_DAYS = 14
     const val MIN_SUPERSEDED_MEMORY_RETENTION_DAYS = 7

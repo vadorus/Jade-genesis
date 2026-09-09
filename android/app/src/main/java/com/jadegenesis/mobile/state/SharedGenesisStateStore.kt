@@ -33,13 +33,16 @@ class SharedGenesisStateStore(context: Context) {
             payload = payload,
             createdAt = createdAt.coerceAtLeast(0L)
         )
-        val current = loadEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP)
-            .filterNot {
+        val existing = loadEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP)
+        val current = if (event.kind in COALESCED_OPERATIONAL_KINDS) {
+            existing.filterNot {
                 it.originNode == event.originNode &&
                     it.kind == event.kind &&
                     it.entityId == event.entityId
-            }
-            .toMutableList()
+            }.toMutableList()
+        } else {
+            existing.toMutableList()
+        }
         current += event
         val bounded = current.takeLast(SafetyPolicy.MAX_SHARED_STATE_OUTBOX_EVENTS)
         saveEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP, bounded)
@@ -208,6 +211,12 @@ class SharedGenesisStateStore(context: Context) {
         private const val KEY_CACHE_BACKUP = "cache_v1_backup"
         private const val KEY_KNOWN_REVISION = "known_server_revision_v1"
         private const val KEY_LAST_SYNC_AT = "last_sync_at_v1"
+        private val COALESCED_OPERATIONAL_KINDS = setOf(
+            "identity_presence",
+            "config_snapshot",
+            "phone_node_snapshot",
+            "memory_cursor"
+        )
     }
 }
 

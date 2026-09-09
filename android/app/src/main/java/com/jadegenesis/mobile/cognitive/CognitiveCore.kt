@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.cognitive
 
 import com.jadegenesis.mobile.brain.BrainRouter
+import com.jadegenesis.mobile.brain.CognitiveBrainPolicy
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainResult
@@ -30,14 +31,21 @@ class CognitiveCore(
             "Contexte observé : ${context.selfModel.knownNodes.size} nœud(s), mode ${context.selfModel.resourceBudget.mode}."
         )
 
+        val answerPlan = CognitiveBrainPolicy.plan(
+            operation = "answer",
+            userInput = context.userInput
+        )
         val verify = shouldVerify(context.userInput)
         record(
             executionId,
             CognitivePhase.PLAN,
-            if (verify) {
-                "Réponse générative suivie d'une vérification courte et mesurable."
-            } else {
-                "Réponse directe : vérification supplémentaire non nécessaire pour cette requête."
+            buildString {
+                append("Profil ${answerPlan.profile.name} sélectionné : ${answerPlan.reason}")
+                if (verify) {
+                    append(" Une passe CRITIC suivra la première réponse.")
+                } else {
+                    append(" Réponse directe sans seconde passe.")
+                }
             }
         )
 
@@ -53,7 +61,7 @@ class CognitiveCore(
         record(
             executionId,
             CognitivePhase.EXECUTE,
-            "Réponse produite par ${first.backendDisplayName.ifBlank { first.backendId.ifBlank { "backend inconnu" } }}.",
+            "Réponse ${answerPlan.profile.name} produite par ${first.backendDisplayName.ifBlank { first.backendId.ifBlank { "backend inconnu" } }}${first.model.takeIf { it.isNotBlank() }?.let { " · modèle $it" } ?: ""}.",
             backendId = first.backendId.takeIf { it.isNotBlank() },
             durationMs = executionDuration,
             success = first.text.isNotBlank()
@@ -84,7 +92,7 @@ class CognitiveCore(
             record(
                 executionId,
                 CognitivePhase.VERIFY,
-                "Vérification indisponible ; la réponse initiale est conservée.",
+                "Vérification CRITIC indisponible ; la réponse initiale est conservée.",
                 durationMs = elapsedMs(verificationStarted),
                 success = false
             )
@@ -96,7 +104,7 @@ class CognitiveCore(
         record(
             executionId,
             CognitivePhase.VERIFY,
-            "Verdict=${review.verdict}, confiance=${"%.2f".format(review.confidence)}. ${review.note.take(180)}",
+            "CRITIC verdict=${review.verdict}, confiance=${"%.2f".format(review.confidence)}. ${review.note.take(180)}",
             backendId = verified.backendId,
             durationMs = elapsedMs(verificationStarted),
             success = true
@@ -124,7 +132,7 @@ class CognitiveCore(
                 record(
                     executionId,
                     CognitivePhase.REVISE,
-                    "Une révision a été produite après contrôle de la première réponse.",
+                    "Une révision REASONING a été produite après contrôle de la première réponse.",
                     backendId = revised.backendId,
                     durationMs = elapsedMs(revisionStarted),
                     success = true
@@ -133,7 +141,7 @@ class CognitiveCore(
                 record(
                     executionId,
                     CognitivePhase.REVISE,
-                    "Révision non disponible ; conservation de la première réponse.",
+                    "Révision REASONING non disponible ; conservation de la première réponse.",
                     durationMs = elapsedMs(revisionStarted),
                     success = false
                 )

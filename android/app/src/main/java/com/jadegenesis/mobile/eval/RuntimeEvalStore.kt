@@ -70,12 +70,24 @@ class RuntimeEvalStore(context: Context) {
         val workload = when (result.taskKind) {
             "genesis_probe" -> TaskWorkload.MEDIUM
             "memory_consolidation" -> TaskWorkload.HEAVY
+            "brain_chat", "vision_analyze", "screen_analyze" -> TaskWorkload.HEAVY
             else -> TaskWorkload.LIGHT
         }
         val nodeKind = when (result.executionLocation) {
             TaskExecutionLocation.LOCAL -> NodeKind.PHONE
             TaskExecutionLocation.REMOTE -> NodeKind.UNKNOWN
         }
+        val outputJson = runCatching { JSONObject(result.output) }.getOrNull()
+        val model = outputJson?.optString("model")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            .orEmpty()
+        val tokensPerSecond = finiteDouble(
+            outputJson,
+            "tokens_per_second",
+            0.0
+        ).coerceAtLeast(0.0)
+
         val observation = RuntimeEvalObservation(
             observationId = "task:${result.taskId}:${result.executedNodeId}",
             taskId = result.taskId,
@@ -84,9 +96,11 @@ class RuntimeEvalStore(context: Context) {
             nodeId = result.executedNodeId.ifBlank { "unknown-node" },
             nodeName = result.executedNodeName.ifBlank { "Nœud inconnu" },
             nodeKind = nodeKind,
+            model = model,
             success = result.success,
             durationMs = result.durationMs.coerceAtLeast(0L),
             outputChars = result.output.length,
+            tokensPerSecond = tokensPerSecond,
             fallbackUsed = result.fallbackUsed,
             error = result.fallbackReason
                 ?.takeIf { !result.success }

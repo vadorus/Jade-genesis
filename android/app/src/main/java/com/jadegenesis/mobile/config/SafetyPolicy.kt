@@ -46,6 +46,13 @@ object SafetyPolicy {
     const val MIN_BRAIN_VRAM_HEADROOM_GB = 0.5
     const val MIN_VISION_VRAM_HEADROOM_GB = 0.5
 
+    // Runtime Eval : borne la mémoire du journal et impose assez de preuves
+    // avant qu'un posterior mesuré influence fortement le routage.
+    const val MAX_RUNTIME_EVAL_OBSERVATIONS = 500
+    const val MAX_RUNTIME_EVAL_REPORT_WINDOW = 300
+    const val MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES = 4
+    const val STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES = 12
+
     // Shared Genesis State : protège le téléphone et le VPS contre des lots
     // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
     const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200

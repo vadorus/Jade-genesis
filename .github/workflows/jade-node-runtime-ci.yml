@@ -49,10 +49,12 @@ jobs:
             node-agent/jade_node_agent.py \
             node-agent/jade_node_runtime_core.py \
             node-agent/shared_genesis_state.py \
+            node-agent/night_learning_lab.py \
             node-agent/vps_night_cycle.py \
+            node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py
 
-      - name: Test bounded VPS Night Cycle supervision
+      - name: Test bounded VPS Night Cycle and Learning Lab
         shell: bash
         run: |
           set -euo pipefail
@@ -80,11 +82,12 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          assert module.VERSION == "0.1.4"
+          assert module.VERSION == "0.1.5"
           assert module.PROTOCOL == "jade-genesis-node/0.0.6"
           assert "brain_chat" in module.ALLOWED_TASKS
           assert "vision_analyze" in module.ALLOWED_TASKS
           assert "shared_state_sync" in module.ALLOWED_TASKS
+          assert "night_learning_lab" not in module.ALLOWED_TASKS
           assert all("shell" not in task for task in module.ALLOWED_TASKS)
 
           cpu = module.cpu_load_percent(sample_seconds=0.02)
@@ -126,8 +129,6 @@ jobs:
               assert len(first["events"]) == 1
               assert first["has_more"] is False
 
-              # Idempotent retry: the same event is acknowledged but does not
-              # advance the durable revision a second time.
               second = state_store.sync(request)
               assert second["server_revision"] == 1
               assert second["ack_event_ids"] == ["event-1"]
@@ -139,8 +140,6 @@ jobs:
               else:
                   raise AssertionError("identity mismatch should be rejected")
 
-              # Add enough events to prove that a client cursor never skips a
-              # page when the server has more than MAX_SYNC_EVENTS available.
               bulk = []
               for index in range(2, 207):
                   bulk.append({
@@ -190,10 +189,13 @@ jobs:
           assert "shared_genesis_state_v1" in health["capabilities"]
           assert "shared_state_sync" in health["capabilities"]
           assert "vps_night_cycle_supervisor_v1" in health["capabilities"]
+          assert "night_learning_lab_v1" in health["capabilities"]
+          assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab"
+          assert health["night_cycle_supervisor"]["experiment_automatic"] is False
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
           assert health["night_cycle_supervisor"]["arbitrary_shell"] is False
 
-          print("Node Runtime 0.1.4 + VPS Night Cycle supervision validated.")
+          print("Node Runtime 0.1.5 + VPS Night Learning Lab validated.")
           PY
 
       - name: Prove validation did not rewrite sources

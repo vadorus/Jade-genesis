@@ -46,6 +46,15 @@ object SafetyPolicy {
     const val MIN_BRAIN_VRAM_HEADROOM_GB = 0.5
     const val MIN_VISION_VRAM_HEADROOM_GB = 0.5
 
+    // Shared Genesis State : protège le téléphone et le VPS contre des lots
+    // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
+    const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200
+    const val MAX_SHARED_STATE_CACHE_EVENTS = 500
+    const val MAX_SHARED_STATE_SYNC_EVENTS = 200
+    const val MAX_SHARED_STATE_EVENT_PAYLOAD_CHARS = 64_000
+    const val MAX_SHARED_STATE_SYNC_PAYLOAD_CHARS = 512_000
+    const val MAX_SHARED_STATE_SYNC_RESPONSE_CHARS = 1_000_000
+
     // Une configuration candidate ne peut pas provoquer une purge agressive.
     const val MIN_EPHEMERAL_MEMORY_RETENTION_DAYS = 14
     const val MIN_SUPERSEDED_MEMORY_RETENTION_DAYS = 7

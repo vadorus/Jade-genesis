@@ -9,6 +9,7 @@ import com.jadegenesis.mobile.cognitive.CognitiveCore
 import com.jadegenesis.mobile.cognitive.CognitiveLedger
 import com.jadegenesis.mobile.cognitive.LearningEngine
 import com.jadegenesis.mobile.cognitive.VisualLearningStore
+import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.AdminGate
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
@@ -41,8 +42,8 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
-import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.runtime.RuntimeManager
+import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
 import com.jadegenesis.mobile.task.TaskLedger
 import com.jadegenesis.mobile.task.TaskQueue
@@ -183,8 +184,11 @@ class JadeCore(context: Context) {
         val activeIdentity = activeIdentity()
         val device = profiler.capture()
         val resourceBudget = resourceGovernor.evaluate(device)
-        val recentMemories = memory.latest(64)
-        val sourceMemories = memoryLifecycle.sourceMemories(recentMemories)
+        val config = JadeConfigRuntime.current()
+        val sourceMemories = memoryLifecycle.sourceMemories(
+            memories = emptyList(),
+            limit = config.task.memoryItems
+        )
         val lifecycle = memoryLifecycle.analyze(sourceMemories)
 
         if (!lifecycle.needsConsolidation) {
@@ -225,7 +229,7 @@ class JadeCore(context: Context) {
                             "OBSOLETE_CANDIDATE n'entraîne jamais une suppression automatique."
                     )
                 },
-                source = "JADE_CONSOLIDATION_0.1.2",
+                source = "JADE_CONSOLIDATION_0.1.7.2",
                 confidence = 0.88,
                 originNode = result.executedNodeId
             )
@@ -233,7 +237,19 @@ class JadeCore(context: Context) {
             memoryLifecycle.markConsolidated(
                 analysis = lifecycle,
                 knowledgeId = knowledge.id,
-                resultSha256 = sha256(result.output)
+                resultSha256 = sha256(result.output),
+                processedMemories = sourceMemories
+            )
+
+            diagnostics.log(
+                DiagnosticLevel.INFO,
+                "memory_consolidation_v2_completed",
+                "Lot mémoire historique consolidé et curseur avancé.",
+                mapOf(
+                    "source_count" to sourceMemories.size,
+                    "cursor_created_at" to memoryLifecycle.processedThroughCreatedAt(),
+                    "retention_deleted" to memoryLifecycle.lastRetentionDeletedCount()
+                )
             )
         }
 
@@ -283,7 +299,7 @@ class JadeCore(context: Context) {
             BrainContext(
                 userInput = clean,
                 selfModel = self,
-                memories = memory.latest(8),
+                memories = memory.latestForContext(8),
                 tools = tools.describe(),
                 operation = "tool_build"
             )
@@ -524,7 +540,7 @@ class JadeCore(context: Context) {
                 BrainContext(
                     userInput = prompt,
                     selfModel = self,
-                    memories = memory.latest(8),
+                    memories = memory.latestForContext(8),
                     tools = tools.describe(),
                     operation = "visual_research_synthesis"
                 )
@@ -635,6 +651,7 @@ class JadeCore(context: Context) {
             "Le mode Admin doit être déverrouillé."
         }
         val self = selfModel()
+        val memoryCursor = memoryLifecycle.currentCursor()
         val summary = JSONObject().apply {
             put("generated_at", System.currentTimeMillis())
             put("jade_id", self.identity.jadeId)
@@ -642,6 +659,11 @@ class JadeCore(context: Context) {
             put("interface_node", self.nodeId)
             put("resource_mode", self.resourceBudget.mode.name)
             put("active_brain", self.activeBrain.displayName)
+            put("memory_total_count", memory.count())
+            put("memory_active_count", memory.activeCount())
+            put("memory_cursor_created_at", memoryCursor.createdAt)
+            put("memory_cursor_id", memoryCursor.id)
+            put("memory_last_retention_deleted", memoryLifecycle.lastRetentionDeletedCount())
             put(
                 "nodes",
                 JSONArray().apply {
@@ -712,6 +734,8 @@ class JadeCore(context: Context) {
 
     suspend fun memoryCount(): Int = memory.count()
 
+    suspend fun activeMemoryCount(): Int = memory.activeCount()
+
     suspend fun ask(userInput: String): String {
         runCatching { nodeManager.refreshRemoteNodes() }
             .onFailure { error ->
@@ -727,7 +751,7 @@ class JadeCore(context: Context) {
         val context = BrainContext(
             userInput = userInput,
             selfModel = self,
-            memories = memory.latest(14),
+            memories = memory.latestForContext(14),
             tools = tools.describe()
         )
 
@@ -766,6 +790,7 @@ class JadeCore(context: Context) {
     ): DistributedTaskResult {
         val now = System.currentTimeMillis()
         val local = nodeManager.localNode(device)
+        val cursor = memoryLifecycle.currentCursor()
         val output = JSONObject().apply {
             put("skipped", true)
             put("reason", analysis.reason)
@@ -777,6 +802,8 @@ class JadeCore(context: Context) {
             put("contradiction_count", analysis.contradictionCount)
             put("obsolete_candidate_count", analysis.obsoleteCandidateCount)
             put("last_consolidated_at", analysis.lastConsolidatedAt)
+            put("cursor_created_at", cursor.createdAt)
+            put("cursor_id", cursor.id)
         }.toString()
 
         return DistributedTaskResult(

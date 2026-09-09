@@ -34,4 +34,11 @@ object SafetyPolicy {
     const val CRITICAL_THERMAL_RANK = 3
     const val CRITICAL_BATTERY_PERCENT = 8
     const val CRITICAL_STORAGE_FREE_GB = 0.75
+
+    // Une configuration candidate ne peut pas provoquer une purge agressive.
+    const val MIN_EPHEMERAL_MEMORY_RETENTION_DAYS = 14
+    const val MIN_SUPERSEDED_MEMORY_RETENTION_DAYS = 7
+    const val MAX_MEMORY_PURGE_BATCH_SIZE = 100
+    const val MAX_AUTO_DELETE_CONFIDENCE = 0.70
+    const val MIN_RECALL_PROTECTION_COUNT = 1
 }

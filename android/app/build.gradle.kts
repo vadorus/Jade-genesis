@@ -91,4 +91,5 @@ dependencies {
     ksp("androidx.room3:room3-compiler:$roomVersion")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260814")
 }

@@ -138,6 +138,7 @@ class SharedGenesisStateStore(context: Context) {
             nodeId = nodeId,
             nodeName = nodeName,
             serverRevision = response.serverRevision,
+            serverHeadRevision = response.serverHeadRevision,
             uploadedEvents = acknowledged.size,
             receivedEvents = if (response.resetRequired) {
                 response.snapshot.size
@@ -145,6 +146,7 @@ class SharedGenesisStateStore(context: Context) {
                 response.events.size
             },
             outboxRemaining = pending.size,
+            hasMore = response.hasMore,
             resetApplied = response.resetRequired,
             syncedAt = syncedAt.coerceAtLeast(0L)
         )

@@ -45,26 +45,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile node-agent/jade_node_agent.py
+          python3 -m py_compile \
+            node-agent/jade_node_agent.py \
+            node-agent/jade_node_runtime_core.py \
+            node-agent/shared_genesis_state.py
 
-      - name: Validate telemetry helpers without external services
+      - name: Validate telemetry and Shared State without external services
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import importlib.util
+          import json
+          import sys
+          import tempfile
           from pathlib import Path
 
-          path = Path("node-agent/jade_node_agent.py")
+          node_dir = Path("node-agent").resolve()
+          sys.path.insert(0, str(node_dir))
+
+          path = node_dir / "jade_node_agent.py"
           spec = importlib.util.spec_from_file_location("jade_node_agent", path)
           assert spec is not None and spec.loader is not None
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          assert module.VERSION == "0.1.2"
+          assert module.VERSION == "0.1.3"
           assert module.PROTOCOL == "jade-genesis-node/0.0.6"
           assert "brain_chat" in module.ALLOWED_TASKS
           assert "vision_analyze" in module.ALLOWED_TASKS
+          assert "shared_state_sync" in module.ALLOWED_TASKS
 
           cpu = module.cpu_load_percent(sample_seconds=0.02)
           assert cpu == -1.0 or 0.0 <= cpu <= 100.0
@@ -79,10 +89,53 @@ jobs:
           assert required.issubset(gpu.keys())
 
           store = module.AsyncTaskStore({})
-          stats = store.stats()
-          assert stats == {"active": 0, "queued": 0, "running": 0}
+          assert store.stats() == {"active": 0, "queued": 0, "running": 0}
 
-          print("Node Runtime telemetry helpers validated.")
+          from shared_genesis_state import SharedGenesisStateStore
+          with tempfile.TemporaryDirectory(prefix="jade-state-") as temp_dir:
+              state_store = SharedGenesisStateStore(Path(temp_dir) / "state.json")
+              request = {
+                  "identity_id": "jade-test",
+                  "replica_id": "pixel-test",
+                  "known_revision": 0,
+                  "events": [{
+                      "event_id": "event-1",
+                      "origin_node": "pixel-test",
+                      "kind": "identity_presence",
+                      "entity_id": "jade-test",
+                      "payload": "{}",
+                      "created_at": 1000,
+                  }],
+              }
+              first = state_store.sync(request)
+              assert first["server_revision"] == 1
+              assert first["ack_event_ids"] == ["event-1"]
+              assert len(first["events"]) == 1
+
+              # Idempotent retry: the same event is acknowledged but does not
+              # advance the durable revision a second time.
+              second = state_store.sync(request)
+              assert second["server_revision"] == 1
+              assert second["ack_event_ids"] == ["event-1"]
+
+              try:
+                  state_store.sync({**request, "identity_id": "other-jade"})
+              except ValueError as exc:
+                  assert str(exc) == "shared_state_identity_mismatch"
+              else:
+                  raise AssertionError("identity mismatch should be rejected")
+
+          health = module.health_payload({
+              "node_id": "vps-test",
+              "node_kind": "VPS",
+              "node_name": "VPS test",
+              "runtime_channel": "stable",
+              "ollama_url": "http://127.0.0.1:9",
+          }, store)
+          assert "shared_genesis_state_v1" in health["capabilities"]
+          assert "shared_state_sync" in health["capabilities"]
+
+          print("Node Runtime 0.1.3 + Shared Genesis State validated.")
           PY
 
       - name: Prove validation did not rewrite sources

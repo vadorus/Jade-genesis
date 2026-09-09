@@ -119,6 +119,18 @@ _BRAIN_METRICS: dict[str, Any] = {
 _BRAIN_METRICS_LOCK = threading.Lock()
 
 
+def runtime_started(config: dict[str, Any]) -> None:
+    """Extension hook invoked after configuration is loaded.
+
+    Versioned wrappers may attach bounded background services here. The stable
+    core deliberately provides no background behavior by default.
+    """
+
+
+def runtime_stopping() -> None:
+    """Extension hook invoked before the HTTP runtime finishes stopping."""
+
+
 def log_event(level: str, event: str, message: str, **metadata: Any) -> None:
     safe_metadata: dict[str, Any] = {}
     for key, value in metadata.items():
@@ -1821,7 +1833,7 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Jade Genesis Node Runtime 0.1.2")
+    parser = argparse.ArgumentParser(description=f"Jade Genesis Node Runtime {VERSION}")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--reset-token", action="store_true")
     parser.add_argument("--show-token", action="store_true")
@@ -1876,12 +1888,14 @@ def main() -> int:
         ("0.0.0.0", int(config["port"])),
         make_handler(config, store),
     )
+    runtime_started(config)
     try:
         server.serve_forever(poll_interval=0.25)
     except KeyboardInterrupt:
         print("\nArrêt demandé.")
     finally:
         server.server_close()
+        runtime_stopping()
         log_event("INFO", "runtime_stop", "Runtime arrêté.")
     return 0
 

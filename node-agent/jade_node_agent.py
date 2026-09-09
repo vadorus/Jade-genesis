@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Jade Genesis Node Runtime 0.1.3 entrypoint.
+"""Jade Genesis Node Runtime 0.1.4 entrypoint.
 
-The 0.1.2 runtime core is kept as a stable module while 0.1.3 layers the
-Shared Genesis State durable VPS replica on top. The wire protocol remains
-jade-genesis-node/0.0.6 for already paired Android clients.
+The 0.1.2 runtime core is kept as a stable module while this wrapper layers the
+Shared Genesis State replica and bounded VPS Night Cycle supervisor on top. The
+wire protocol remains compatible with already paired Android clients.
 """
 
 from __future__ import annotations
 
 import jade_node_runtime_core as core
 from shared_genesis_state import run_shared_state_sync, shared_state_status
+from vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 PROTOCOL = core.PROTOCOL
 
 _original_execute = core.execute_allowlisted_task
@@ -38,11 +39,13 @@ def _health_payload(config: dict, store=None) -> dict:
             "shared_genesis_state_v1",
             "durable_state_replica_v1",
             "shared_state_sync",
+            "vps_night_cycle_supervisor_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
         result["capabilities"] = capabilities
         result["shared_state"] = shared_state_status()
+        result["night_cycle_supervisor"] = supervisor_status(config)
     result["agent_version"] = VERSION
     return result
 
@@ -52,17 +55,28 @@ def _runtime_payload(config: dict) -> dict:
     result["runtime_version"] = VERSION
     if str(config.get("node_kind", "")).upper() == "VPS":
         result["shared_state"] = shared_state_status()
+        result["night_cycle_supervisor"] = supervisor_status(config)
     return result
+
+
+def _runtime_started(config: dict) -> None:
+    start_supervisor(config, logger=core.log_event)
+
+
+def _runtime_stopping() -> None:
+    stop_supervisor()
 
 
 # Patch the core module before its main loop constructs handlers/stores. Functions
 # defined in the core resolve these globals dynamically, so synchronous and async
-# task paths both see the 0.1.3 extension.
+# task paths both see the 0.1.4 extension.
 core.VERSION = VERSION
 core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync",)
 core.execute_allowlisted_task = _execute_allowlisted_task
 core.health_payload = _health_payload
 core.runtime_payload = _runtime_payload
+core.runtime_started = _runtime_started
+core.runtime_stopping = _runtime_stopping
 
 # Compatibility exports used by CI/tests and by simple tooling that imported the
 # old monolithic entrypoint directly.

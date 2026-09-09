@@ -18,9 +18,12 @@ class NightCycleStore(context: Context) {
         loadUnsafe().take(safeLimit)
     }
 
-    fun lastSuccessfulCompletedAt(): Long = synchronized(lock) {
+    fun lastProtectedCompletedAt(): Long = synchronized(lock) {
         loadUnsafe()
-            .firstOrNull { it.status == NightCycleStatus.SUCCESS }
+            .firstOrNull {
+                it.status == NightCycleStatus.SUCCESS ||
+                    it.status == NightCycleStatus.PARTIAL
+            }
             ?.completedAt
             ?: 0L
     }

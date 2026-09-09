@@ -17,6 +17,7 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 MAX_EVENTS = 2_000
+MAX_ENTITIES = 500
 MAX_SYNC_EVENTS = 200
 MAX_EVENT_PAYLOAD_CHARS = 64_000
 MAX_ID_CHARS = 160
@@ -88,6 +89,12 @@ class SharedGenesisStateStore:
             return primary
         backup = self._load_file(self.backup_path)
         if backup is not None:
+            # Restore the valid backup before a later save can rotate the broken
+            # primary over it.
+            try:
+                self.path.write_bytes(self.backup_path.read_bytes())
+            except OSError:
+                pass
             return backup
         raise RuntimeError("shared_state_corrupt")
 
@@ -101,7 +108,7 @@ class SharedGenesisStateStore:
         )
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
         temp.write_text(encoded, encoding="utf-8")
-        if self.path.exists():
+        if self.path.exists() and self._load_file(self.path) is not None:
             try:
                 self.backup_path.write_bytes(self.path.read_bytes())
             except OSError:
@@ -140,6 +147,8 @@ class SharedGenesisStateStore:
         )
 
     def sync(self, request: dict[str, Any]) -> dict[str, Any]:
+        if _safe_int(request.get("schema_version"), 0) != SCHEMA_VERSION:
+            raise ValueError("incompatible_shared_state_schema")
         identity_id = _clean_text(request.get("identity_id"), "identity_id")
         replica_id = _clean_text(request.get("replica_id"), "replica_id")
         known_revision = max(0, _safe_int(request.get("known_revision"), 0))
@@ -198,6 +207,14 @@ class SharedGenesisStateStore:
                 events = events[-MAX_EVENTS:]
                 changed = True
 
+            if len(entities) > MAX_ENTITIES:
+                newest_entities = sorted(
+                    entities.items(),
+                    key=lambda pair: self._event_order(pair[1]),
+                )[-MAX_ENTITIES:]
+                entities = dict(newest_entities)
+                changed = True
+
             state["revision"] = revision
             state["events"] = events
             state["entities"] = entities
@@ -214,11 +231,13 @@ class SharedGenesisStateStore:
                 known_revision > revision
                 or known_revision < max(0, first_revision - 1)
             )
-            outgoing = [] if reset_required else [
+            available = [] if reset_required else [
                 dict(item)
                 for item in events
                 if _safe_int(item.get("server_revision"), 0) > known_revision
-            ][:MAX_SYNC_EVENTS]
+            ]
+            outgoing = available[:MAX_SYNC_EVENTS]
+            has_more = len(available) > len(outgoing)
             snapshot = (
                 sorted(
                     (dict(value) for value in entities.values()),
@@ -230,14 +249,22 @@ class SharedGenesisStateStore:
                 if reset_required
                 else []
             )
+            response_revision = revision
+            if outgoing and has_more:
+                response_revision = _safe_int(
+                    outgoing[-1].get("server_revision"),
+                    known_revision,
+                )
 
             return {
                 "schema_version": SCHEMA_VERSION,
                 "identity_id": identity_id,
                 "replica_id": replica_id,
-                "server_revision": revision,
+                "server_revision": response_revision,
+                "server_head_revision": revision,
                 "ack_event_ids": ack_ids,
                 "events": outgoing,
+                "has_more": has_more,
                 "reset_required": reset_required,
                 "snapshot": snapshot,
                 "server_updated_at": _safe_int(state.get("updated_at"), 0),

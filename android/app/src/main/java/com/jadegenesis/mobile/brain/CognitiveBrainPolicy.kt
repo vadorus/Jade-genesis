@@ -18,9 +18,14 @@ data class CognitiveBrainPlan(
 )
 
 object CognitiveBrainPolicy {
-    fun plan(context: BrainContext): CognitiveBrainPlan {
-        val operation = context.operation.trim().lowercase()
-        return when (operation) {
+    fun plan(context: BrainContext): CognitiveBrainPlan =
+        plan(
+            operation = context.operation,
+            userInput = context.userInput
+        )
+
+    fun plan(operation: String, userInput: String): CognitiveBrainPlan {
+        return when (operation.trim().lowercase()) {
             "verify" -> plan(
                 CognitiveBrainProfile.CRITIC,
                 "Passe de vérification : priorité à la critique et à la stabilité.",
@@ -42,7 +47,7 @@ object CognitiveBrainPolicy {
                 0.10
             )
 
-            else -> planForAnswer(context.userInput)
+            else -> planForAnswer(userInput)
         }
     }
 

@@ -1,4 +1,4 @@
-# Jade Genesis — Distributed Node Runtime 0.1.3
+# Jade Genesis — Distributed Node Runtime 0.1.4
 
 Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. The runtime stays dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
 
@@ -35,19 +35,26 @@ Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidati
 
 ## Shared Genesis State v1
 
-Runtime 0.1.3 adds an optional durable operational-state replica on nodes configured as `VPS`. It advertises:
+Runtime 0.1.4 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises:
 
 - `shared_genesis_state_v1`
 - `durable_state_replica_v1`
 - `shared_state_sync`
+- `vps_night_cycle_supervisor_v1`
 
 The replica stores a bounded, versioned event stream and a compact latest-entity snapshot in `~/.jade-genesis/genesis-state.json`, with a backup copy. Sync is idempotent by event ID and bound to one Jade identity. A VPS replica does **not** become the sole owner of Jade's identity.
 
-The Pixel side keeps its own local cache and outbox. If the VPS is temporarily unavailable, unsynced operational snapshots remain on the phone and are retried later. Runtime 0.1.3 provides the durable-state foundation; autonomous Night Cycle execution is intentionally a later stage.
+The Pixel side keeps its own local cache and outbox. If the VPS is temporarily unavailable, unsynced operational snapshots remain on the phone and are retried later.
+
+## VPS-supervised Night Cycle
+
+On a node configured as `VPS`, Runtime 0.1.4 starts a bounded local supervisor. It waits until the latest synchronized Pixel snapshot has been inactive for at least two hours, then runs at most once per twenty-hour protection window. The supervisor reviews the durable Shared Genesis State replica, the Memory v2 cursor, the latest Runtime Eval summary and the Evolution Engine candidate summary. Its journal is bounded to 30 runs and stored with a backup in `~/.jade-genesis/night-cycle-supervisor.json`.
+
+The VPS writes a `vps_night_cycle_report` back into Shared Genesis State so the Pixel receives it on its next normal sync. Missing synchronized evidence produces a partial report instead of invented results. The supervisor never mutates Pixel memory, never promotes an Evolution candidate, never changes compiled SafetyPolicy limits and exposes no shell or generic command endpoint.
 
 ## Resource and model telemetry
 
-Runtime 0.1.3 preserves Resource Intelligence v3 from 0.1.2: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
+Runtime 0.1.4 preserves Resource Intelligence v3 from 0.1.2: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
 
 ## Useful local commands
 

@@ -84,6 +84,7 @@ object SafetyPolicy {
     const val MAX_SHARED_STATE_EVENT_PAYLOAD_CHARS = 64_000
     const val MAX_SHARED_STATE_SYNC_PAYLOAD_CHARS = 512_000
     const val MAX_SHARED_STATE_SYNC_RESPONSE_CHARS = 1_000_000
+    const val MAX_SHARED_STATE_RUNTIME_GROUPS = 20
 
     // Une configuration candidate ne peut pas provoquer une purge agressive.
     const val MIN_EPHEMERAL_MEMORY_RETENTION_DAYS = 14

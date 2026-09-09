@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -281,6 +282,78 @@ class SharedGenesisStateStore:
                 "entity_count": len(state.get("entities", {})),
                 "updated_at": max(0, _safe_int(state.get("updated_at"), 0)),
             }
+
+    def supervision_view(self) -> dict[str, Any]:
+        """Return a detached, bounded view for trusted local maintenance.
+
+        This is intentionally an in-process API: it is not exposed as an HTTP
+        endpoint and contains no pairing secret.
+        """
+        with self.lock:
+            state = self._load()
+            entities = [
+                dict(value)
+                for value in state.get("entities", {}).values()
+                if isinstance(value, dict)
+            ]
+            entities.sort(
+                key=lambda item: (
+                    str(item.get("kind", "")),
+                    str(item.get("entity_id", "")),
+                )
+            )
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "identity_id": str(state.get("identity_id", "")).strip(),
+                "revision": max(0, _safe_int(state.get("revision"), 0)),
+                "event_count": len(state.get("events", [])),
+                "entities": entities[:MAX_ENTITIES],
+                "updated_at": max(0, _safe_int(state.get("updated_at"), 0)),
+            }
+
+    def append_replica_event(
+        self,
+        identity_id: str,
+        replica_id: str,
+        kind: str,
+        entity_id: str,
+        payload: str,
+        created_at: int | None = None,
+    ) -> dict[str, Any]:
+        """Append one allow-listed local-replica event through normal sync rules."""
+        clean_kind = _clean_text(kind, "kind", 80)
+        if clean_kind not in {
+            "vps_night_cycle_report",
+            "vps_maintenance_snapshot",
+        }:
+            raise ValueError("unsupported_replica_event_kind")
+        clean_identity = _clean_text(identity_id, "identity_id")
+        clean_replica = _clean_text(replica_id, "replica_id")
+        clean_entity = _clean_text(entity_id, "entity_id")
+        clean_payload = str(payload)
+        if len(clean_payload) > MAX_EVENT_PAYLOAD_CHARS:
+            raise ValueError("shared_state_event_payload_too_large")
+        view = self.supervision_view()
+        if not view["identity_id"]:
+            raise ValueError("shared_state_identity_unbound")
+        if view["identity_id"] != clean_identity:
+            raise ValueError("shared_state_identity_mismatch")
+        timestamp = max(0, _safe_int(created_at, _now_ms()))
+        event = {
+            "event_id": f"state-{uuid.uuid4()}",
+            "origin_node": clean_replica,
+            "kind": clean_kind,
+            "entity_id": clean_entity,
+            "payload": clean_payload,
+            "created_at": timestamp,
+        }
+        return self.sync({
+            "schema_version": SCHEMA_VERSION,
+            "identity_id": clean_identity,
+            "replica_id": clean_replica,
+            "known_revision": view["revision"],
+            "events": [event],
+        })
 
 
 _GLOBAL_STORE = SharedGenesisStateStore()

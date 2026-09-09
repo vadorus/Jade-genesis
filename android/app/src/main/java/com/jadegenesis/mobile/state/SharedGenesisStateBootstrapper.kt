@@ -2,8 +2,11 @@ package com.jadegenesis.mobile.state
 
 import android.content.Context
 import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
+import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
+import com.jadegenesis.mobile.evolution.EvolutionRuntime
 import com.jadegenesis.mobile.identity.IdentityManager
 import com.jadegenesis.mobile.memory.MemoryLifecycleManager
 import com.jadegenesis.mobile.node.NodeManager
@@ -19,6 +22,8 @@ class SharedGenesisStateBootstrapper(context: Context) {
     private val nodeManager = NodeManager(appContext, profiler, diagnostics)
     private val identityManager = IdentityManager(appContext)
     private val memoryLifecycle = MemoryLifecycleManager(appContext)
+    private val runtimeEval = RuntimeEvalRuntime.initialize(appContext)
+    private val evolution = EvolutionRuntime.initialize(appContext)
     private val stateStore = SharedGenesisStateStore(appContext)
     private val coordinator = SharedGenesisStateCoordinator(
         nodeManager = nodeManager,
@@ -121,6 +126,81 @@ class SharedGenesisStateBootstrapper(context: Context) {
                         }
                     }
                 )
+                put("observed_at", now)
+            }.toString()
+        )
+
+        val runtimeReport = runtimeEval.report()
+        coordinator.publish(
+            originNode = replicaId,
+            kind = "runtime_eval_snapshot",
+            entityId = "current",
+            payload = JSONObject().apply {
+                put("schema_version", runtimeReport.schemaVersion)
+                put("generated_at", runtimeReport.generatedAt)
+                put("observation_count", runtimeReport.observationCount)
+                put("successful_observations", runtimeReport.successfulObservations)
+                put("overall_success_rate", runtimeReport.overallSuccessRate)
+                put("score", runtimeReport.score)
+                put("confidence", runtimeReport.confidence)
+                put(
+                    "groups",
+                    JSONArray().apply {
+                        runtimeReport.groups
+                            .take(SafetyPolicy.MAX_SHARED_STATE_RUNTIME_GROUPS)
+                            .forEach { group ->
+                                put(
+                                    JSONObject().apply {
+                                        put("node_id", group.nodeId)
+                                        put("node_name", group.nodeName)
+                                        put("task_kind", group.taskKind)
+                                        put("model", group.model)
+                                        put("samples", group.samples)
+                                        put("success_rate", group.successRate)
+                                        put("average_duration_ms", group.averageDurationMs)
+                                        put("fallback_rate", group.fallbackRate)
+                                        put("average_tokens_per_second", group.averageTokensPerSecond)
+                                        put("last_observed_at", group.lastObservedAt)
+                                    }
+                                )
+                            }
+                    }
+                )
+                put("observed_at", now)
+            }.toString()
+        )
+
+        val evolutionCandidates = evolution.candidates(
+            SafetyPolicy.MAX_EVOLUTION_CANDIDATES
+        )
+        coordinator.publish(
+            originNode = replicaId,
+            kind = "evolution_snapshot",
+            entityId = "current",
+            payload = JSONObject().apply {
+                put(
+                    "candidates",
+                    JSONArray().apply {
+                        evolutionCandidates.forEach { candidate ->
+                            put(
+                                JSONObject().apply {
+                                    put("candidate_id", candidate.candidateId)
+                                    put("kind", candidate.kind.name)
+                                    put("title", candidate.title)
+                                    put("status", candidate.status.name)
+                                    put("champion_config_id", candidate.championConfigId)
+                                    put("challenger_config_id", candidate.challengerConfigId)
+                                    put(
+                                        "promotion_eligible",
+                                        candidate.comparison?.promotionEligible == true
+                                    )
+                                    put("updated_at", candidate.updatedAt)
+                                }
+                            )
+                        }
+                    }
+                )
+                put("automatic_promotion", false)
                 put("observed_at", now)
             }.toString()
         )

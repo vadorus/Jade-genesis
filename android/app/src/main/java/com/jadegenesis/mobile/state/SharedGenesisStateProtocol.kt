@@ -18,8 +18,10 @@ data class SharedStateSyncResponse(
     val identityId: String,
     val replicaId: String,
     val serverRevision: Long,
+    val serverHeadRevision: Long,
     val acknowledgedEventIds: Set<String>,
     val events: List<SharedStateEvent>,
+    val hasMore: Boolean,
     val resetRequired: Boolean,
     val snapshot: List<SharedStateEvent>,
     val serverUpdatedAt: Long
@@ -29,9 +31,11 @@ data class SharedStateSyncResult(
     val nodeId: String,
     val nodeName: String,
     val serverRevision: Long,
+    val serverHeadRevision: Long,
     val uploadedEvents: Int,
     val receivedEvents: Int,
     val outboxRemaining: Int,
+    val hasMore: Boolean,
     val resetApplied: Boolean,
     val syncedAt: Long
 )
@@ -94,6 +98,10 @@ object SharedGenesisStateProtocol {
         }
         val revision = json.optLong("server_revision", -1L)
         require(revision >= 0L) { "Révision serveur Shared State invalide." }
+        val headRevision = json.optLong("server_head_revision", revision)
+        require(headRevision >= revision) {
+            "Révision de tête Shared State invalide."
+        }
 
         val ack = parseStringSet(json.optJSONArray("ack_event_ids"))
         val events = parseEvents(json.optJSONArray("events"))
@@ -109,8 +117,10 @@ object SharedGenesisStateProtocol {
             identityId = identityId,
             replicaId = replicaId,
             serverRevision = revision,
+            serverHeadRevision = headRevision,
             acknowledgedEventIds = ack,
             events = events,
+            hasMore = json.optBoolean("has_more", false),
             resetRequired = json.optBoolean("reset_required", false),
             snapshot = snapshot,
             serverUpdatedAt = json.optLong("server_updated_at", 0L).coerceAtLeast(0L)

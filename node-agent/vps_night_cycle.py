@@ -1,9 +1,10 @@
 """Bounded VPS supervision for Jade Genesis Night Cycle.
 
 The supervisor works only from the durable Shared Genesis State replica. It
-reviews synchronized memory, Runtime Eval and Evolution summaries, then writes
-a report back to the same event stream. It cannot promote a candidate, change
-SafetyPolicy, execute a shell command or reach into the Pixel.
+reviews synchronized memory, Runtime Eval and Evolution summaries, runs the
+bounded Night Learning Lab, then writes review artifacts back to the same event
+stream. It cannot promote a candidate, change SafetyPolicy, execute a shell
+command, rewrite production code or reach into the Pixel.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from night_learning_lab import NightLearningLab
 from shared_genesis_state import CONFIG_DIR, SharedGenesisStateStore, _GLOBAL_STORE
 
 SCHEMA_VERSION = 1
@@ -197,11 +199,13 @@ class VpsNightCycleSupervisor:
         state_store: SharedGenesisStateStore = _GLOBAL_STORE,
         journal: NightCycleJournal | None = None,
         logger: LogFunction | None = None,
+        learning_lab: NightLearningLab | None = None,
     ):
         self.config = dict(config)
         self.state_store = state_store
         self.journal = journal or NightCycleJournal()
         self.logger = logger
+        self.learning_lab = learning_lab or NightLearningLab()
         self._run_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -235,7 +239,7 @@ class VpsNightCycleSupervisor:
             "schema_version": SCHEMA_VERSION,
             "enabled": self.enabled,
             "running": bool(self._thread and self._thread.is_alive()),
-            "mode": "shared_state_review_only",
+            "mode": "bounded_learning_lab",
             "pixel_inactive_after_ms": PIXEL_INACTIVE_AFTER_MS,
             "minimum_cycle_interval_ms": MIN_CYCLE_INTERVAL_MS,
             "last_attempt_status": str(self._last_attempt.get("status", "")),
@@ -244,6 +248,15 @@ class VpsNightCycleSupervisor:
             "last_run_id": str(latest.get("run_id", "")),
             "last_run_status": str(latest.get("status", "")),
             "last_completed_at": _safe_int(latest.get("completed_at"), 0),
+            "research_questions": _safe_int(latest.get("research_question_count"), 0),
+            "hypotheses": _safe_int(latest.get("hypothesis_count"), 0),
+            "experiments": _safe_int(latest.get("experiment_count"), 0),
+            "improvement_candidates": _safe_int(
+                latest.get("improvement_candidate_count"),
+                0,
+            ),
+            "external_research_bounded": True,
+            "experiment_automatic": False,
             "promotion_automatic": False,
             "arbitrary_shell": False,
         }
@@ -337,18 +350,57 @@ class VpsNightCycleSupervisor:
             ),
         ))
 
+        learning_result = runCatchingLearning(self.learning_lab, view, started_at)
+        learning_ok = learning_result["ok"]
+        learning = learning_result["snapshot"]
+        questions = learning.get("research_questions", [])
+        hypotheses = learning.get("hypotheses", [])
+        experiments = learning.get("experiments", [])
+        improvement_candidates = learning.get("improvement_candidates", [])
+        research_evidence = learning.get("research_evidence", [])
+        research_errors = learning.get("research_errors", [])
+
+        steps.append(self._step(
+            "TARGETED_RESEARCH",
+            learning_ok,
+            (
+                f"Night Learning Lab: {len(questions)} recherche(s) ciblée(s), "
+                f"{len(research_evidence)} preuve(s) publique(s) bornée(s), "
+                f"{len(research_errors)} fournisseur(s)/requête(s) indisponible(s)."
+                if learning_ok else
+                f"Night Learning Lab indisponible: {learning_result['error']}."
+            ),
+        ))
+        steps.append(self._step(
+            "HYPOTHESIS_PLANNING",
+            learning_ok,
+            f"{len(hypotheses)} hypothèse(s) falsifiable(s) préparée(s); aucune conclusion n'est appliquée comme vérité.",
+        ))
+        steps.append(self._step(
+            "EXPERIMENT_PLANNING",
+            learning_ok,
+            f"{len(experiments)} expérience(s) champion/challenger ou collecte de preuves préparée(s); exécution automatique désactivée.",
+        ))
+        steps.append(self._step(
+            "IMPROVEMENT_CANDIDATES",
+            learning_ok,
+            f"{len(improvement_candidates)} candidat(s) d'amélioration créé(s) en statut CANDIDATE; activation et promotion automatiques interdites.",
+        ))
+
         insights: list[str] = []
         if runtime_ok and runtime_confidence < 0.75:
             insights.append("collect_more_runtime_evidence")
         if validated > 0:
             insights.append("await_explicit_user_approval")
+        if improvement_candidates:
+            insights.append("review_night_learning_candidates")
         if not memory_ok:
             insights.append("await_memory_cursor_sync")
         if not insights:
             insights.append("continue_bounded_observation")
         steps.append(self._step(
             "MAINTENANCE_LEARNING",
-            True,
+            learning_ok,
             "Recommandations bornées enregistrées: " + ", ".join(insights) + ".",
         ))
 
@@ -366,13 +418,42 @@ class VpsNightCycleSupervisor:
             "runtime_confidence": runtime_confidence,
             "evolution_candidate_count": len(candidates),
             "evolution_validated_count": validated,
+            "research_question_count": len(questions),
+            "research_evidence_count": len(research_evidence),
+            "hypothesis_count": len(hypotheses),
+            "experiment_count": len(experiments),
+            "improvement_candidate_count": len(improvement_candidates),
             "insights": insights,
+            "automatic_experiment_execution": False,
             "promotion_performed": False,
+            "production_code_rewrite_performed": False,
             "shell_execution_performed": False,
             "steps": steps[:MAX_STEPS],
         }
 
         try:
+            learning_snapshot = dict(learning)
+            learning_snapshot.update({
+                "run_id": run_id,
+                "reviewed_at": completed_at,
+                "automatic_experiment_execution": False,
+                "automatic_promotion": False,
+                "production_code_rewrite": False,
+                "shell_execution": False,
+            })
+            self.state_store.append_replica_event(
+                identity_id=str(view["identity_id"]),
+                replica_id=str(self.config.get("node_id", "vps-supervisor")),
+                kind="vps_learning_snapshot",
+                entity_id="current",
+                payload=json.dumps(
+                    learning_snapshot,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                created_at=completed_at,
+            )
+
             maintenance_snapshot = {
                 "schema_version": SCHEMA_VERSION,
                 "run_id": run_id,
@@ -384,8 +465,14 @@ class VpsNightCycleSupervisor:
                 "runtime_confidence": runtime_confidence,
                 "evolution_candidate_count": len(candidates),
                 "evolution_validated_count": validated,
+                "research_question_count": len(questions),
+                "hypothesis_count": len(hypotheses),
+                "experiment_count": len(experiments),
+                "improvement_candidate_count": len(improvement_candidates),
                 "insights": insights,
+                "automatic_experiment_execution": False,
                 "promotion_performed": False,
+                "production_code_rewrite_performed": False,
                 "shell_execution_performed": False,
             }
             self.state_store.append_replica_event(
@@ -411,7 +498,7 @@ class VpsNightCycleSupervisor:
             steps.append(self._step(
                 "SHARED_STATE_AFTER",
                 True,
-                "Maintenance et rapport du cycle VPS ajoutés à Shared Genesis State pour la prochaine synchronisation du Pixel.",
+                "Learning Lab, maintenance et rapport du cycle VPS ajoutés à Shared Genesis State pour la prochaine synchronisation du Pixel.",
             ))
         except Exception as exc:
             status = "PARTIAL"
@@ -432,6 +519,7 @@ class VpsNightCycleSupervisor:
             f"Cycle VPS {status.lower()}.",
             run_id=run_id,
             source_revision=report["source_revision"],
+            improvement_candidates=len(improvement_candidates),
             promotion_performed=False,
             shell_execution_performed=False,
         )
@@ -445,7 +533,9 @@ class VpsNightCycleSupervisor:
             "reason": reason,
             "started_at": now,
             "completed_at": now,
+            "automatic_experiment_execution": False,
             "promotion_performed": False,
+            "production_code_rewrite_performed": False,
             "shell_execution_performed": False,
             "steps": [],
         }
@@ -483,6 +573,39 @@ class VpsNightCycleSupervisor:
             self.logger(level, event, message, **metadata)
 
 
+def runCatchingLearning(
+    learning_lab: NightLearningLab,
+    view: dict[str, Any],
+    now_ms: int,
+) -> dict[str, Any]:
+    try:
+        return {
+            "ok": True,
+            "snapshot": learning_lab.review(view=view, now_ms=now_ms),
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "snapshot": {
+                "schema_version": SCHEMA_VERSION,
+                "generated_at": now_ms,
+                "source_revision": _safe_int(view.get("revision"), 0),
+                "research_questions": [],
+                "research_evidence": [],
+                "research_errors": [type(exc).__name__],
+                "hypotheses": [],
+                "experiments": [],
+                "improvement_candidates": [],
+                "automatic_experiment_execution": False,
+                "automatic_promotion": False,
+                "production_code_rewrite": False,
+                "shell_execution": False,
+            },
+            "error": type(exc).__name__,
+        }
+
+
 _SUPERVISOR_LOCK = threading.Lock()
 _SUPERVISOR: VpsNightCycleSupervisor | None = None
 
@@ -512,7 +635,9 @@ def supervisor_status(config: dict[str, Any]) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "enabled": str(config.get("node_kind", "")).upper() == "VPS",
         "running": False,
-        "mode": "shared_state_review_only",
+        "mode": "bounded_learning_lab",
+        "external_research_bounded": True,
+        "experiment_automatic": False,
         "promotion_automatic": False,
         "arbitrary_shell": False,
     }

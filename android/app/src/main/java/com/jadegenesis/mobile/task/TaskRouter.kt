@@ -1,5 +1,9 @@
 package com.jadegenesis.mobile.task
 
+import com.jadegenesis.mobile.config.JadeConfig
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.RoutingTuning
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.DeviceProfile
 import com.jadegenesis.mobile.model.DistributedTaskRequest
 import com.jadegenesis.mobile.model.DistributedTaskResult
@@ -24,14 +28,10 @@ import java.util.UUID
 class TaskRouter(
     private val nodeManager: NodeManager,
     private val ledger: TaskLedger,
-    private val queue: TaskQueue
+    private val queue: TaskQueue,
+    private val configProvider: () -> JadeConfig = { JadeConfigRuntime.current() }
 ) {
     companion object {
-        private const val PROBE_ITERATIONS = 20_000
-        private const val MAX_TEXT_CHARS = 12_000
-        private const val MAX_MEMORY_ITEMS = 24
-        private const val MAX_MEMORY_PAYLOAD_CHARS = 48_000
-
         private val MEMORY_STOP_WORDS = setOf(
             "le", "la", "les", "un", "une", "des", "de", "du",
             "et", "ou", "a", "à", "au", "aux", "en", "dans",
@@ -67,6 +67,7 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget
     ): DistributedTaskResult {
+        val taskConfig = configProvider().validated().task
         val taskId = "task-${UUID.randomUUID()}"
         val payload = listOf(
             "jade-genesis",
@@ -82,7 +83,10 @@ class TaskRouter(
                 payload = payload,
                 requiredCapability = "genesis_probe",
                 workload = TaskWorkload.MEDIUM,
-                iterations = PROBE_ITERATIONS,
+                iterations = taskConfig.probeIterations.coerceIn(
+                    1,
+                    SafetyPolicy.MAX_PROBE_ITERATIONS
+                ),
                 createdAt = System.currentTimeMillis()
             ),
             device = device,
@@ -95,11 +99,12 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget
     ): DistributedTaskResult {
+        val taskConfig = configProvider().validated().task
         val cleanText = text.trim()
         require(cleanText.isNotBlank()) {
             "Le texte à analyser est vide."
         }
-        require(cleanText.length <= MAX_TEXT_CHARS) {
+        require(cleanText.length <= SafetyPolicy.MAX_TEXT_CHARS) {
             "Le texte est trop long pour la 0.0.6."
         }
 
@@ -109,7 +114,9 @@ class TaskRouter(
                 taskKind = "text_analysis",
                 payload = cleanText,
                 requiredCapability = "text_analysis",
-                workload = if (cleanText.length > 4_000) {
+                workload = if (
+                    cleanText.length > taskConfig.textHeavyThresholdChars
+                ) {
                     TaskWorkload.MEDIUM
                 } else {
                     TaskWorkload.LIGHT
@@ -127,11 +134,16 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget
     ): DistributedTaskResult {
+        val taskConfig = configProvider().validated().task
+        val memoryLimit = taskConfig.memoryItems.coerceIn(
+            1,
+            SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK
+        )
         val sourceMemories = memories
             .filterNot {
                 it.source.startsWith("JADE_CONSOLIDATION_")
             }
-            .take(MAX_MEMORY_ITEMS)
+            .take(memoryLimit)
 
         require(sourceMemories.isNotEmpty()) {
             "Aucune mémoire source à consolider."
@@ -156,7 +168,7 @@ class TaskRouter(
             put("memories", memoryArray)
         }.toString()
 
-        require(payload.length <= MAX_MEMORY_PAYLOAD_CHARS) {
+        require(payload.length <= SafetyPolicy.MAX_MEMORY_PAYLOAD_CHARS) {
             "Le lot de mémoire est trop grand pour la 0.0.6."
         }
 
@@ -167,8 +179,8 @@ class TaskRouter(
                 payload = payload,
                 requiredCapability = "memory_consolidation",
                 workload = if (
-                    sourceMemories.size >= 12 ||
-                    payload.length > 12_000
+                    sourceMemories.size >= taskConfig.consolidationHeavyItemThreshold ||
+                    payload.length > taskConfig.consolidationHeavyPayloadChars
                 ) {
                     TaskWorkload.HEAVY
                 } else {
@@ -186,6 +198,7 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget
     ): DistributedTaskResult {
+        val activeConfig = configProvider().validated()
         val startedAt = System.currentTimeMillis()
         queue.enqueue(request)
 
@@ -193,7 +206,12 @@ class TaskRouter(
             device = device,
             refreshRemote = true
         )
-        val history = ledger.recent(40)
+        val history = ledger.recent(
+            activeConfig.task.routingHistoryLimit.coerceIn(
+                1,
+                SafetyPolicy.MAX_ROUTING_HISTORY_ITEMS
+            )
+        )
         val ranked = nodes
             .filter { supportsTask(it, request) }
             .map {
@@ -201,7 +219,8 @@ class TaskRouter(
                     node = it,
                     request = request,
                     budget = budget,
-                    history = history
+                    history = history,
+                    routing = activeConfig.routing
                 )
             }
             .sortedWith(
@@ -416,40 +435,61 @@ class TaskRouter(
         node: GenesisNode,
         request: DistributedTaskRequest,
         budget: ResourceBudget,
-        history: List<DistributedTaskResult>
+        history: List<DistributedTaskResult>,
+        routing: RoutingTuning
     ): RankedNode {
         val remote = node.kind != NodeKind.PHONE
         var score = 0.0
 
-        score += node.cpuCores.coerceAtMost(32) * 1.5
-        score += node.ramAvailableGb.coerceAtMost(32.0) * 4.0
-        score += node.storageFreeGb.coerceAtMost(250.0) * 0.02
+        score += node.cpuCores.coerceAtMost(32) * routing.cpuCoreWeight
+        score += node.ramAvailableGb.coerceAtMost(32.0) * routing.ramAvailableGbWeight
+        score += node.storageFreeGb.coerceAtMost(250.0) * routing.storageFreeGbWeight
 
-        if (budget.preferRemoteCompute && remote) score += 90.0
-        if (budget.preferRemoteCompute && !remote) score -= 15.0
-        if (!budget.preferRemoteCompute && !remote) score += 60.0
-        if (!budget.preferRemoteCompute && remote) score += 15.0
+        if (budget.preferRemoteCompute && remote) {
+            score += routing.preferRemoteRemoteBonus
+        }
+        if (budget.preferRemoteCompute && !remote) {
+            score += routing.preferRemoteLocalPenalty
+        }
+        if (!budget.preferRemoteCompute && !remote) {
+            score += routing.localAllowedLocalBonus
+        }
+        if (!budget.preferRemoteCompute && remote) {
+            score += routing.localAllowedRemoteBonus
+        }
 
         when (request.workload) {
             TaskWorkload.LIGHT -> {
-                if (!remote) score += 25.0 else score += 5.0
+                score += if (!remote) {
+                    routing.lightLocalBonus
+                } else {
+                    routing.lightRemoteBonus
+                }
             }
 
             TaskWorkload.MEDIUM -> {
-                if (remote) score += 25.0 else score += 12.0
+                score += if (remote) {
+                    routing.mediumRemoteBonus
+                } else {
+                    routing.mediumLocalBonus
+                }
             }
 
             TaskWorkload.HEAVY -> {
-                if (remote) score += 55.0 else score -= 20.0
+                score += if (remote) {
+                    routing.heavyRemoteBonus
+                } else {
+                    routing.heavyLocalBonus
+                }
             }
         }
 
         if (
             request.taskKind == "memory_consolidation" &&
             remote &&
-            node.ramAvailableGb >= 1.0
+            node.ramAvailableGb >= routing.consolidationRemoteMinRamGb
         ) {
-            score += 20.0
+            score += routing.consolidationRemoteBonus
         }
 
         val relevantAttempts = history
@@ -469,11 +509,12 @@ class TaskRouter(
         if (relevantAttempts.isNotEmpty()) {
             val successRate =
                 successes.toDouble() / relevantAttempts.size.toDouble()
-            score += successRate * 35.0
-            score -= failures * 8.0
+            score += successRate * routing.historySuccessRateWeight
+            score -= failures * routing.historyFailurePenalty
 
             averageDuration?.let { average ->
-                score += 30.0 / (1.0 + average / 50.0)
+                score += routing.historyDurationBonus /
+                    (1.0 + average / routing.historyDurationScaleMs)
             }
         }
 
@@ -549,7 +590,7 @@ class TaskRouter(
         payload: String,
         iterations: Int
     ): String {
-        require(iterations in 1..100_000)
+        require(iterations in 1..SafetyPolicy.MAX_PROBE_ITERATIONS)
         var data = payload.toByteArray(Charsets.UTF_8)
         val digest = MessageDigest.getInstance("SHA-256")
 
@@ -763,6 +804,10 @@ class TaskRouter(
                     "La consolidation mémoire est vide."
                 }
             }
+
+            else -> error(
+                "Aucune validation de sortie n'est définie pour ${request.taskKind}."
+            )
         }
     }
 

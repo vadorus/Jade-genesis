@@ -1,5 +1,9 @@
 package com.jadegenesis.mobile.resource
 
+import com.jadegenesis.mobile.config.JadeConfig
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.ResourceTuning
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.DeviceProfile
 import com.jadegenesis.mobile.model.ResourceBudget
 import com.jadegenesis.mobile.model.ResourceMode
@@ -8,9 +12,14 @@ import kotlin.math.min
 import kotlin.math.round
 import kotlin.math.roundToInt
 
-class ResourceGovernor {
+class ResourceGovernor(
+    private val configProvider: () -> JadeConfig = { JadeConfigRuntime.current() }
+) {
 
     fun evaluate(device: DeviceProfile): ResourceBudget {
+        val config = configProvider().validated()
+        val tuning = config.resource
+
         val ramRatio = if (device.ramTotalGb > 0.0) {
             device.ramAvailableGb / device.ramTotalGb
         } else {
@@ -31,11 +40,13 @@ class ResourceGovernor {
             device.ramLow ||
                 (
                     memoryThresholdKnown &&
-                        device.ramAvailableGb <= device.ramLowThresholdGb * 1.10
+                        device.ramAvailableGb <=
+                        device.ramLowThresholdGb *
+                        SafetyPolicy.MEMORY_CRITICAL_THRESHOLD_MULTIPLIER
                     ) ||
                 (
                     !memoryThresholdKnown &&
-                        ramRatio <= 0.05
+                        ramRatio <= SafetyPolicy.FALLBACK_CRITICAL_RAM_RATIO
                     )
 
         val memoryEco =
@@ -43,53 +54,60 @@ class ResourceGovernor {
                 (
                     (
                         memoryThresholdKnown &&
-                            device.ramAvailableGb <= device.ramLowThresholdGb * 1.75
+                            device.ramAvailableGb <=
+                            device.ramLowThresholdGb * tuning.memoryEcoThresholdMultiplier
                         ) ||
-                        ramRatio <= 0.10
+                        ramRatio <= tuning.fallbackEcoRamRatio
                     )
 
         val storageLowThresholdGb =
-            max(1.0, min(4.0, device.storageTotalGb * 0.01))
+            max(
+                tuning.storageLowMinGb,
+                min(
+                    tuning.storageLowMaxGb,
+                    device.storageTotalGb * tuning.storageLowFraction
+                )
+            )
 
         val critical =
             memoryCritical ||
-                heapRatio >= 0.90 ||
-                thermalRank >= 3 ||
+                heapRatio >= SafetyPolicy.CRITICAL_HEAP_RATIO ||
+                thermalRank >= SafetyPolicy.CRITICAL_THERMAL_RANK ||
                 (
                     batteryKnown &&
                         !device.charging &&
-                        device.batteryPercent <= 8
+                        device.batteryPercent <= SafetyPolicy.CRITICAL_BATTERY_PERCENT
                     ) ||
-                device.storageFreeGb < 0.75
+                device.storageFreeGb < SafetyPolicy.CRITICAL_STORAGE_FREE_GB
 
         val eco =
             memoryEco ||
                 device.powerSaveMode ||
-                heapRatio >= 0.75 ||
-                thermalRank >= 2 ||
+                heapRatio >= tuning.ecoHeapRatio ||
+                thermalRank >= tuning.ecoThermalRank ||
                 (
                     batteryKnown &&
                         !device.charging &&
-                        device.batteryPercent <= 25
+                        device.batteryPercent <= tuning.ecoBatteryPercent
                     ) ||
                 device.storageFreeGb < storageLowThresholdGb
 
         val healthyMemoryForPerformance = if (memoryThresholdKnown) {
             device.ramAvailableGb >= max(
-                device.ramTotalGb * 0.25,
-                device.ramLowThresholdGb * 2.5
+                device.ramTotalGb * tuning.performanceRamTotalRatio,
+                device.ramLowThresholdGb * tuning.performanceThresholdMultiplier
             )
         } else {
-            ramRatio >= 0.35
+            ramRatio >= tuning.fallbackPerformanceRamRatio
         }
 
         val performance =
             device.charging &&
                 batteryKnown &&
-                device.batteryPercent >= 60 &&
+                device.batteryPercent >= tuning.performanceBatteryPercent &&
                 healthyMemoryForPerformance &&
-                heapRatio < 0.60 &&
-                thermalRank <= 1 &&
+                heapRatio < tuning.performanceHeapRatio &&
+                thermalRank <= tuning.performanceThermalRank &&
                 !device.powerSaveMode &&
                 !device.ramLow
 
@@ -108,44 +126,38 @@ class ResourceGovernor {
             storageLowThresholdGb = storageLowThresholdGb,
             memoryCritical = memoryCritical,
             memoryEco = memoryEco,
-            mode = mode
+            mode = mode,
+            tuning = tuning
         )
 
-        val systemFraction = when (mode) {
-            ResourceMode.CRITICAL -> 0.04
-            ResourceMode.ECO -> 0.08
-            ResourceMode.BALANCED -> 0.12
-            ResourceMode.PERFORMANCE -> 0.18
-        }
-
-        val heapFraction = when (mode) {
-            ResourceMode.CRITICAL -> 0.15
-            ResourceMode.ECO -> 0.25
-            ResourceMode.BALANCED -> 0.35
-            ResourceMode.PERFORMANCE -> 0.50
-        }
-
-        val classFraction = when (mode) {
-            ResourceMode.CRITICAL -> 0.15
-            ResourceMode.ECO -> 0.25
-            ResourceMode.BALANCED -> 0.35
-            ResourceMode.PERFORMANCE -> 0.50
-        }
+        val modeTuning = tuning.mode(mode)
+        val systemFraction = min(
+            modeTuning.systemFraction,
+            SafetyPolicy.MAX_SYSTEM_BUDGET_FRACTION
+        )
+        val heapFraction = min(
+            modeTuning.heapFraction,
+            SafetyPolicy.MAX_HEAP_BUDGET_FRACTION
+        )
+        val classFraction = min(
+            modeTuning.appClassFraction,
+            SafetyPolicy.MAX_APP_CLASS_BUDGET_FRACTION
+        )
 
         val thresholdReserveGb = if (memoryThresholdKnown) {
-            device.ramLowThresholdGb * 1.75
+            device.ramLowThresholdGb * tuning.reserveThresholdMultiplier
         } else {
             0.0
         }
         val reserveGb = round(
             max(
-                1.0,
+                SafetyPolicy.MIN_SYSTEM_RAM_RESERVE_GB,
                 max(
-                    device.ramTotalGb * 0.12,
+                    device.ramTotalGb * tuning.reserveRamFraction,
                     thresholdReserveGb
                 )
             )
-                .coerceAtMost(3.0) * 100.0
+                .coerceAtMost(SafetyPolicy.MAX_SYSTEM_RAM_RESERVE_GB) * 100.0
         ) / 100.0
 
         val safelyAvailableGb =
@@ -168,30 +180,27 @@ class ResourceGovernor {
                 min(heapBudgetMb, appClassBudgetMb)
             )
                 .roundToInt()
-                .coerceAtLeast(8)
+                .coerceAtLeast(SafetyPolicy.MIN_WORKING_SET_MB)
 
         return ResourceBudget(
             mode = mode,
             reasons = reasons,
             systemRamReserveGb = reserveGb,
             recommendedWorkingSetMb = recommendedWorkingSetMb,
-            maxParallelTasks = when (mode) {
-                ResourceMode.CRITICAL -> 1
-                ResourceMode.ECO -> 1
-                ResourceMode.BALANCED -> 2
-                ResourceMode.PERFORMANCE -> 3
-            },
+            maxParallelTasks = modeTuning.maxParallelTasks.coerceIn(
+                1,
+                SafetyPolicy.MAX_PARALLEL_TASKS
+            ),
             heavyBackgroundWorkAllowed =
-                mode == ResourceMode.PERFORMANCE,
+                mode == ResourceMode.PERFORMANCE &&
+                    modeTuning.heavyBackgroundWorkAllowed,
             preferRemoteCompute =
                 mode == ResourceMode.CRITICAL ||
-                    mode == ResourceMode.ECO,
-            maxTaskSliceSeconds = when (mode) {
-                ResourceMode.CRITICAL -> 5
-                ResourceMode.ECO -> 15
-                ResourceMode.BALANCED -> 30
-                ResourceMode.PERFORMANCE -> 60
-            },
+                    modeTuning.preferRemoteCompute,
+            maxTaskSliceSeconds = modeTuning.maxTaskSliceSeconds.coerceIn(
+                1,
+                SafetyPolicy.MAX_TASK_SLICE_SECONDS
+            ),
             evaluatedAt = System.currentTimeMillis()
         )
     }
@@ -204,7 +213,8 @@ class ResourceGovernor {
         storageLowThresholdGb: Double,
         memoryCritical: Boolean,
         memoryEco: Boolean,
-        mode: ResourceMode
+        mode: ResourceMode,
+        tuning: ResourceTuning
     ): List<String> {
         val reasons = mutableListOf<String>()
         val ramPercent = (ramRatio * 100.0).roundToInt()
@@ -221,20 +231,20 @@ class ResourceGovernor {
             reasons +=
                 "Marge mémoire réduite : ${device.ramAvailableGb} Go libres " +
                     "($ramPercent%), seuil critique Android ${device.ramLowThresholdGb} Go."
-        } else if (ramRatio <= 0.10) {
+        } else if (ramRatio <= tuning.fallbackEcoRamRatio) {
             reasons +=
                 "RAM disponible faible : ${device.ramAvailableGb} Go ($ramPercent%). " +
                     "Android ne signale pas encore de pression mémoire critique."
         }
 
-        if (heapRatio >= 0.75) {
+        if (heapRatio >= tuning.ecoHeapRatio) {
             reasons +=
                 "Le tas mémoire de Jade est déjà fortement utilisé : " +
                     "${(heapRatio * 100.0).roundToInt()}%."
         }
 
         if (
-            device.batteryPercent in 0..25 &&
+            device.batteryPercent in 0..tuning.ecoBatteryPercent &&
             !device.charging
         ) {
             reasons +=
@@ -245,7 +255,7 @@ class ResourceGovernor {
             reasons += "Le mode économie d'énergie Android est actif."
         }
 
-        if (thermalRank >= 2) {
+        if (thermalRank >= tuning.ecoThermalRank) {
             reasons +=
                 "Température à surveiller : ${device.thermalStatus}."
         }

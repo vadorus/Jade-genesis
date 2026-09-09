@@ -1,6 +1,8 @@
 package com.jadegenesis.mobile.task
 
 import android.content.Context
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.TaskAttempt
 import com.jadegenesis.mobile.model.TaskExecutionLocation
@@ -16,7 +18,6 @@ class TaskLedger(context: Context) {
 
     companion object {
         private const val KEY_HISTORY = "task_history_v1"
-        private const val MAX_HISTORY = 40
     }
 
     @Synchronized
@@ -25,7 +26,8 @@ class TaskLedger(context: Context) {
         val next = JSONArray()
         next.put(toJson(result))
 
-        val keep = minOf(current.length(), MAX_HISTORY - 1)
+        val maxHistory = maxHistory()
+        val keep = minOf(current.length(), maxHistory - 1)
         for (index in 0 until keep) {
             next.put(current.getJSONObject(index))
         }
@@ -37,7 +39,7 @@ class TaskLedger(context: Context) {
 
     @Synchronized
     fun recent(limit: Int = 20): List<DistributedTaskResult> {
-        val safeLimit = limit.coerceIn(0, MAX_HISTORY)
+        val safeLimit = limit.coerceIn(0, maxHistory())
         if (safeLimit == 0) return emptyList()
 
         val array = loadJsonArray()
@@ -50,6 +52,13 @@ class TaskLedger(context: Context) {
             }
         }
     }
+
+    private fun maxHistory(): Int =
+        JadeConfigRuntime.current()
+            .validated()
+            .retention
+            .taskHistoryMaxItems
+            .coerceIn(1, SafetyPolicy.MAX_TASK_HISTORY_ITEMS)
 
     private fun loadJsonArray(): JSONArray {
         val raw = prefs.getString(KEY_HISTORY, null)

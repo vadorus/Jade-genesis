@@ -1,6 +1,8 @@
 package com.jadegenesis.mobile.cognitive
 
 import android.content.Context
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.CognitivePhase
 import com.jadegenesis.mobile.model.CognitiveTraceEvent
 import org.json.JSONArray
@@ -15,14 +17,13 @@ class CognitiveLedger(context: Context) {
 
     companion object {
         private const val KEY_EVENTS = "events_v1"
-        private const val MAX_EVENTS = 100
     }
 
     @Synchronized
     fun record(event: CognitiveTraceEvent) {
         val current = eventsUnsafe()
         current.add(0, event)
-        while (current.size > MAX_EVENTS) {
+        while (current.size > maxEvents()) {
             current.removeAt(current.lastIndex)
         }
         save(current)
@@ -30,9 +31,16 @@ class CognitiveLedger(context: Context) {
 
     @Synchronized
     fun recent(limit: Int = 40): List<CognitiveTraceEvent> {
-        val safeLimit = limit.coerceIn(1, MAX_EVENTS)
+        val safeLimit = limit.coerceIn(1, maxEvents())
         return eventsUnsafe().take(safeLimit)
     }
+
+    private fun maxEvents(): Int =
+        JadeConfigRuntime.current()
+            .validated()
+            .retention
+            .cognitiveEventsMaxItems
+            .coerceIn(1, SafetyPolicy.MAX_COGNITIVE_EVENTS)
 
     private fun eventsUnsafe(): MutableList<CognitiveTraceEvent> {
         cachedEvents?.let { return it }
@@ -46,7 +54,7 @@ class CognitiveLedger(context: Context) {
         return runCatching {
             val array = JSONArray(raw)
             buildList {
-                for (index in 0 until minOf(array.length(), MAX_EVENTS)) {
+                for (index in 0 until minOf(array.length(), maxEvents())) {
                     val json = array.getJSONObject(index)
                     add(
                         CognitiveTraceEvent(
@@ -71,7 +79,7 @@ class CognitiveLedger(context: Context) {
 
     private fun save(events: List<CognitiveTraceEvent>) {
         val array = JSONArray()
-        events.take(MAX_EVENTS).forEach { event ->
+        events.take(maxEvents()).forEach { event ->
             array.put(
                 JSONObject().apply {
                     put("id", event.id)

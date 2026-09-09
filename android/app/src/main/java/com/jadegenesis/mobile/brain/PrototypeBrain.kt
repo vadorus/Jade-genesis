@@ -11,7 +11,7 @@ import com.jadegenesis.mobile.model.NodeStatus
 class PrototypeBrain : BrainBackend {
 
     override val info = BrainInfo(
-        id = "prototype-brain-0.0.8",
+        id = "prototype-brain-0.0.9",
         displayName = "Prototype Brain — secours",
         backendType = BrainBackendType.PROTOTYPE,
         location = "distributed-core",
@@ -35,6 +35,7 @@ class PrototypeBrain : BrainBackend {
             "ou fonctionnes" in text
         ) {
             val self = context.selfModel
+            val reason = self.resourceBudget.reasons.firstOrNull()
             return BrainResult(
                 text = buildString {
                     append("Je suis ${self.identity.name} ${self.identity.version}. ")
@@ -44,8 +45,13 @@ class PrototypeBrain : BrainBackend {
                     append(
                         "Je suis conçue comme une seule identité distribuée sur plusieurs nœuds. " +
                             "Mon cerveau actif est ${self.activeBrain.displayName}, mon Resource Governor " +
-                            "est en mode ${self.resourceBudget.mode} et mon Node Manager connaît " +
-                            "${self.knownNodes.size} nœud(s)."
+                            "est en mode ${self.resourceBudget.mode}"
+                    )
+                    if (!reason.isNullOrBlank()) {
+                        append(" (${reason.removeSuffix(".")})")
+                    }
+                    append(
+                        " et mon Node Manager connaît ${self.knownNodes.size} nœud(s)."
                     )
                 }
             )
@@ -230,6 +236,14 @@ class PrototypeBrain : BrainBackend {
                 text = buildString {
                     append("Mon Resource Governor est en mode ${r.mode}. ")
                     append(
+                        "RAM système : ${d.ramAvailableGb} Go libres sur ${d.ramTotalGb} Go. "
+                    )
+                    if (d.ramLowThresholdGb > 0.0) {
+                        append(
+                            "Seuil critique déclaré par Android : ${d.ramLowThresholdGb} Go. "
+                        )
+                    }
+                    append(
                         "Je recommande un budget de travail d'environ " +
                             "${r.recommendedWorkingSetMb} Mo, avec " +
                             "${r.maxParallelTasks} tâche(s) parallèle(s) maximum. "
@@ -280,7 +294,7 @@ class PrototypeBrain : BrainBackend {
 
         return BrainResult(
             text =
-                "Mon cerveau de secours 0.0.8 reste un backend local minimal. Mon runtime distribué sait " +
+                "Mon cerveau de secours 0.0.9 reste un backend local minimal. Mon runtime distribué sait " +
                     "mettre les tâches en file, choisir un nœud, mesurer le résultat, utiliser un fallback " +
                     "et consolider ma mémoire sans changer mon identité."
         )

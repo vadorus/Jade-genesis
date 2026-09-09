@@ -12,6 +12,11 @@ enum class MemoryLifecycleState {
     STABLE
 }
 
+data class MemoryCursor(
+    val createdAt: Long = 0L,
+    val id: String = ""
+)
+
 data class MemoryLifecycleAnalysis(
     val sourceCount: Int,
     val newCount: Int,
@@ -40,6 +45,9 @@ class MemoryLifecycleManager(context: Context) {
         private const val KEY_LAST_KNOWLEDGE_ID = "last_knowledge_id_v1"
         private const val KEY_LAST_RESULT_SHA256 = "last_result_sha256_v1"
 
+        private const val KEY_CURSOR_CREATED_AT = "consolidation_cursor_created_at_v2"
+        private const val KEY_CURSOR_ID = "consolidation_cursor_id_v2"
+
         private val STOP_WORDS = setOf(
             "le", "la", "les", "un", "une", "des", "de", "du",
             "et", "ou", "a", "à", "au", "aux", "en", "dans",
@@ -56,6 +64,13 @@ class MemoryLifecycleManager(context: Context) {
         )
     }
 
+    fun currentCursor(): MemoryCursor = MemoryCursor(
+        createdAt = prefs.getLong(KEY_CURSOR_CREATED_AT, 0L).coerceAtLeast(0L),
+        id = prefs.getString(KEY_CURSOR_ID, "").orEmpty()
+    )
+
+    fun processedThroughCreatedAt(): Long = currentCursor().createdAt
+
     fun sourceMemories(
         memories: List<MemorySnapshot>,
         limit: Int = 24
@@ -64,7 +79,10 @@ class MemoryLifecycleManager(context: Context) {
         .take(limit.coerceAtLeast(1))
 
     fun analyze(memories: List<MemorySnapshot>): MemoryLifecycleAnalysis {
-        val sources = sourceMemories(memories)
+        val sources = sourceMemories(
+            memories = memories,
+            limit = memories.size.coerceAtLeast(1)
+        )
         val sourceIds = sources.map { it.id }.toSet()
         val previousIds = prefs
             .getStringSet(KEY_LAST_SOURCE_IDS, emptySet())
@@ -98,22 +116,21 @@ class MemoryLifecycleManager(context: Context) {
 
         val newIds = sourceIds - previousIds
         val fingerprint = sourceFingerprint(sources)
-        val needsConsolidation =
-            sources.isNotEmpty() && fingerprint != lastFingerprint
+        val needsConsolidation = sources.isNotEmpty()
 
         val reason = when {
             sources.isEmpty() ->
-                "Aucune mémoire source à consolider."
+                "Aucune nouvelle mémoire source après le curseur de consolidation."
             lastFingerprint == null ->
-                "Premier cycle Memory Lifecycle 0.0.7 : création d'une empreinte de référence."
-            !needsConsolidation ->
-                "Aucun changement de source depuis la dernière consolidation : nouvelle connaissance inutile."
+                "Premier lot du balayage historique Memory Lifecycle v2."
+            fingerprint == lastFingerprint ->
+                "Lot identique au précédent détecté ; le curseur ne doit avancer qu'après succès."
             else -> buildString {
-                append("Le lot mémoire a changé")
+                append("Nouveau lot historique à consolider")
                 if (newIds.isNotEmpty()) {
-                    append(" : ${newIds.size} nouvelle(s) mémoire(s)")
+                    append(" : ${newIds.size} mémoire(s) non vues dans le lot précédent")
                 }
-                append(". Une consolidation est utile.")
+                append(".")
             }
         }
 
@@ -136,20 +153,42 @@ class MemoryLifecycleManager(context: Context) {
     fun markConsolidated(
         analysis: MemoryLifecycleAnalysis,
         knowledgeId: String,
-        resultSha256: String
+        resultSha256: String,
+        processedMemories: List<MemorySnapshot>
     ) {
+        require(processedMemories.isNotEmpty()) {
+            "Impossible d'avancer le curseur sans mémoire traitée."
+        }
+
+        val lastProcessed = processedMemories.maxWith(
+            compareBy<MemorySnapshot> { it.createdAt }
+                .thenBy { it.id }
+        )
+        val current = currentCursor()
+        require(
+            lastProcessed.createdAt > current.createdAt ||
+                (
+                    lastProcessed.createdAt == current.createdAt &&
+                        lastProcessed.id > current.id
+                    )
+        ) {
+            "Le curseur mémoire ne peut pas reculer."
+        }
+
         prefs.edit()
             .putString(KEY_LAST_FINGERPRINT, analysis.sourceFingerprint)
             .putStringSet(KEY_LAST_SOURCE_IDS, analysis.sourceIds)
             .putLong(KEY_LAST_CONSOLIDATED_AT, System.currentTimeMillis())
             .putString(KEY_LAST_KNOWLEDGE_ID, knowledgeId)
             .putString(KEY_LAST_RESULT_SHA256, resultSha256)
+            .putLong(KEY_CURSOR_CREATED_AT, lastProcessed.createdAt)
+            .putString(KEY_CURSOR_ID, lastProcessed.id)
             .apply()
     }
 
     fun lifecycleSummary(analysis: MemoryLifecycleAnalysis): String =
         buildString {
-            append("Memory Lifecycle 0.0.7 : ")
+            append("Memory Lifecycle v2 : ")
             append("${analysis.sourceCount} source(s), ")
             append("${analysis.newCount} NEW, ")
             append("${analysis.confirmedCount} CONFIRMED ")
@@ -169,7 +208,8 @@ class MemoryLifecycleManager(context: Context) {
                     memory.type,
                     normalize(memory.content),
                     memory.source,
-                    "%.6f".format(java.util.Locale.US, memory.confidence)
+                    "%.6f".format(java.util.Locale.US, memory.confidence),
+                    memory.createdAt.toString()
                 ).joinToString("|")
             }
             .sorted()
@@ -248,4 +288,3 @@ class MemoryLifecycleManager(context: Context) {
                 "%02x".format(byte.toInt() and 0xff)
             }
 }
-

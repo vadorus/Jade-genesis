@@ -1,50 +1,60 @@
-# Jade Genesis — Distributed Node Runtime 0.0.6
+# Jade Genesis — Distributed Node Runtime 0.1.3
 
-This runtime turns a PC into a compute node for the same Jade Genesis identity running across devices.
+Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. The runtime stays dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
 
-## Start on Windows
+## Start
 
-Open PowerShell in the folder containing `jade_node_agent.py` and run:
+From the `node-agent` directory:
 
 ```powershell
 py jade_node_agent.py
 ```
 
-The runtime prints the LAN IP, port and pairing token to enter in Jade Android > Node Manager.
+On Linux/VPS:
 
-The node ID, token and port remain stored in:
-
-`%USERPROFILE%\.jade-genesis\node-agent.json`
-
-Upgrading from 0.0.5 to 0.0.6 keeps the same node identity and token unless `--reset-token` is explicitly used.
-
-## V0.0.6 protocol
-
-Protocol: `jade-genesis-node/0.0.6`
-
-Endpoints:
-
-- `GET /health`
-- `POST /task`
-
-Allowed tasks:
-
-- `genesis_probe` — bounded SHA-256 compute probe
-- `text_analysis` — deterministic text metrics and SHA-256 digest
-- `memory_consolidation` — deterministic memory dedupe, themes and contradiction signals
-
-No arbitrary shell or system command execution is exposed.
-
-## Persistent task queue
-
-The Android side now tracks task lifecycle as PENDING, RUNNING, COMPLETED or FAILED. Interrupted RUNNING entries are recovered as FAILED on restart so Jade does not silently forget unfinished work.
-
-## Self test
-
-```powershell
-py jade_node_agent.py --self-test
+```bash
+python3 jade_node_agent.py --node-kind VPS
 ```
 
-Expected output:
+The node ID, pairing token, port, node kind and runtime configuration are persisted in `~/.jade-genesis/node-agent.json` (or `%USERPROFILE%\.jade-genesis\node-agent.json` on Windows). The token is not printed by default; `--show-token` is an explicit local administrative action.
 
-`JADE NODE RUNTIME 0.0.6 SELF-TEST OK`
+## Authenticated API
+
+All Jade requests use the existing authenticated Node Runtime transport. Android requires an authorized Tailscale route for authenticated node traffic.
+
+Endpoints include:
+
+- `GET /health`
+- `GET /runtime`
+- `GET /diagnostics`
+- `GET /tasks/<task_id>`
+- `POST /task`
+- `POST /tasks`
+
+Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS replicas, `shared_state_sync`. No arbitrary remote shell/system command is exposed.
+
+## Shared Genesis State v1
+
+Runtime 0.1.3 adds an optional durable operational-state replica on nodes configured as `VPS`. It advertises:
+
+- `shared_genesis_state_v1`
+- `durable_state_replica_v1`
+- `shared_state_sync`
+
+The replica stores a bounded, versioned event stream and a compact latest-entity snapshot in `~/.jade-genesis/genesis-state.json`, with a backup copy. Sync is idempotent by event ID and bound to one Jade identity. A VPS replica does **not** become the sole owner of Jade's identity.
+
+The Pixel side keeps its own local cache and outbox. If the VPS is temporarily unavailable, unsynced operational snapshots remain on the phone and are retried later. Runtime 0.1.3 provides the durable-state foundation; autonomous Night Cycle execution is intentionally a later stage.
+
+## Resource and model telemetry
+
+Runtime 0.1.3 preserves Resource Intelligence v3 from 0.1.2: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
+
+## Useful local commands
+
+```powershell
+py jade_node_agent.py --show-config
+py jade_node_agent.py --probe-ollama
+py jade_node_agent.py --show-token
+```
+
+Use `--reset-token` only when intentionally rotating the pairing token; existing paired Android clients will then need the new token.

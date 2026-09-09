@@ -64,6 +64,16 @@ core.execute_allowlisted_task = _execute_allowlisted_task
 core.health_payload = _health_payload
 core.runtime_payload = _runtime_payload
 
+# Compatibility exports used by CI/tests and by simple tooling that imported the
+# old monolithic entrypoint directly.
+ALLOWED_TASKS = core.ALLOWED_TASKS
+cpu_load_percent = core.cpu_load_percent
+gpu_telemetry = core.gpu_telemetry
+AsyncTaskStore = core.AsyncTaskStore
+health_payload = core.health_payload
+runtime_payload = core.runtime_payload
+execute_allowlisted_task = core.execute_allowlisted_task
+
 
 if __name__ == "__main__":
     raise SystemExit(core.main())

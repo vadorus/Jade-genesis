@@ -320,7 +320,12 @@ data class MemorySnapshot(
     val content: String,
     val source: String,
     val confidence: Double,
-    val createdAt: Long
+    val createdAt: Long,
+    val originNode: String = "",
+    val lastRecalledAt: Long = 0L,
+    val recallCount: Int = 0,
+    val verifiedAt: Long? = null,
+    val supersededBy: String? = null
 )
 
 data class ToolInfo(

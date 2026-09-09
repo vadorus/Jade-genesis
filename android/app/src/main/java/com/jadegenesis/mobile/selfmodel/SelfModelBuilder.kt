@@ -67,6 +67,11 @@ class SelfModelBuilder {
                 "shared_genesis_state_v1" in it.capabilities &&
                 "shared_state_sync" in it.capabilities
         }
+        val nightLearningVps = vpsNodes.any {
+            it.status == NodeStatus.ONLINE &&
+                "vps_night_cycle_supervisor_v1" in it.capabilities &&
+                "night_learning_lab_v1" in it.capabilities
+        }
 
         val onlineScreenNode = onlineRemote.any {
             "screen_analyze" in it.capabilities
@@ -102,9 +107,9 @@ class SelfModelBuilder {
                     measuredBrainNode -> "Measured_compute_active"
                     onlineGpuTelemetryNode -> "GPU_telemetry_active"
                     onlineResourceTelemetryNode -> "Dynamic_telemetry_active"
-                    else -> "Runtime_0.1.3_ready_waiting_for_nodes"
+                    else -> "Runtime_0.1.5_ready_waiting_for_nodes"
                 },
-                "Les runtimes 0.1.3 conservent la télémétrie 0.1.2 : charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
+                "Les runtimes 0.1.5 conservent la télémétrie Resource Intelligence v3 : charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
             ),
             Capability(
                 "resource_lease",
@@ -120,7 +125,17 @@ class SelfModelBuilder {
                 } else {
                     "SharedGenesisState v1 — phone outbox/cache ready"
                 },
-                "Le Pixel conserve une outbox hors-ligne et un cache local ; un VPS Runtime 0.1.3 peut maintenir une réplique opérationnelle durable versionnée. La réplique est liée à l'identité Jade mais n'en devient jamais l'unique propriétaire."
+                "Le Pixel conserve une outbox hors-ligne et un cache local ; un VPS Runtime 0.1.5 peut maintenir une réplique opérationnelle durable versionnée. La réplique est liée à l'identité Jade mais n'en devient jamais l'unique propriétaire."
+            ),
+            Capability(
+                "night_learning_lab",
+                nightLearningVps,
+                if (nightLearningVps) {
+                    "VPS Night Learning Lab v1 active"
+                } else {
+                    "Night Learning Lab ready — Runtime 0.1.5 VPS required"
+                },
+                "Le superviseur VPS transforme des signaux Runtime Eval en recherches ciblées bornées, hypothèses falsifiables, plans d'expériences et candidats d'amélioration CANDIDATE. Le Pixel valide les snapshots en fail-closed ; aucune expérience, activation, promotion, réécriture de production ou commande shell n'est automatique."
             ),
             Capability(
                 "device_registry",
@@ -261,14 +276,14 @@ class SelfModelBuilder {
             Capability(
                 "runtime_manager",
                 runtimeManagedNode,
-                if (runtimeManagedNode) "RuntimeManager expects 0.1.3" else "legacy_runtime_detected",
+                if (runtimeManagedNode) "RuntimeManager expects 0.1.5" else "legacy_runtime_detected",
                 "La version et le canal des runtimes sont suivis. L'exécution automatique des mises à jour reste volontairement désactivée dans cette première V0.1."
             ),
             Capability(
                 "screen_observer",
                 true,
                 if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_2_targeted" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
-                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime 0.1.3 conserve les capacités vision existantes."
+                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime 0.1.5 conserve les capacités vision existantes."
             ),
             Capability(
                 "vision_analysis",
@@ -306,11 +321,12 @@ class SelfModelBuilder {
 
         val limits = mutableListOf(
             "Le Cognitive Core ${identity.version} orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
-            "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
+            "LearningEngine et Night Learning Lab produisent des candidats à partir de mesures et de recherches bornées ; une amélioration importante doit encore être exécutée en sandbox, mesurée et explicitement approuvée avant promotion.",
             "Resource Intelligence v3 connaît d'abord NVIDIA via nvidia-smi ; AMD, Intel et l'unified memory Apple restent à instrumenter précisément.",
             "Les mesures de débit génératif apprennent des vraies tâches brain_chat ; elles ne remplacent pas encore un benchmark Runtime Eval reproductible.",
             "Resource Lease 0.1.7.4 réserve de la capacité dans l'orchestrateur Android mais ne crée pas encore une réservation OS/cgroup sur le nœud distant. Le registre de leases actif reste process-local.",
-            "Shared Genesis State 0.1.7.5 réplique l'état opérationnel versionné et conserve une outbox/cache ; le VPS n'est pas l'unique propriétaire de l'identité et le cycle de nuit autonome n'est pas encore activé.",
+            "Shared Genesis State réplique l'état opérationnel versionné et conserve une outbox/cache ; le VPS supervise désormais un cycle nocturne et un Night Learning Lab borné, mais ne devient jamais propriétaire unique de l'identité et n'applique aucun candidat automatiquement.",
+            "Night Learning Lab 0.1.11 formule des recherches, hypothèses et plans d'expériences à partir des métriques synchronisées ; il ne lance pas encore automatiquement les expériences champion/challenger et ne réécrit pas le code de production.",
             "Les chemins directs Screen Observer/vision utilisent encore NodeManager hors TaskRouter ; leur unification complète avec l'admission Resource Lease reste à faire.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",

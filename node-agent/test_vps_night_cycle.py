@@ -6,6 +6,7 @@ import time
 import unittest
 from pathlib import Path
 
+from night_learning_lab import NightLearningLab
 from shared_genesis_state import SharedGenesisStateStore
 from vps_night_cycle import (
     MIN_CYCLE_INTERVAL_MS,
@@ -15,12 +16,24 @@ from vps_night_cycle import (
 )
 
 
+class FakeResearchProvider:
+    def search(self, query: str) -> list[dict]:
+        return [{
+            "provider": "FakePublic",
+            "title": "Bounded public evidence",
+            "url": "https://example.test/night-learning",
+            "snippet": f"Evidence for {query[:80]}",
+            "confidence": 0.7,
+        }]
+
+
 class VpsNightCycleSupervisorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="jade-vps-night-")
         root = Path(self.temp.name)
         self.state = SharedGenesisStateStore(root / "state.json")
         self.journal = NightCycleJournal(root / "night.json")
+        self.learning_lab = NightLearningLab(FakeResearchProvider())
         self.now = int(time.time() * 1_000)
 
     def tearDown(self) -> None:
@@ -53,6 +66,13 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
                 {"id": 12, "observed_at": phone_observed_at},
                 phone_observed_at,
             ),
+            self.event(
+                "config-1",
+                "config_snapshot",
+                "active",
+                {"config": {"config_id": "cfg-1"}, "observed_at": phone_observed_at},
+                phone_observed_at,
+            ),
         ]
         if include_reviews:
             events.extend([
@@ -64,6 +84,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
                         "observation_count": 24,
                         "score": 92.5,
                         "confidence": 0.9,
+                        "groups": [],
                     },
                     phone_observed_at,
                 ),
@@ -98,6 +119,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
             },
             state_store=self.state,
             journal=self.journal,
+            learning_lab=self.learning_lab,
         )
 
     def test_active_pixel_blocks_supervised_cycle(self) -> None:
@@ -107,14 +129,20 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual("pixel_active", result["reason"])
         self.assertEqual([], self.journal.load())
 
-    def test_inactive_pixel_runs_bounded_review_and_publishes_report(self) -> None:
+    def test_inactive_pixel_runs_bounded_learning_and_publishes_report(self) -> None:
         self.seed(self.now - PIXEL_INACTIVE_AFTER_MS - 1)
         result = self.supervisor().run_once(now_ms=self.now)
 
         self.assertEqual("SUCCESS", result["status"])
         self.assertEqual(24, result["runtime_observation_count"])
         self.assertEqual(1, result["evolution_validated_count"])
+        self.assertGreaterEqual(result["research_question_count"], 1)
+        self.assertGreaterEqual(result["hypothesis_count"], 1)
+        self.assertGreaterEqual(result["experiment_count"], 1)
+        self.assertGreaterEqual(result["improvement_candidate_count"], 1)
+        self.assertFalse(result["automatic_experiment_execution"])
         self.assertFalse(result["promotion_performed"])
+        self.assertFalse(result["production_code_rewrite_performed"])
         self.assertFalse(result["shell_execution_performed"])
 
         reports = [
@@ -125,13 +153,29 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         published = json.loads(reports[0]["payload"])
         self.assertFalse(published["promotion_performed"])
         self.assertFalse(published["shell_execution_performed"])
+
+        learning = [
+            item for item in self.state.supervision_view()["entities"]
+            if item.get("kind") == "vps_learning_snapshot"
+        ]
+        self.assertEqual(1, len(learning))
+        learning_payload = json.loads(learning[0]["payload"])
+        self.assertGreaterEqual(len(learning_payload["research_questions"]), 1)
+        self.assertGreaterEqual(len(learning_payload["hypotheses"]), 1)
+        self.assertGreaterEqual(len(learning_payload["experiments"]), 1)
+        self.assertGreaterEqual(len(learning_payload["improvement_candidates"]), 1)
+        self.assertFalse(learning_payload["automatic_promotion"])
+        self.assertFalse(learning_payload["production_code_rewrite"])
+        self.assertFalse(learning_payload["shell_execution"])
+
         maintenance = [
             item for item in self.state.supervision_view()["entities"]
             if item.get("kind") == "vps_maintenance_snapshot"
         ]
         self.assertEqual(1, len(maintenance))
         learned = json.loads(maintenance[0]["payload"])
-        self.assertEqual(["await_explicit_user_approval"], learned["insights"])
+        self.assertIn("await_explicit_user_approval", learned["insights"])
+        self.assertIn("review_night_learning_candidates", learned["insights"])
         self.assertFalse(learned["promotion_performed"])
 
     def test_cadence_guard_blocks_repeat(self) -> None:
@@ -155,6 +199,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
             config={"node_id": "vps-test", "node_kind": "VPS"},
             state_store=self.state,
             journal=empty_journal,
+            learning_lab=self.learning_lab,
         )
         second = restarted.run_once(
             now_ms=int(first["completed_at"]) + 60 * 60 * 1_000
@@ -162,7 +207,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual("SKIPPED", second["status"])
         self.assertEqual("cadence_guard", second["reason"])
 
-    def test_missing_eval_data_is_partial_without_invented_learning(self) -> None:
+    def test_missing_eval_data_is_partial_without_invented_runtime_metrics(self) -> None:
         self.seed(
             self.now - PIXEL_INACTIVE_AFTER_MS - 1,
             include_reviews=False,
@@ -171,6 +216,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual("PARTIAL", result["status"])
         self.assertEqual(0, result["runtime_observation_count"])
         self.assertEqual(0, result["evolution_candidate_count"])
+        self.assertGreaterEqual(result["improvement_candidate_count"], 1)
 
     def test_supervisor_is_disabled_outside_vps(self) -> None:
         self.seed(self.now - PIXEL_INACTIVE_AFTER_MS - 1)
@@ -178,8 +224,17 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual("SKIPPED", result["status"])
         self.assertEqual("requires_vps", result["reason"])
 
-    def test_replica_event_allowlist_rejects_unknown_kinds(self) -> None:
+    def test_replica_event_allowlist_accepts_learning_but_rejects_unknown_kinds(self) -> None:
         self.seed(self.now - PIXEL_INACTIVE_AFTER_MS - 1)
+        accepted = self.state.append_replica_event(
+            identity_id="jade-test",
+            replica_id="vps-test",
+            kind="vps_learning_snapshot",
+            entity_id="current",
+            payload="{}",
+        )
+        self.assertGreaterEqual(accepted["server_revision"], 1)
+
         with self.assertRaisesRegex(ValueError, "unsupported_replica_event_kind"):
             self.state.append_replica_event(
                 identity_id="jade-test",

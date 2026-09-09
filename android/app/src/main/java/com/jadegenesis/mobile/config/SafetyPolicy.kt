@@ -75,6 +75,17 @@ object SafetyPolicy {
     const val MAX_NIGHT_MEMORY_BATCHES = 3
     const val MIN_NIGHT_CYCLE_INTERVAL_HOURS = 20
 
+    // Night Learning Lab : les résultats remontés par le VPS restent des
+    // propositions bornées et non exécutables. Le Pixel ne doit jamais accepter
+    // un snapshot qui demande une promotion, une exécution d'expérience, une
+    // réécriture de code ou une commande shell automatique.
+    const val MAX_NIGHT_RESEARCH_QUESTIONS = 3
+    const val MAX_NIGHT_RESEARCH_EVIDENCE = 6
+    const val MAX_NIGHT_HYPOTHESES = 4
+    const val MAX_NIGHT_EXPERIMENTS = 4
+    const val MAX_NIGHT_IMPROVEMENT_CANDIDATES = 4
+    const val MAX_NIGHT_LEARNING_TEXT_CHARS = 500
+
     // Shared Genesis State : protège le téléphone et le VPS contre des lots
     // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
     const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200

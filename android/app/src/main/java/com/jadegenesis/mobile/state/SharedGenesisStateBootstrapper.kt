@@ -7,7 +7,9 @@ import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.identity.IdentityManager
 import com.jadegenesis.mobile.memory.MemoryLifecycleManager
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.ResourceAdmissionController
 import com.jadegenesis.mobile.resource.ResourceGovernor
+import org.json.JSONArray
 import org.json.JSONObject
 
 class SharedGenesisStateBootstrapper(context: Context) {
@@ -24,6 +26,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
         logger = diagnostics
     )
     private val resourceGovernor = ResourceGovernor()
+    private val resourceAdmission = ResourceAdmissionController()
 
     suspend fun syncCurrentState(): SharedStateSyncResult {
         val identity = identityManager.loadOrCreate()
@@ -51,10 +54,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
             kind = "config_snapshot",
             entityId = "active",
             payload = JSONObject().apply {
-                put("schema_version", config.schemaVersion)
-                put("revision", config.revision)
-                put("config_id", config.configId)
-                put("parent_config_id", config.parentConfigId ?: "")
+                put("config", config.toJson())
                 put("observed_at", now)
             }.toString()
         )
@@ -90,6 +90,36 @@ class SharedGenesisStateBootstrapper(context: Context) {
                 put(
                     "last_retention_deleted",
                     memoryLifecycle.lastRetentionDeletedCount()
+                )
+                put("observed_at", now)
+            }.toString()
+        )
+
+        coordinator.publish(
+            originNode = replicaId,
+            kind = "resource_lease_snapshot",
+            entityId = "active",
+            payload = JSONObject().apply {
+                put(
+                    "leases",
+                    JSONArray().apply {
+                        resourceAdmission.activeLeases().forEach { lease ->
+                            put(
+                                JSONObject().apply {
+                                    put("lease_id", lease.leaseId)
+                                    put("task_id", lease.taskId)
+                                    put("task_kind", lease.taskKind)
+                                    put("node_id", lease.nodeId)
+                                    put("node_name", lease.nodeName)
+                                    put("action", lease.action.name)
+                                    put("memory_mb", lease.memoryMb)
+                                    put("cpu_percent", lease.cpuPercent)
+                                    put("vram_gb", lease.vramGb)
+                                    put("acquired_at", lease.acquiredAt)
+                                }
+                            )
+                        }
+                    }
                 )
                 put("observed_at", now)
             }.toString()

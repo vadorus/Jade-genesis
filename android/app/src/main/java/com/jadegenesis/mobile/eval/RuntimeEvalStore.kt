@@ -3,9 +3,13 @@ package com.jadegenesis.mobile.eval
 import android.content.Context
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.config.SafetyPolicy
+import com.jadegenesis.mobile.model.CognitivePhase
+import com.jadegenesis.mobile.model.CognitiveTraceEvent
 import com.jadegenesis.mobile.model.DistributedTaskRequest
+import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.GenesisNode
 import com.jadegenesis.mobile.model.NodeKind
+import com.jadegenesis.mobile.model.TaskExecutionLocation
 import com.jadegenesis.mobile.model.TaskWorkload
 import org.json.JSONArray
 import org.json.JSONObject
@@ -59,6 +63,61 @@ class RuntimeEvalStore(context: Context) {
         )
         record(observation)
         return observation
+    }
+
+    fun recordTaskResult(result: DistributedTaskResult) {
+        if (!shouldEvaluate(result.taskKind)) return
+        val workload = when (result.taskKind) {
+            "genesis_probe" -> TaskWorkload.MEDIUM
+            "memory_consolidation" -> TaskWorkload.HEAVY
+            else -> TaskWorkload.LIGHT
+        }
+        val nodeKind = when (result.executionLocation) {
+            TaskExecutionLocation.LOCAL -> NodeKind.PHONE
+            TaskExecutionLocation.REMOTE -> NodeKind.UNKNOWN
+        }
+        val observation = RuntimeEvalObservation(
+            observationId = "task:${result.taskId}:${result.executedNodeId}",
+            taskId = result.taskId,
+            taskKind = result.taskKind,
+            workload = workload,
+            nodeId = result.executedNodeId.ifBlank { "unknown-node" },
+            nodeName = result.executedNodeName.ifBlank { "Nœud inconnu" },
+            nodeKind = nodeKind,
+            success = result.success,
+            durationMs = result.durationMs.coerceAtLeast(0L),
+            outputChars = result.output.length,
+            fallbackUsed = result.fallbackUsed,
+            error = result.fallbackReason
+                ?.takeIf { !result.success }
+                ?.take(240),
+            createdAt = result.completedAt.coerceAtLeast(0L)
+        )
+        record(observation)
+    }
+
+    fun recordCognitiveCycle(event: CognitiveTraceEvent) {
+        if (event.phase != CognitivePhase.COMPLETE) return
+        val backend = event.backendId?.trim().orEmpty()
+        val nodeId = backend.ifBlank { "cognitive-core" }
+        val observation = RuntimeEvalObservation(
+            observationId = "cognitive:${event.id}",
+            taskId = event.id.substringBefore("-complete-", event.id),
+            taskKind = "cognitive_cycle",
+            workload = TaskWorkload.HEAVY,
+            nodeId = nodeId,
+            nodeName = backend.ifBlank { "Cognitive Core" },
+            nodeKind = NodeKind.UNKNOWN,
+            model = "",
+            success = event.success,
+            durationMs = event.durationMs.coerceAtLeast(0L),
+            outputChars = 0,
+            tokensPerSecond = 0.0,
+            fallbackUsed = event.summary.contains("fallback", ignoreCase = true),
+            error = null,
+            createdAt = event.createdAt.coerceAtLeast(0L)
+        )
+        record(observation)
     }
 
     fun record(observation: RuntimeEvalObservation) = synchronized(lock) {

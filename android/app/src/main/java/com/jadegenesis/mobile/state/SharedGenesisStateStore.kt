@@ -2,7 +2,6 @@ package com.jadegenesis.mobile.state
 
 import android.content.Context
 import com.jadegenesis.mobile.config.SafetyPolicy
-import org.json.JSONArray
 import java.util.UUID
 
 class SharedGenesisStateStore(context: Context) {
@@ -34,7 +33,13 @@ class SharedGenesisStateStore(context: Context) {
             payload = payload,
             createdAt = createdAt.coerceAtLeast(0L)
         )
-        val current = loadEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP).toMutableList()
+        val current = loadEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP)
+            .filterNot {
+                it.originNode == event.originNode &&
+                    it.kind == event.kind &&
+                    it.entityId == event.entityId
+            }
+            .toMutableList()
         current += event
         val bounded = current.takeLast(SafetyPolicy.MAX_SHARED_STATE_OUTBOX_EVENTS)
         saveEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP, bounded)

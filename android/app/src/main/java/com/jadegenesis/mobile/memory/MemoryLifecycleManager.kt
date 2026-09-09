@@ -103,7 +103,12 @@ class MemoryLifecycleManager(context: Context) {
                 content = entity.content,
                 source = entity.source,
                 confidence = entity.confidence,
-                createdAt = entity.createdAt
+                createdAt = entity.createdAt,
+                originNode = entity.originNode,
+                lastRecalledAt = entity.lastRecalledAt,
+                recallCount = entity.recallCount,
+                verifiedAt = entity.verifiedAt,
+                supersededBy = entity.supersededBy
             )
         }
     }

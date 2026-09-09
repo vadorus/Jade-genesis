@@ -5,7 +5,6 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -52,7 +51,6 @@ class NightCycleWorker(
         fun schedule(context: Context) {
             val appContext = context.applicationContext
             val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
                 .setRequiresCharging(true)
                 .setRequiresBatteryNotLow(true)
                 .setRequiresStorageNotLow(true)

@@ -24,8 +24,9 @@ class NightCycleEngine(context: Context) {
         force: Boolean = false,
         now: Long = System.currentTimeMillis()
     ): NightCycleRun {
-        val lastSuccess = store.lastSuccessfulCompletedAt()
-        if (!force && !NightCyclePolicy.shouldRun(lastSuccess, now)) {
+        val lastProtected = store.lastProtectedCompletedAt()
+        if (!force && !NightCyclePolicy.shouldRun(lastProtected, now)) {
+            val report = runtimeEval.report()
             val skipped = NightCycleRun(
                 runId = "night-${UUID.randomUUID()}",
                 status = NightCycleStatus.SKIPPED,
@@ -33,8 +34,8 @@ class NightCycleEngine(context: Context) {
                 completedAt = now,
                 memoryBatchesProcessed = 0,
                 runtimeObservationCount = runtimeEval.count(),
-                runtimeScore = runtimeEval.report().score,
-                runtimeConfidence = runtimeEval.report().confidence,
+                runtimeScore = report.score,
+                runtimeConfidence = report.confidence,
                 evolutionCandidateCount = evolution.count(),
                 evolutionValidatedCount = evolution.candidates(
                     SafetyPolicy.MAX_EVOLUTION_CANDIDATES
@@ -43,7 +44,7 @@ class NightCycleEngine(context: Context) {
                     NightCycleStep(
                         phase = NightCyclePhase.COMPLETE,
                         success = true,
-                        summary = "Cycle nocturne ignoré : un cycle réussi est encore dans la fenêtre de protection anti-répétition.",
+                        summary = "Cycle nocturne ignoré : un cycle complet ou partiel est encore dans la fenêtre de protection anti-répétition.",
                         durationMs = 0L
                     )
                 )
@@ -52,7 +53,7 @@ class NightCycleEngine(context: Context) {
                 DiagnosticLevel.INFO,
                 "night_cycle_skipped",
                 "Night Cycle ignoré par la garde de cadence.",
-                mapOf("last_success_at" to lastSuccess)
+                mapOf("last_protected_at" to lastProtected)
             )
             return skipped
         }

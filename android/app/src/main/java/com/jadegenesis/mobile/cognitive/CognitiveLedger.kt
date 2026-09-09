@@ -3,6 +3,7 @@ package com.jadegenesis.mobile.cognitive
 import android.content.Context
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.config.SafetyPolicy
+import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.model.CognitivePhase
 import com.jadegenesis.mobile.model.CognitiveTraceEvent
 import org.json.JSONArray
@@ -27,6 +28,7 @@ class CognitiveLedger(context: Context) {
             current.removeAt(current.lastIndex)
         }
         save(current)
+        RuntimeEvalRuntime.currentOrNull()?.recordCognitiveCycle(event)
     }
 
     @Synchronized

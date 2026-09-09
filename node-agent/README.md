@@ -1,4 +1,4 @@
-# Jade Genesis — Distributed Node Runtime 0.1.5
+# Jade Genesis — Distributed Node Runtime 0.1.6
 
 Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. The runtime stays dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
 
@@ -33,9 +33,25 @@ Endpoints include:
 
 Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS replicas, `shared_state_sync`. The Night Learning Lab is intentionally **not** a remotely invokable task. No arbitrary remote shell/system command is exposed.
 
+## Cognitive Brain Profiles v1
+
+Runtime 0.1.6 introduces role-aware brains. Jade remains the persistent identity and the model remains an interchangeable cognitive resource. A request is assigned one bounded profile before local inference:
+
+- `FAST` — short, low-cost replies;
+- `GENERAL` — normal conversation and balanced reasoning;
+- `REASONING` — architecture, diagnosis, planning and difficult revisions;
+- `CODE` — programming and Tool Lab work;
+- `CRITIC` — verification passes with low temperature.
+
+The Android Cognitive Core requests the profile. The Node Runtime then scores the Ollama models that are already installed against the requested role, model size/parameter count and currently available GPU VRAM. Small 3B/4B-class models can still serve `FAST` or act as a degraded fallback, but they are deliberately penalized for `GENERAL`, `REASONING`, `CODE` and `CRITIC` when a stronger installed model is available. Jade therefore does not treat a tiny model as its central identity or mandatory brain.
+
+Optional local overrides can be placed in `node-agent.json` with `brain_model_fast`, `brain_model_general`, `brain_model_reasoning`, `brain_model_code` and `brain_model_critic`. The legacy `ollama_model` setting remains a GENERAL-profile override for compatibility.
+
+The runtime advertises `cognitive_brain_profiles_v1` plus a `brain_profiles` snapshot in `/health` and `/runtime`. Profile selection never downloads a model automatically, mutates model weights, grants privileges or exposes shell execution.
+
 ## Shared Genesis State v1
 
-Runtime 0.1.5 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises:
+Runtime 0.1.6 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises:
 
 - `shared_genesis_state_v1`
 - `durable_state_replica_v1`
@@ -49,7 +65,7 @@ The Pixel side keeps its own local cache and outbox. If the VPS is temporarily u
 
 ## VPS-supervised Night Cycle + Night Learning Lab
 
-On a node configured as `VPS`, Runtime 0.1.5 starts a bounded local supervisor. It waits until the latest synchronized Pixel snapshot has been inactive for at least two hours, then runs at most once per twenty-hour protection window. The supervisor reviews the durable Shared Genesis State replica, the Memory v2 cursor, the latest Runtime Eval summary and the Evolution Engine candidate summary. Its journal is bounded to 30 runs and stored with a backup in `~/.jade-genesis/night-cycle-supervisor.json`.
+On a node configured as `VPS`, Runtime 0.1.6 starts a bounded local supervisor. It waits until the latest synchronized Pixel snapshot has been inactive for at least two hours, then runs at most once per twenty-hour protection window. The supervisor reviews the durable Shared Genesis State replica, the Memory v2 cursor, the latest Runtime Eval summary and the Evolution Engine candidate summary. Its journal is bounded to 30 runs and stored with a backup in `~/.jade-genesis/night-cycle-supervisor.json`.
 
 The Night Learning Lab turns measured Runtime Eval signals into a small review pipeline: at most 3 targeted research questions, 6 public evidence items, 4 falsifiable hypotheses, 4 experiment proposals and 4 improvement candidates. Public research is optional and fail-soft: it uses one fixed HTTPS provider with strict timeout/response limits, and a provider failure never creates invented evidence. Research queries are derived from structured runtime metrics rather than raw user text.
 
@@ -59,7 +75,7 @@ The VPS writes `vps_learning_snapshot`, `vps_maintenance_snapshot` and `vps_nigh
 
 ## Resource and model telemetry
 
-Runtime 0.1.5 preserves Resource Intelligence v3 from 0.1.2: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
+Runtime 0.1.6 preserves Resource Intelligence v3 from the stable 0.1.2 core: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
 
 ## Useful local commands
 

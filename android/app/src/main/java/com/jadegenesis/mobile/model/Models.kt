@@ -139,7 +139,8 @@ data class DeviceProfile(
     val powerSaveMode: Boolean,
     val deviceIdleMode: Boolean,
     val thermalStatus: String,
-    val capturedAt: Long
+    val capturedAt: Long,
+    val ramLowThresholdGb: Double = 0.0
 )
 
 data class ResourceBudget(

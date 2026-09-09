@@ -48,13 +48,15 @@ jobs:
           python3 -m py_compile \
             node-agent/jade_node_agent.py \
             node-agent/jade_node_runtime_core.py \
+            node-agent/brain_profiles.py \
             node-agent/shared_genesis_state.py \
             node-agent/night_learning_lab.py \
             node-agent/vps_night_cycle.py \
+            node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py
 
-      - name: Test bounded VPS Night Cycle and Learning Lab
+      - name: Test bounded runtime, Night Learning and brain profiles
         shell: bash
         run: |
           set -euo pipefail
@@ -63,7 +65,7 @@ jobs:
             -p 'test_*.py' \
             -v
 
-      - name: Validate telemetry and Shared State without external services
+      - name: Validate telemetry, Cognitive Brains and Shared State without external services
         shell: bash
         run: |
           set -euo pipefail
@@ -82,7 +84,7 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          assert module.VERSION == "0.1.5"
+          assert module.VERSION == "0.1.6"
           assert module.PROTOCOL == "jade-genesis-node/0.0.6"
           assert "brain_chat" in module.ALLOWED_TASKS
           assert "vision_analyze" in module.ALLOWED_TASKS
@@ -186,6 +188,11 @@ jobs:
               "runtime_channel": "stable",
               "ollama_url": "http://127.0.0.1:9",
           }, task_store)
+          assert "cognitive_brain_profiles_v1" in health["capabilities"]
+          assert health["brain_profiles"]["policy_version"] == "1"
+          assert health["brain_profiles"]["automatic_download"] is False
+          assert health["brain_profiles"]["automatic_model_weight_mutation"] is False
+          assert health["brain_profiles"]["automatic_privilege_escalation"] is False
           assert "shared_genesis_state_v1" in health["capabilities"]
           assert "shared_state_sync" in health["capabilities"]
           assert "vps_night_cycle_supervisor_v1" in health["capabilities"]
@@ -195,7 +202,7 @@ jobs:
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
           assert health["night_cycle_supervisor"]["arbitrary_shell"] is False
 
-          print("Node Runtime 0.1.5 + VPS Night Learning Lab validated.")
+          print("Node Runtime 0.1.6 + Cognitive Brain Profiles v1 validated.")
           PY
 
       - name: Prove validation did not rewrite sources

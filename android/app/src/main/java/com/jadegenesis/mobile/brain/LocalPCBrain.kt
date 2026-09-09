@@ -25,8 +25,8 @@ class LocalPCBrain(
 ) : BrainBackend {
 
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.4",
-        displayName = "Distributed Local Brain",
+        id = "distributed-local-brain-0.1.13",
+        displayName = "Distributed Cognitive Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",
         resourceClass = BrainResourceClass.HEAVY,
@@ -35,15 +35,16 @@ class LocalPCBrain(
         available = true,
         priority = 110,
         details =
-            "Backend génératif distribué via un Node Runtime et un modèle local. " +
-                "La sélection utilise la télémétrie réelle, les performances mesurées " +
-                "et un Resource Lease avant exécution."
+            "Backend génératif distribué avec profils FAST/GENERAL/REASONING/CODE/CRITIC. " +
+                "Le modèle est une ressource cognitive interchangeable ; la sélection combine " +
+                "rôle demandé, télémétrie, performances mesurées et Resource Lease."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
         compatibleNodes(nodes).isNotEmpty()
 
     override suspend fun think(context: BrainContext): BrainResult {
+        val brainPlan = CognitiveBrainPolicy.plan(context)
         val compatible = compatibleNodes(context.selfModel.knownNodes)
         val preferredId = context.selfModel.preferredComputeNodeId
         val routing = JadeConfigRuntime.current().validated().routing
@@ -72,7 +73,10 @@ class LocalPCBrain(
             taskKind = "brain_chat",
             payload = context.userInput.take(10_000),
             requiredCapability = "brain_chat",
-            workload = TaskWorkload.HEAVY,
+            workload = when (brainPlan.profile) {
+                CognitiveBrainProfile.FAST -> TaskWorkload.MEDIUM
+                else -> TaskWorkload.HEAVY
+            },
             createdAt = System.currentTimeMillis()
         )
 
@@ -111,6 +115,10 @@ class LocalPCBrain(
                 }
             )
             put("operation", context.operation)
+            put("brain_profile", brainPlan.profile.name.lowercase())
+            put("brain_profile_reason", brainPlan.reason.take(300))
+            put("desired_context_tokens", brainPlan.desiredContextTokens)
+            put("desired_temperature", brainPlan.temperature)
             put("user_input", context.userInput.take(10_000))
             put("draft_response", context.draftResponse?.take(14_000) ?: "")
             put("review_note", context.reviewNote?.take(2_000) ?: "")

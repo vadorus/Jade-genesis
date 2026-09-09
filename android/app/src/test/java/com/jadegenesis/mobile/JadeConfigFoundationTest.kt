@@ -28,6 +28,20 @@ class JadeConfigFoundationTest {
         assertEquals(40, config.retention.taskHistoryMaxItems)
         assertEquals(30, config.retention.queueMaxItems)
         assertEquals(100, config.retention.cognitiveEventsMaxItems)
+        assertEquals(90, config.retention.ephemeralMemoryRetentionDays)
+        assertEquals(30, config.retention.supersededMemoryRetentionDays)
+        assertEquals(2, config.retention.memoryRecallProtectionCount)
+        assertEquals(0.60, config.retention.memoryLowConfidenceThreshold, 0.0001)
+        assertEquals(50, config.retention.memoryPurgeBatchSize)
+    }
+
+    @Test
+    fun memoryRetentionSafetyPolicyKeepsImmutableProtectionFloor() {
+        assertTrue(SafetyPolicy.MIN_EPHEMERAL_MEMORY_RETENTION_DAYS >= 14)
+        assertTrue(SafetyPolicy.MIN_SUPERSEDED_MEMORY_RETENTION_DAYS >= 7)
+        assertTrue(SafetyPolicy.MIN_RECALL_PROTECTION_COUNT >= 1)
+        assertTrue(SafetyPolicy.MAX_AUTO_DELETE_CONFIDENCE <= 0.70)
+        assertTrue(SafetyPolicy.MAX_MEMORY_PURGE_BATCH_SIZE <= 100)
     }
 
     @Test

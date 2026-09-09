@@ -61,8 +61,13 @@ class MemoryStore(private val dao: MemoryDao) {
      */
     suspend fun latestForContext(limit: Int = 20): List<MemorySnapshot> {
         val entities = dao.latest(limit.coerceAtLeast(1))
-        markRecalled(entities)
-        return entities.map { it.toSnapshot() }
+        val recalledAt = markRecalled(entities)
+        return entities.map { entity ->
+            entity.toSnapshot(
+                recalledAtOverride = recalledAt,
+                recallCountOverride = entity.recallCount + 1
+            )
+        }
     }
 
     suspend fun search(query: String, limit: Int = 10): List<MemorySnapshot> =
@@ -73,8 +78,13 @@ class MemoryStore(private val dao: MemoryDao) {
         limit: Int = 10
     ): List<MemorySnapshot> {
         val entities = dao.search(query.trim(), limit.coerceAtLeast(1))
-        markRecalled(entities)
-        return entities.map { it.toSnapshot() }
+        val recalledAt = markRecalled(entities)
+        return entities.map { entity ->
+            entity.toSnapshot(
+                recalledAtOverride = recalledAt,
+                recallCountOverride = entity.recallCount + 1
+            )
+        }
     }
 
     /**
@@ -182,22 +192,32 @@ class MemoryStore(private val dao: MemoryDao) {
 
     suspend fun activeCount(): Int = dao.activeCount()
 
-    private suspend fun markRecalled(entities: List<MemoryEntity>) {
+    private suspend fun markRecalled(entities: List<MemoryEntity>): Long {
         val ids = entities.map { it.id }.distinct()
-        if (ids.isNotEmpty()) {
-            dao.markRecalled(ids, System.currentTimeMillis())
-        }
+        if (ids.isEmpty()) return 0L
+
+        val recalledAt = System.currentTimeMillis()
+        dao.markRecalled(ids, recalledAt)
+        return recalledAt
     }
 
     private fun daysToMillis(days: Int): Long =
         days.toLong().coerceAtLeast(1L) * 24L * 60L * 60L * 1_000L
 
-    private fun MemoryEntity.toSnapshot() = MemorySnapshot(
+    private fun MemoryEntity.toSnapshot(
+        recalledAtOverride: Long? = null,
+        recallCountOverride: Int? = null
+    ) = MemorySnapshot(
         id = id,
         type = type,
         content = content,
         source = source,
         confidence = confidence,
-        createdAt = createdAt
+        createdAt = createdAt,
+        originNode = originNode,
+        lastRecalledAt = recalledAtOverride ?: lastRecalledAt,
+        recallCount = recallCountOverride ?: recallCount,
+        verifiedAt = verifiedAt,
+        supersededBy = supersededBy
     )
 }

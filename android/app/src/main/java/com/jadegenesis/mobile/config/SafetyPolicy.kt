@@ -53,6 +53,19 @@ object SafetyPolicy {
     const val MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES = 4
     const val STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES = 12
 
+    // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.
+    // Les essais doivent rester petits, appariés et suffisamment mesurés avant
+    // qu'une promotion explicite puisse devenir possible.
+    const val MAX_EVOLUTION_CANDIDATES = 40
+    const val MAX_EVOLUTION_TRANSITIONS_PER_CANDIDATE = 20
+    const val MAX_EVOLUTION_SANDBOX_NOTES = 16
+    const val MAX_EVOLUTION_CONFIG_JSON_CHARS = 64_000
+    const val MAX_EVOLUTION_CONFIG_CHANGED_FIELDS = 12
+    const val MIN_EVOLUTION_TRIAL_SAMPLES = 12
+    const val MIN_EVOLUTION_EVIDENCE_CONFIDENCE = 0.75
+    const val MAX_EVOLUTION_SUCCESS_RATE_REGRESSION = 0.02
+    const val MIN_EVOLUTION_SCORE_DELTA = 2.0
+
     // Shared Genesis State : protège le téléphone et le VPS contre des lots
     // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
     const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200

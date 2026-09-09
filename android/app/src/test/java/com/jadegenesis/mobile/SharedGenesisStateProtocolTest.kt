@@ -52,8 +52,10 @@ class SharedGenesisStateProtocolTest {
             put("identity_id", "jade-1")
             put("replica_id", "pixel-1")
             put("server_revision", 8L)
+            put("server_head_revision", 8L)
             put("ack_event_ids", JSONArray().put("state-1"))
             put("events", JSONArray().put(event))
+            put("has_more", false)
             put("reset_required", false)
             put("snapshot", JSONArray())
             put("server_updated_at", 600L)
@@ -66,10 +68,38 @@ class SharedGenesisStateProtocolTest {
         )
 
         assertEquals(8L, parsed.serverRevision)
+        assertEquals(8L, parsed.serverHeadRevision)
         assertEquals(setOf("state-1"), parsed.acknowledgedEventIds)
         assertEquals(1, parsed.events.size)
         assertEquals(8L, parsed.events.single().serverRevision)
+        assertFalse(parsed.hasMore)
         assertFalse(parsed.resetRequired)
+    }
+
+    @Test
+    fun pagedResponseKeepsCursorBehindServerHead() {
+        val raw = JSONObject().apply {
+            put("schema_version", 1)
+            put("identity_id", "jade-1")
+            put("replica_id", "pixel-1")
+            put("server_revision", 200L)
+            put("server_head_revision", 206L)
+            put("ack_event_ids", JSONArray())
+            put("events", JSONArray())
+            put("has_more", true)
+            put("reset_required", false)
+            put("snapshot", JSONArray())
+        }.toString()
+
+        val parsed = SharedGenesisStateProtocol.parseSyncResponse(
+            raw = raw,
+            expectedIdentityId = "jade-1",
+            expectedReplicaId = "pixel-1"
+        )
+
+        assertEquals(200L, parsed.serverRevision)
+        assertEquals(206L, parsed.serverHeadRevision)
+        assertTrue(parsed.hasMore)
     }
 
     @Test
@@ -88,8 +118,10 @@ class SharedGenesisStateProtocolTest {
             put("identity_id", "jade-1")
             put("replica_id", "pixel-1")
             put("server_revision", 20L)
+            put("server_head_revision", 20L)
             put("ack_event_ids", JSONArray())
             put("events", JSONArray())
+            put("has_more", false)
             put("reset_required", true)
             put("snapshot", JSONArray().put(snapshot))
             put("server_updated_at", 800L)
@@ -113,8 +145,10 @@ class SharedGenesisStateProtocolTest {
             put("identity_id", "other-jade")
             put("replica_id", "pixel-1")
             put("server_revision", 1L)
+            put("server_head_revision", 1L)
             put("ack_event_ids", JSONArray())
             put("events", JSONArray())
+            put("has_more", false)
             put("reset_required", false)
             put("snapshot", JSONArray())
         }.toString()

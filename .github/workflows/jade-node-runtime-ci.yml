@@ -56,7 +56,6 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import importlib.util
-          import json
           import sys
           import tempfile
           from pathlib import Path
@@ -88,13 +87,14 @@ jobs:
           }
           assert required.issubset(gpu.keys())
 
-          store = module.AsyncTaskStore({})
-          assert store.stats() == {"active": 0, "queued": 0, "running": 0}
+          task_store = module.AsyncTaskStore({})
+          assert task_store.stats() == {"active": 0, "queued": 0, "running": 0}
 
           from shared_genesis_state import SharedGenesisStateStore
           with tempfile.TemporaryDirectory(prefix="jade-state-") as temp_dir:
               state_store = SharedGenesisStateStore(Path(temp_dir) / "state.json")
               request = {
+                  "schema_version": 1,
                   "identity_id": "jade-test",
                   "replica_id": "pixel-test",
                   "known_revision": 0,
@@ -109,8 +109,10 @@ jobs:
               }
               first = state_store.sync(request)
               assert first["server_revision"] == 1
+              assert first["server_head_revision"] == 1
               assert first["ack_event_ids"] == ["event-1"]
               assert len(first["events"]) == 1
+              assert first["has_more"] is False
 
               # Idempotent retry: the same event is acknowledged but does not
               # advance the durable revision a second time.
@@ -125,13 +127,54 @@ jobs:
               else:
                   raise AssertionError("identity mismatch should be rejected")
 
+              # Add enough events to prove that a client cursor never skips a
+              # page when the server has more than MAX_SYNC_EVENTS available.
+              bulk = []
+              for index in range(2, 207):
+                  bulk.append({
+                      "event_id": f"event-{index}",
+                      "origin_node": "pixel-test",
+                      "kind": "test_event",
+                      "entity_id": f"entity-{index}",
+                      "payload": "{}",
+                      "created_at": 1000 + index,
+                  })
+              state_store.sync({
+                  "schema_version": 1,
+                  "identity_id": "jade-test",
+                  "replica_id": "pixel-test",
+                  "known_revision": 1,
+                  "events": bulk[:200],
+              })
+              paged = state_store.sync({
+                  "schema_version": 1,
+                  "identity_id": "jade-test",
+                  "replica_id": "pixel-test",
+                  "known_revision": 1,
+                  "events": bulk[200:],
+              })
+              assert paged["server_revision"] == 201
+              assert paged["server_head_revision"] == 206
+              assert len(paged["events"]) == 200
+              assert paged["has_more"] is True
+              tail = state_store.sync({
+                  "schema_version": 1,
+                  "identity_id": "jade-test",
+                  "replica_id": "pixel-test",
+                  "known_revision": paged["server_revision"],
+                  "events": [],
+              })
+              assert tail["server_revision"] == 206
+              assert len(tail["events"]) == 5
+              assert tail["has_more"] is False
+
           health = module.health_payload({
               "node_id": "vps-test",
               "node_kind": "VPS",
               "node_name": "VPS test",
               "runtime_channel": "stable",
               "ollama_url": "http://127.0.0.1:9",
-          }, store)
+          }, task_store)
           assert "shared_genesis_state_v1" in health["capabilities"]
           assert "shared_state_sync" in health["capabilities"]
 

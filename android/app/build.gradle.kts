@@ -16,8 +16,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 20
-        versionName = "0.1.7.2"
+        versionCode = 21
+        versionName = "0.1.7.3"
     }
 
     buildFeatures {
@@ -91,4 +91,5 @@ dependencies {
     ksp("androidx.room3:room3-compiler:$roomVersion")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20260814")
 }

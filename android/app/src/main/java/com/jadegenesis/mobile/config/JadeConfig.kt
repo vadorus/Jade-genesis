@@ -321,8 +321,16 @@ data class ResourceTuning(
 
 data class RoutingTuning(
     val cpuCoreWeight: Double = 1.5,
+    val cpuHeadroomPercentWeight: Double = 0.15,
     val ramAvailableGbWeight: Double = 4.0,
     val storageFreeGbWeight: Double = 0.02,
+    val activeTaskPenalty: Double = 8.0,
+    val gpuVramFreeGbWeight: Double = 5.0,
+    val gpuHeadroomPercentWeight: Double = 0.08,
+    val brainReadyBonus: Double = 10.0,
+    val brainLoadedBonus: Double = 25.0,
+    val brainTokensPerSecondWeight: Double = 1.0,
+    val preferredNodeHintBonus: Double = 8.0,
     val preferRemoteRemoteBonus: Double = 90.0,
     val preferRemoteLocalPenalty: Double = -15.0,
     val localAllowedLocalBonus: Double = 60.0,
@@ -343,8 +351,16 @@ data class RoutingTuning(
     fun validate() {
         listOf(
             cpuCoreWeight,
+            cpuHeadroomPercentWeight,
             ramAvailableGbWeight,
             storageFreeGbWeight,
+            activeTaskPenalty,
+            gpuVramFreeGbWeight,
+            gpuHeadroomPercentWeight,
+            brainReadyBonus,
+            brainLoadedBonus,
+            brainTokensPerSecondWeight,
+            preferredNodeHintBonus,
             preferRemoteRemoteBonus,
             preferRemoteLocalPenalty,
             localAllowedLocalBonus,
@@ -366,8 +382,16 @@ data class RoutingTuning(
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("cpu_core_weight", cpuCoreWeight)
+        put("cpu_headroom_percent_weight", cpuHeadroomPercentWeight)
         put("ram_available_gb_weight", ramAvailableGbWeight)
         put("storage_free_gb_weight", storageFreeGbWeight)
+        put("active_task_penalty", activeTaskPenalty)
+        put("gpu_vram_free_gb_weight", gpuVramFreeGbWeight)
+        put("gpu_headroom_percent_weight", gpuHeadroomPercentWeight)
+        put("brain_ready_bonus", brainReadyBonus)
+        put("brain_loaded_bonus", brainLoadedBonus)
+        put("brain_tokens_per_second_weight", brainTokensPerSecondWeight)
+        put("preferred_node_hint_bonus", preferredNodeHintBonus)
         put("prefer_remote_remote_bonus", preferRemoteRemoteBonus)
         put("prefer_remote_local_penalty", preferRemoteLocalPenalty)
         put("local_allowed_local_bonus", localAllowedLocalBonus)
@@ -393,6 +417,10 @@ data class RoutingTuning(
                 finiteDouble(json, name, fallback)
             return RoutingTuning(
                 cpuCoreWeight = value("cpu_core_weight", defaults.cpuCoreWeight),
+                cpuHeadroomPercentWeight = value(
+                    "cpu_headroom_percent_weight",
+                    defaults.cpuHeadroomPercentWeight
+                ),
                 ramAvailableGbWeight = value(
                     "ram_available_gb_weight",
                     defaults.ramAvailableGbWeight
@@ -400,6 +428,34 @@ data class RoutingTuning(
                 storageFreeGbWeight = value(
                     "storage_free_gb_weight",
                     defaults.storageFreeGbWeight
+                ),
+                activeTaskPenalty = value(
+                    "active_task_penalty",
+                    defaults.activeTaskPenalty
+                ),
+                gpuVramFreeGbWeight = value(
+                    "gpu_vram_free_gb_weight",
+                    defaults.gpuVramFreeGbWeight
+                ),
+                gpuHeadroomPercentWeight = value(
+                    "gpu_headroom_percent_weight",
+                    defaults.gpuHeadroomPercentWeight
+                ),
+                brainReadyBonus = value(
+                    "brain_ready_bonus",
+                    defaults.brainReadyBonus
+                ),
+                brainLoadedBonus = value(
+                    "brain_loaded_bonus",
+                    defaults.brainLoadedBonus
+                ),
+                brainTokensPerSecondWeight = value(
+                    "brain_tokens_per_second_weight",
+                    defaults.brainTokensPerSecondWeight
+                ),
+                preferredNodeHintBonus = value(
+                    "preferred_node_hint_bonus",
+                    defaults.preferredNodeHintBonus
                 ),
                 preferRemoteRemoteBonus = value(
                     "prefer_remote_remote_bonus",

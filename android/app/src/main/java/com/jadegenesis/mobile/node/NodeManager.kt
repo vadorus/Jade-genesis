@@ -2,6 +2,7 @@ package com.jadegenesis.mobile.node
 
 import android.content.Context
 import com.jadegenesis.mobile.BuildConfig
+import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.model.DeviceProfile
@@ -16,6 +17,7 @@ import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.NodeTaskResponse
 import com.jadegenesis.mobile.model.ResourceBudget
 import com.jadegenesis.mobile.model.TaskWorkload
+import com.jadegenesis.mobile.resource.NodeResourceScorer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -92,9 +94,17 @@ class NodeManager(
         val osName: String,
         val cpuName: String,
         val cpuCores: Int,
+        val cpuLoadPercent: Double,
         val ramTotalGb: Double,
         val ramAvailableGb: Double,
         val storageFreeGb: Double,
+        val gpuName: String,
+        val gpuVramTotalGb: Double,
+        val gpuVramFreeGb: Double,
+        val gpuUtilizationPercent: Double,
+        val gpuTemperatureC: Double,
+        val gpuPowerDrawW: Double,
+        val activeTaskCount: Int,
         val capabilities: List<String>,
         val lastSeenAt: Long,
         val lastError: String?,
@@ -103,7 +113,18 @@ class NodeManager(
         val runtimeVersion: String,
         val runtimeChannel: String,
         val brainBackend: String,
-        val brainModel: String
+        val brainModel: String,
+        val brainReady: Boolean,
+        val brainLoaded: Boolean,
+        val brainLoadedModel: String,
+        val brainModelSizeGb: Double,
+        val brainModelVramGb: Double,
+        val brainTokensPerSecond: Double,
+        val brainLastDurationMs: Long,
+        val brainLoadDurationMs: Long,
+        val brainLastMeasuredAt: Long,
+        val visionReady: Boolean,
+        val visionModel: String
     ) {
         fun publicNode(stale: Boolean = false): GenesisNode {
             val active = routes.firstOrNull { it.routeId == activeRouteId }
@@ -124,9 +145,17 @@ class NodeManager(
                 osName = osName,
                 cpuName = cpuName,
                 cpuCores = cpuCores,
+                cpuLoadPercent = cpuLoadPercent,
                 ramTotalGb = ramTotalGb,
                 ramAvailableGb = ramAvailableGb,
                 storageFreeGb = storageFreeGb,
+                gpuName = gpuName,
+                gpuVramTotalGb = gpuVramTotalGb,
+                gpuVramFreeGb = gpuVramFreeGb,
+                gpuUtilizationPercent = gpuUtilizationPercent,
+                gpuTemperatureC = gpuTemperatureC,
+                gpuPowerDrawW = gpuPowerDrawW,
+                activeTaskCount = activeTaskCount,
                 capabilities = capabilities,
                 lastSeenAt = lastSeenAt,
                 lastError = if (stale && status == NodeStatus.ONLINE) {
@@ -145,7 +174,18 @@ class NodeManager(
                 runtimeVersion = runtimeVersion,
                 runtimeChannel = runtimeChannel,
                 brainBackend = brainBackend,
-                brainModel = brainModel
+                brainModel = brainModel,
+                brainReady = brainReady,
+                brainLoaded = brainLoaded,
+                brainLoadedModel = brainLoadedModel,
+                brainModelSizeGb = brainModelSizeGb,
+                brainModelVramGb = brainModelVramGb,
+                brainTokensPerSecond = brainTokensPerSecond,
+                brainLastDurationMs = brainLastDurationMs,
+                brainLoadDurationMs = brainLoadDurationMs,
+                brainLastMeasuredAt = brainLastMeasuredAt,
+                visionReady = visionReady,
+                visionModel = visionModel
             )
         }
     }
@@ -181,6 +221,7 @@ class NodeManager(
             "device_registry_v2",
             "device_registry_v2_1",
             "device_registry_v2_2",
+            "resource_intelligence_v3_client",
             "multi_route_v1",
             "compute_mesh_v1",
             "cognitive_core_v1",
@@ -235,7 +276,7 @@ class NodeManager(
         require(port in 1..65535) { "Port invalide." }
         require(token.isNotBlank()) { "Jeton du Node Runtime vide." }
         require(classifyRoute(cleanHost) == NodeRouteKind.TAILSCALE) {
-            "Jade 0.1.6.1 exige une adresse Tailscale (100.64.0.0/10 ou *.ts.net) pour protéger le jeton et les données du nœud."
+            "Jade exige une adresse Tailscale (100.64.0.0/10 ou *.ts.net) pour protéger le jeton et les données du nœud."
         }
 
         val preparation = registryMutex.withLock {
@@ -267,28 +308,11 @@ class NodeManager(
                 routes = routeOwner.routes.map {
                     if (it.routeId == route.routeId) route else it
                 }
-            ) ?: StoredNode(
+            ) ?: emptyStoredNode(
                 nodeId = "remote-${UUID.randomUUID()}",
-                name = "Nœud Genesis",
-                kind = NodeKind.UNKNOWN,
                 token = token.trim(),
-                protocol = "",
-                status = NodeStatus.UNKNOWN,
-                osName = "",
-                cpuName = "",
-                cpuCores = 0,
-                ramTotalGb = 0.0,
-                ramAvailableGb = 0.0,
-                storageFreeGb = 0.0,
-                capabilities = emptyList(),
-                lastSeenAt = 0L,
-                lastError = null,
                 routes = listOf(route),
-                activeRouteId = route.routeId,
-                runtimeVersion = "",
-                runtimeChannel = "",
-                brainBackend = "",
-                brainModel = ""
+                activeRouteId = route.routeId
             )
 
             draft to (routeOwner == null)
@@ -390,16 +414,14 @@ class NodeManager(
         budget: ResourceBudget
     ): GenesisNode? {
         val local = nodes.firstOrNull { it.status == NodeStatus.LOCAL }
+        val routing = JadeConfigRuntime.current().validated().routing
         val onlineRemote = nodes
             .filter {
                 it.status == NodeStatus.ONLINE && it.kind != NodeKind.PHONE
             }
-            .sortedWith(
-                compareByDescending<GenesisNode> { "compute" in it.capabilities }
-                    .thenByDescending { "task_execution_v3" in it.capabilities }
-                    .thenByDescending { it.ramAvailableGb }
-                    .thenByDescending { it.cpuCores }
-            )
+            .sortedByDescending { node ->
+                NodeResourceScorer.genericScore(node, routing)
+            }
 
         return if (budget.preferRemoteCompute) {
             onlineRemote.firstOrNull() ?: local
@@ -458,6 +480,12 @@ class NodeManager(
         } else {
             executeSyncTask(node, request)
         }
+
+        recordTaskPerformance(
+            nodeId = response.nodeId,
+            request = request,
+            response = response
+        )
 
         logger?.log(
             DiagnosticLevel.INFO,
@@ -790,9 +818,22 @@ class NodeManager(
             osName = json.optString("os", node.osName),
             cpuName = json.optString("cpu", node.cpuName),
             cpuCores = json.optInt("cpu_cores", node.cpuCores),
+            cpuLoadPercent = percentOrUnknown(json, "cpu_load_percent", node.cpuLoadPercent),
             ramTotalGb = finiteDouble(json, "ram_total_gb", node.ramTotalGb),
             ramAvailableGb = finiteDouble(json, "ram_available_gb", node.ramAvailableGb),
             storageFreeGb = finiteDouble(json, "storage_free_gb", node.storageFreeGb),
+            gpuName = json.optString("gpu_name", node.gpuName),
+            gpuVramTotalGb = finiteDouble(json, "gpu_vram_total_gb", node.gpuVramTotalGb),
+            gpuVramFreeGb = finiteDouble(json, "gpu_vram_free_gb", node.gpuVramFreeGb),
+            gpuUtilizationPercent = percentOrUnknown(
+                json,
+                "gpu_utilization_percent",
+                node.gpuUtilizationPercent
+            ),
+            gpuTemperatureC = finiteDouble(json, "gpu_temperature_c", node.gpuTemperatureC),
+            gpuPowerDrawW = finiteDouble(json, "gpu_power_draw_w", node.gpuPowerDrawW),
+            activeTaskCount = json.optInt("active_task_count", node.activeTaskCount)
+                .coerceAtLeast(0),
             capabilities = parseStringArray(json.optJSONArray("capabilities")),
             lastSeenAt = System.currentTimeMillis(),
             lastError = null,
@@ -801,7 +842,14 @@ class NodeManager(
             runtimeVersion = json.optString("agent_version", node.runtimeVersion),
             runtimeChannel = json.optString("runtime_channel", node.runtimeChannel),
             brainBackend = json.optString("brain_backend", node.brainBackend),
-            brainModel = json.optString("brain_model", node.brainModel)
+            brainModel = json.optString("brain_model", node.brainModel),
+            brainReady = json.optBoolean("brain_ready", node.brainReady),
+            brainLoaded = json.optBoolean("brain_loaded", node.brainLoaded),
+            brainLoadedModel = json.optString("brain_loaded_model", node.brainLoadedModel),
+            brainModelSizeGb = finiteDouble(json, "brain_model_size_gb", node.brainModelSizeGb),
+            brainModelVramGb = finiteDouble(json, "brain_model_vram_gb", node.brainModelVramGb),
+            visionReady = json.optBoolean("vision_ready", node.visionReady),
+            visionModel = json.optString("vision_model", node.visionModel)
         )
 
         logger?.log(
@@ -812,7 +860,11 @@ class NodeManager(
                 "node_id" to updated.nodeId,
                 "latency_ms" to best.route.latencyMs,
                 "route_kind" to best.route.kind.name,
-                "runtime_version" to updated.runtimeVersion
+                "runtime_version" to updated.runtimeVersion,
+                "cpu_load" to updated.cpuLoadPercent,
+                "gpu" to updated.gpuName,
+                "gpu_vram_free_gb" to updated.gpuVramFreeGb,
+                "active_tasks" to updated.activeTaskCount
             )
         )
         updated
@@ -982,6 +1034,39 @@ class NodeManager(
         }
     }
 
+    private suspend fun recordTaskPerformance(
+        nodeId: String,
+        request: DistributedTaskRequest,
+        response: NodeTaskResponse
+    ) {
+        if (request.taskKind != "brain_chat") return
+        val output = runCatching { JSONObject(response.output) }.getOrNull() ?: return
+        val tokensPerSecond = finiteDouble(output, "tokens_per_second", 0.0)
+            .coerceAtLeast(0.0)
+        val loadDurationMs = output.optLong("load_duration_ms", 0L).coerceAtLeast(0L)
+        val measuredModel = output.optString("model").trim()
+        val measuredAt = System.currentTimeMillis()
+
+        registryMutex.withLock {
+            val nodes = loadStoredNodesUnsafe().toMutableList()
+            val index = nodes.indexOfFirst { it.nodeId == nodeId }
+            if (index < 0) return@withLock
+            val current = nodes[index]
+            nodes[index] = current.copy(
+                brainModel = measuredModel.ifBlank { current.brainModel },
+                brainReady = true,
+                brainLoaded = true,
+                brainLoadedModel = measuredModel.ifBlank { current.brainLoadedModel },
+                brainTokensPerSecond = tokensPerSecond.takeIf { it > 0.0 }
+                    ?: current.brainTokensPerSecond,
+                brainLastDurationMs = response.durationMs.coerceAtLeast(0L),
+                brainLoadDurationMs = loadDurationMs,
+                brainLastMeasuredAt = measuredAt
+            )
+            saveStoredNodesUnsafe(nodes)
+        }
+    }
+
     private fun replaceStoredNodeUnsafe(node: StoredNode) {
         val nodes = loadStoredNodesUnsafe().toMutableList()
         nodes.removeAll { it.nodeId == node.nodeId }
@@ -1063,6 +1148,15 @@ class NodeManager(
             ?: safeFallback
     }
 
+    private fun percentOrUnknown(
+        json: JSONObject,
+        name: String,
+        fallback: Double
+    ): Double {
+        val value = finiteDouble(json, name, fallback)
+        return if (value in 0.0..100.0) value else -1.0
+    }
+
     private fun loadStoredNodesUnsafe(): List<StoredNode> {
         val rawV2 = prefs.getString(KEY_REMOTE_NODES_V2, null)
         if (!rawV2.isNullOrBlank()) {
@@ -1097,7 +1191,7 @@ class NodeManager(
                 logger?.log(
                     DiagnosticLevel.INFO,
                     "node_registry_deduplicated",
-                    "Device Registry v2.2 a fusionné les doublons partageant le même Node ID.",
+                    "Device Registry v2.3 a fusionné les doublons partageant le même Node ID.",
                     mapOf(
                         "before" to parsed.size,
                         "after" to normalized.size
@@ -1115,7 +1209,7 @@ class NodeManager(
             logger?.log(
                 DiagnosticLevel.INFO,
                 "node_registry_migrated",
-                "Ancien registre de nœuds migré vers Device Registry v2.2 et dédupliqué.",
+                "Ancien registre de nœuds migré vers Device Registry v2.3 et dédupliqué.",
                 mapOf("node_count" to migrated.size)
             )
         }
@@ -1260,9 +1354,21 @@ class NodeManager(
                         osName = json.optString("os"),
                         cpuName = json.optString("cpu"),
                         cpuCores = json.optInt("cpu_cores"),
+                        cpuLoadPercent = percentOrUnknown(json, "cpu_load_percent", -1.0),
                         ramTotalGb = finiteDouble(json, "ram_total_gb", 0.0),
                         ramAvailableGb = finiteDouble(json, "ram_available_gb", 0.0),
                         storageFreeGb = finiteDouble(json, "storage_free_gb", 0.0),
+                        gpuName = json.optString("gpu_name"),
+                        gpuVramTotalGb = finiteDouble(json, "gpu_vram_total_gb", 0.0),
+                        gpuVramFreeGb = finiteDouble(json, "gpu_vram_free_gb", 0.0),
+                        gpuUtilizationPercent = percentOrUnknown(
+                            json,
+                            "gpu_utilization_percent",
+                            -1.0
+                        ),
+                        gpuTemperatureC = finiteDouble(json, "gpu_temperature_c", -1.0),
+                        gpuPowerDrawW = finiteDouble(json, "gpu_power_draw_w", -1.0),
+                        activeTaskCount = json.optInt("active_task_count", 0).coerceAtLeast(0),
                         capabilities = parseStringArray(json.optJSONArray("capabilities")),
                         lastSeenAt = json.optLong("last_seen_at"),
                         lastError = json.optString("last_error")
@@ -1273,7 +1379,22 @@ class NodeManager(
                         runtimeVersion = json.optString("runtime_version"),
                         runtimeChannel = json.optString("runtime_channel"),
                         brainBackend = json.optString("brain_backend"),
-                        brainModel = json.optString("brain_model")
+                        brainModel = json.optString("brain_model"),
+                        brainReady = json.optBoolean("brain_ready", false),
+                        brainLoaded = json.optBoolean("brain_loaded", false),
+                        brainLoadedModel = json.optString("brain_loaded_model"),
+                        brainModelSizeGb = finiteDouble(json, "brain_model_size_gb", 0.0),
+                        brainModelVramGb = finiteDouble(json, "brain_model_vram_gb", 0.0),
+                        brainTokensPerSecond = finiteDouble(
+                            json,
+                            "brain_tokens_per_second",
+                            0.0
+                        ),
+                        brainLastDurationMs = json.optLong("brain_last_duration_ms", 0L),
+                        brainLoadDurationMs = json.optLong("brain_load_duration_ms", 0L),
+                        brainLastMeasuredAt = json.optLong("brain_last_measured_at", 0L),
+                        visionReady = json.optBoolean("vision_ready", false),
+                        visionModel = json.optString("vision_model")
                     )
                 )
             }
@@ -1296,7 +1417,7 @@ class NodeManager(
                     else -> NodeRouteStatus.UNKNOWN
                 }
                 add(
-                    StoredNode(
+                    emptyStoredNode(
                         nodeId = json.getString("node_id"),
                         name = json.optString("name", "Nœud Genesis"),
                         kind = parseKind(json.optString("kind")),
@@ -1311,8 +1432,7 @@ class NodeManager(
                         storageFreeGb = finiteDouble(json, "storage_free_gb", 0.0),
                         capabilities = parseStringArray(json.optJSONArray("capabilities")),
                         lastSeenAt = json.optLong("last_seen_at"),
-                        lastError = json.optString("last_error")
-                            .takeIf { it.isNotBlank() },
+                        lastError = json.optString("last_error").takeIf { it.isNotBlank() },
                         routes = listOf(
                             StoredRoute(
                                 routeId = routeId,
@@ -1326,11 +1446,7 @@ class NodeManager(
                                     .takeIf { it.isNotBlank() }
                             )
                         ),
-                        activeRouteId = routeId,
-                        runtimeVersion = "",
-                        runtimeChannel = "",
-                        brainBackend = "",
-                        brainModel = ""
+                        activeRouteId = routeId
                     )
                 )
             }
@@ -1351,9 +1467,20 @@ class NodeManager(
                     put("os", node.osName)
                     put("cpu", node.cpuName)
                     put("cpu_cores", node.cpuCores)
+                    put("cpu_load_percent", node.cpuLoadPercent.takeIf { it.isFinite() } ?: -1.0)
                     put("ram_total_gb", node.ramTotalGb.takeIf { it.isFinite() } ?: 0.0)
                     put("ram_available_gb", node.ramAvailableGb.takeIf { it.isFinite() } ?: 0.0)
                     put("storage_free_gb", node.storageFreeGb.takeIf { it.isFinite() } ?: 0.0)
+                    put("gpu_name", node.gpuName)
+                    put("gpu_vram_total_gb", node.gpuVramTotalGb.takeIf { it.isFinite() } ?: 0.0)
+                    put("gpu_vram_free_gb", node.gpuVramFreeGb.takeIf { it.isFinite() } ?: 0.0)
+                    put(
+                        "gpu_utilization_percent",
+                        node.gpuUtilizationPercent.takeIf { it.isFinite() } ?: -1.0
+                    )
+                    put("gpu_temperature_c", node.gpuTemperatureC.takeIf { it.isFinite() } ?: -1.0)
+                    put("gpu_power_draw_w", node.gpuPowerDrawW.takeIf { it.isFinite() } ?: -1.0)
+                    put("active_task_count", node.activeTaskCount)
                     put("capabilities", JSONArray(node.capabilities))
                     put("last_seen_at", node.lastSeenAt)
                     put("last_error", node.lastError ?: "")
@@ -1362,6 +1489,20 @@ class NodeManager(
                     put("runtime_channel", node.runtimeChannel)
                     put("brain_backend", node.brainBackend)
                     put("brain_model", node.brainModel)
+                    put("brain_ready", node.brainReady)
+                    put("brain_loaded", node.brainLoaded)
+                    put("brain_loaded_model", node.brainLoadedModel)
+                    put("brain_model_size_gb", node.brainModelSizeGb.takeIf { it.isFinite() } ?: 0.0)
+                    put("brain_model_vram_gb", node.brainModelVramGb.takeIf { it.isFinite() } ?: 0.0)
+                    put(
+                        "brain_tokens_per_second",
+                        node.brainTokensPerSecond.takeIf { it.isFinite() } ?: 0.0
+                    )
+                    put("brain_last_duration_ms", node.brainLastDurationMs)
+                    put("brain_load_duration_ms", node.brainLoadDurationMs)
+                    put("brain_last_measured_at", node.brainLastMeasuredAt)
+                    put("vision_ready", node.visionReady)
+                    put("vision_model", node.visionModel)
                     put(
                         "routes",
                         JSONArray().apply {
@@ -1394,6 +1535,67 @@ class NodeManager(
             putString(KEY_REMOTE_NODES_V2, serialized)
         }.apply()
     }
+
+    private fun emptyStoredNode(
+        nodeId: String,
+        name: String = "Nœud Genesis",
+        kind: NodeKind = NodeKind.UNKNOWN,
+        token: String,
+        protocol: String = "",
+        status: NodeStatus = NodeStatus.UNKNOWN,
+        osName: String = "",
+        cpuName: String = "",
+        cpuCores: Int = 0,
+        ramTotalGb: Double = 0.0,
+        ramAvailableGb: Double = 0.0,
+        storageFreeGb: Double = 0.0,
+        capabilities: List<String> = emptyList(),
+        lastSeenAt: Long = 0L,
+        lastError: String? = null,
+        routes: List<StoredRoute>,
+        activeRouteId: String?
+    ): StoredNode = StoredNode(
+        nodeId = nodeId,
+        name = name,
+        kind = kind,
+        token = token,
+        protocol = protocol,
+        status = status,
+        osName = osName,
+        cpuName = cpuName,
+        cpuCores = cpuCores,
+        cpuLoadPercent = -1.0,
+        ramTotalGb = ramTotalGb,
+        ramAvailableGb = ramAvailableGb,
+        storageFreeGb = storageFreeGb,
+        gpuName = "",
+        gpuVramTotalGb = 0.0,
+        gpuVramFreeGb = 0.0,
+        gpuUtilizationPercent = -1.0,
+        gpuTemperatureC = -1.0,
+        gpuPowerDrawW = -1.0,
+        activeTaskCount = 0,
+        capabilities = capabilities,
+        lastSeenAt = lastSeenAt,
+        lastError = lastError,
+        routes = routes,
+        activeRouteId = activeRouteId,
+        runtimeVersion = "",
+        runtimeChannel = "",
+        brainBackend = "",
+        brainModel = "",
+        brainReady = false,
+        brainLoaded = false,
+        brainLoadedModel = "",
+        brainModelSizeGb = 0.0,
+        brainModelVramGb = 0.0,
+        brainTokensPerSecond = 0.0,
+        brainLastDurationMs = 0L,
+        brainLoadDurationMs = 0L,
+        brainLastMeasuredAt = 0L,
+        visionReady = false,
+        visionModel = ""
+    )
 
     private fun <T> Result<T>.rethrowCancellation(): Result<T> {
         val error = exceptionOrNull()

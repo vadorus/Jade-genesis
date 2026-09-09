@@ -46,6 +46,15 @@ class SelfModelBuilder {
                 "local_brain" in it.capabilities &&
                 "brain_chat" in it.capabilities
         }
+        val onlineResourceTelemetryNode = onlineRemote.any {
+            "resource_telemetry_v2" in it.capabilities
+        }
+        val onlineGpuTelemetryNode = onlineRemote.any {
+            "gpu_telemetry_v1" in it.capabilities
+        }
+        val measuredBrainNode = onlineRemote.any {
+            it.brainTokensPerSecond > 0.0
+        }
         val onlineAsyncNode = onlineRemote.any {
             "async_tasks_v1" in it.capabilities
         }
@@ -82,10 +91,21 @@ class SelfModelBuilder {
                 "Adapte le budget aux ressources réelles du Pixel."
             ),
             Capability(
+                "resource_intelligence_v3",
+                true,
+                when {
+                    measuredBrainNode -> "Measured_compute_active"
+                    onlineGpuTelemetryNode -> "GPU_telemetry_active"
+                    onlineResourceTelemetryNode -> "Dynamic_telemetry_active"
+                    else -> "Runtime_0.1.2_ready_waiting_for_nodes"
+                },
+                "Les runtimes 0.1.2 peuvent remonter charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
+            ),
+            Capability(
                 "device_registry",
                 true,
-                "DeviceRegistry v2",
-                "Les nœuds et leurs secrets d'appairage restent enregistrés ; l'ancien registre 0.0.x est migré automatiquement."
+                "DeviceRegistry v2.3",
+                "Les nœuds, leurs routes, leurs secrets d'appairage et leur dernière télémétrie restent enregistrés ; les anciens registres sont migrés automatiquement."
             ),
             Capability(
                 "multi_route_nodes",
@@ -148,8 +168,8 @@ class SelfModelBuilder {
             Capability(
                 "task_router",
                 true,
-                "AdaptiveTaskRouter + DeviceRegistry v2",
-                "Classe les nœuds par ressources, capacité et historique, puis utilise les routes enregistrées."
+                "AdaptiveTaskRouter + DeviceRegistry v2.3",
+                "Classe les nœuds par capacité, ressources et historique. Le calcul générique peut intégrer la charge dynamique ; le cerveau distribué utilise en plus GPU/VRAM, modèle chargé et débit mesuré."
             ),
             Capability(
                 "task_ledger",
@@ -192,8 +212,8 @@ class SelfModelBuilder {
             Capability(
                 "distributed_local_brain",
                 onlineLocalBrainNode,
-                if (onlineLocalBrainNode) "DistributedLocalBrain + Ollama" else "PrototypeBrain_fallback",
-                "Tout PC/VPS qui annonce local_brain + brain_chat peut devenir une ressource générative."
+                if (onlineLocalBrainNode) "DistributedLocalBrain telemetry-aware" else "PrototypeBrain_fallback",
+                "Tout PC/VPS qui annonce local_brain + brain_chat peut devenir une ressource générative ; Resource Intelligence v3 aide à choisir celui qui dispose réellement de la meilleure capacité au moment de la tâche."
             ),
             Capability(
                 "generative_ai",
@@ -220,14 +240,14 @@ class SelfModelBuilder {
             Capability(
                 "runtime_manager",
                 runtimeManagedNode,
-                if (runtimeManagedNode) "RuntimeManager protocol ready" else "legacy_runtime_detected",
+                if (runtimeManagedNode) "RuntimeManager expects 0.1.2" else "legacy_runtime_detected",
                 "La version et le canal des runtimes sont suivis. L'exécution automatique des mises à jour reste volontairement désactivée dans cette première V0.1."
             ),
             Capability(
                 "screen_observer",
                 true,
                 if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_2_targeted" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
-                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime PC 0.1.1 reste compatible."
+                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime 0.1.2 conserve les capacités vision existantes."
             ),
             Capability(
                 "vision_analysis",
@@ -266,6 +286,8 @@ class SelfModelBuilder {
         val limits = mutableListOf(
             "Le Cognitive Core ${identity.version} orchestre et vérifie les modèles, mais ce n'est pas encore une auto-évolution complète de son logiciel ou de ses poids.",
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
+            "Resource Intelligence v3 connaît d'abord NVIDIA via nvidia-smi ; AMD, Intel et l'unified memory Apple restent à instrumenter précisément.",
+            "Les mesures de débit génératif apprennent des vraies tâches brain_chat ; elles ne remplacent pas encore un benchmark Runtime Eval reproductible.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",
             "La protection Admin utilise un PIN local dans cette V0.1 ; l'intégration biométrique pourra la remplacer.",

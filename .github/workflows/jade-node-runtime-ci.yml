@@ -1,0 +1,93 @@
+name: Jade Node Runtime CI
+
+on:
+  push:
+    branches:
+      - main
+      - "jade/**"
+    paths:
+      - "node-agent/**"
+      - ".github/workflows/jade-node-runtime-ci.yml"
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "node-agent/**"
+      - ".github/workflows/jade-node-runtime-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jade-node-runtime-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    name: Validate dependency-free Node Runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Compile Node Runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile node-agent/jade_node_agent.py
+
+      - name: Validate telemetry helpers without external services
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          path = Path("node-agent/jade_node_agent.py")
+          spec = importlib.util.spec_from_file_location("jade_node_agent", path)
+          assert spec is not None and spec.loader is not None
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          assert module.VERSION == "0.1.2"
+          assert module.PROTOCOL == "jade-genesis-node/0.0.6"
+          assert "brain_chat" in module.ALLOWED_TASKS
+          assert "vision_analyze" in module.ALLOWED_TASKS
+
+          cpu = module.cpu_load_percent(sample_seconds=0.02)
+          assert cpu == -1.0 or 0.0 <= cpu <= 100.0
+
+          gpu = module.gpu_telemetry()
+          required = {
+              "gpu_name",
+              "gpu_vram_total_gb",
+              "gpu_vram_free_gb",
+              "gpu_utilization_percent",
+          }
+          assert required.issubset(gpu.keys())
+
+          store = module.AsyncTaskStore({})
+          stats = store.stats()
+          assert stats == {"active": 0, "queued": 0, "running": 0}
+
+          print("Node Runtime telemetry helpers validated.")
+          PY
+
+      - name: Prove validation did not rewrite sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git status --porcelain --untracked-files=no

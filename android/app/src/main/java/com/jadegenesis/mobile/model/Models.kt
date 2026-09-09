@@ -190,9 +190,17 @@ data class GenesisNode(
     val osName: String = "",
     val cpuName: String = "",
     val cpuCores: Int = 0,
+    val cpuLoadPercent: Double = -1.0,
     val ramTotalGb: Double = 0.0,
     val ramAvailableGb: Double = 0.0,
     val storageFreeGb: Double = 0.0,
+    val gpuName: String = "",
+    val gpuVramTotalGb: Double = 0.0,
+    val gpuVramFreeGb: Double = 0.0,
+    val gpuUtilizationPercent: Double = -1.0,
+    val gpuTemperatureC: Double = -1.0,
+    val gpuPowerDrawW: Double = -1.0,
+    val activeTaskCount: Int = 0,
     val capabilities: List<String> = emptyList(),
     val lastSeenAt: Long = 0L,
     val lastError: String? = null,
@@ -201,7 +209,18 @@ data class GenesisNode(
     val runtimeVersion: String = "",
     val runtimeChannel: String = "",
     val brainBackend: String = "",
-    val brainModel: String = ""
+    val brainModel: String = "",
+    val brainReady: Boolean = false,
+    val brainLoaded: Boolean = false,
+    val brainLoadedModel: String = "",
+    val brainModelSizeGb: Double = 0.0,
+    val brainModelVramGb: Double = 0.0,
+    val brainTokensPerSecond: Double = 0.0,
+    val brainLastDurationMs: Long = 0L,
+    val brainLoadDurationMs: Long = 0L,
+    val brainLastMeasuredAt: Long = 0L,
+    val visionReady: Boolean = false,
+    val visionModel: String = ""
 )
 
 data class DistributedTaskRequest(

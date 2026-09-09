@@ -62,6 +62,11 @@ class SelfModelBuilder {
         val runtimeManagedNode = onlineRemote.any {
             "runtime_manager_v1" in it.capabilities
         }
+        val sharedStateVps = vpsNodes.any {
+            it.status == NodeStatus.ONLINE &&
+                "shared_genesis_state_v1" in it.capabilities &&
+                "shared_state_sync" in it.capabilities
+        }
 
         val onlineScreenNode = onlineRemote.any {
             "screen_analyze" in it.capabilities
@@ -97,15 +102,25 @@ class SelfModelBuilder {
                     measuredBrainNode -> "Measured_compute_active"
                     onlineGpuTelemetryNode -> "GPU_telemetry_active"
                     onlineResourceTelemetryNode -> "Dynamic_telemetry_active"
-                    else -> "Runtime_0.1.2_ready_waiting_for_nodes"
+                    else -> "Runtime_0.1.3_ready_waiting_for_nodes"
                 },
-                "Les runtimes 0.1.2 peuvent remonter charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
+                "Les runtimes 0.1.3 conservent la télémétrie 0.1.2 : charge CPU, tâches actives, GPU/VRAM NVIDIA, modèle chargé et performances génératives mesurées. La sélection du cerveau local privilégie les mesures réelles quand elles existent."
             ),
             Capability(
                 "resource_lease",
                 true,
                 "ResourceAdmissionController 0.1.7.4",
                 "Estime RAM, CPU et VRAM par tâche, vérifie la capacité avant exécution et réserve un lease logique jusqu'à libération. Les leases sont partagés dans le processus Android entre TaskRouter, ComputeMesh et le cerveau local distribué."
+            ),
+            Capability(
+                "shared_genesis_state",
+                true,
+                if (sharedStateVps) {
+                    "SharedGenesisState v1 — durable VPS replica active"
+                } else {
+                    "SharedGenesisState v1 — phone outbox/cache ready"
+                },
+                "Le Pixel conserve une outbox hors-ligne et un cache local ; un VPS Runtime 0.1.3 peut maintenir une réplique opérationnelle durable versionnée. La réplique est liée à l'identité Jade mais n'en devient jamais l'unique propriétaire."
             ),
             Capability(
                 "device_registry",
@@ -246,14 +261,14 @@ class SelfModelBuilder {
             Capability(
                 "runtime_manager",
                 runtimeManagedNode,
-                if (runtimeManagedNode) "RuntimeManager expects 0.1.2" else "legacy_runtime_detected",
+                if (runtimeManagedNode) "RuntimeManager expects 0.1.3" else "legacy_runtime_detected",
                 "La version et le canal des runtimes sont suivis. L'exécution automatique des mises à jour reste volontairement désactivée dans cette première V0.1."
             ),
             Capability(
                 "screen_observer",
                 true,
                 if (onlineScreenNode || onlineVisionNode) "ScreenObserver_v1_2_targeted" else "ScreenObserver_capture_ready_waiting_for_vision_runtime",
-                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime 0.1.2 conserve les capacités vision existantes."
+                "Le Pixel propose capture immédiate, observation armée par notification et images partagées. Une zone peut être cadrée et accompagnée d'une consigne avant l'analyse. Le runtime 0.1.3 conserve les capacités vision existantes."
             ),
             Capability(
                 "vision_analysis",
@@ -294,7 +309,8 @@ class SelfModelBuilder {
             "LearningEngine v1 produit des candidats à partir de mesures ; une amélioration importante doit encore être testée et validée avant promotion.",
             "Resource Intelligence v3 connaît d'abord NVIDIA via nvidia-smi ; AMD, Intel et l'unified memory Apple restent à instrumenter précisément.",
             "Les mesures de débit génératif apprennent des vraies tâches brain_chat ; elles ne remplacent pas encore un benchmark Runtime Eval reproductible.",
-            "Resource Lease 0.1.7.4 réserve de la capacité dans l'orchestrateur Android mais ne crée pas encore une réservation OS/cgroup sur le nœud distant. Le registre de leases est process-local ; sa réplication durable appartient à Shared Genesis State 0.1.7.5.",
+            "Resource Lease 0.1.7.4 réserve de la capacité dans l'orchestrateur Android mais ne crée pas encore une réservation OS/cgroup sur le nœud distant. Le registre de leases actif reste process-local.",
+            "Shared Genesis State 0.1.7.5 réplique l'état opérationnel versionné et conserve une outbox/cache ; le VPS n'est pas l'unique propriétaire de l'identité et le cycle de nuit autonome n'est pas encore activé.",
             "Les chemins directs Screen Observer/vision utilisent encore NodeManager hors TaskRouter ; leur unification complète avec l'admission Resource Lease reste à faire.",
             "Compute Mesh v1 sait fan-out des tâches indépendantes ; il ne fusionne pas physiquement plusieurs machines en une seule mémoire GPU.",
             "Runtime Manager v1 expose version/canal/état et prépare stable/candidate, mais n'installe pas encore seul un nouveau binaire distant.",

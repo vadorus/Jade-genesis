@@ -67,16 +67,7 @@ class RuntimeEvalStore(context: Context) {
 
     fun recordTaskResult(result: DistributedTaskResult) {
         if (!shouldEvaluate(result.taskKind)) return
-        val workload = when (result.taskKind) {
-            "genesis_probe" -> TaskWorkload.MEDIUM
-            "memory_consolidation" -> TaskWorkload.HEAVY
-            "brain_chat", "vision_analyze", "screen_analyze" -> TaskWorkload.HEAVY
-            else -> TaskWorkload.LIGHT
-        }
-        val nodeKind = when (result.executionLocation) {
-            TaskExecutionLocation.LOCAL -> NodeKind.PHONE
-            TaskExecutionLocation.REMOTE -> NodeKind.UNKNOWN
-        }
+        val workload = workloadFor(result.taskKind)
         val outputJson = runCatching { JSONObject(result.output) }.getOrNull()
         val model = outputJson?.optString("model")
             ?.trim()
@@ -88,26 +79,58 @@ class RuntimeEvalStore(context: Context) {
             0.0
         ).coerceAtLeast(0.0)
 
-        val observation = RuntimeEvalObservation(
-            observationId = "task:${result.taskId}:${result.executedNodeId}",
-            taskId = result.taskId,
-            taskKind = result.taskKind,
-            workload = workload,
-            nodeId = result.executedNodeId.ifBlank { "unknown-node" },
-            nodeName = result.executedNodeName.ifBlank { "Nœud inconnu" },
-            nodeKind = nodeKind,
-            model = model,
-            success = result.success,
-            durationMs = result.durationMs.coerceAtLeast(0L),
-            outputChars = result.output.length,
-            tokensPerSecond = tokensPerSecond,
-            fallbackUsed = result.fallbackUsed,
-            error = result.fallbackReason
-                ?.takeIf { !result.success }
-                ?.take(240),
-            createdAt = result.completedAt.coerceAtLeast(0L)
+        if (result.attempts.isNotEmpty()) {
+            result.attempts.forEachIndexed { index, attempt ->
+                val isExecutedNode =
+                    attempt.nodeId == result.executedNodeId && attempt.success
+                record(
+                    RuntimeEvalObservation(
+                        observationId =
+                            "task:${result.taskId}:attempt:$index:${attempt.nodeId}",
+                        taskId = result.taskId,
+                        taskKind = result.taskKind,
+                        workload = workload,
+                        nodeId = attempt.nodeId.ifBlank { "unknown-node" },
+                        nodeName = attempt.nodeName.ifBlank { "Nœud inconnu" },
+                        nodeKind = nodeKindFor(attempt.executionLocation),
+                        model = if (isExecutedNode) model else "",
+                        success = attempt.success,
+                        durationMs = attempt.durationMs.coerceAtLeast(0L),
+                        outputChars = if (isExecutedNode) result.output.length else 0,
+                        tokensPerSecond = if (isExecutedNode) tokensPerSecond else 0.0,
+                        fallbackUsed = isExecutedNode && result.fallbackUsed,
+                        error = attempt.error
+                            ?.trim()
+                            ?.take(240)
+                            ?.takeIf { it.isNotBlank() },
+                        createdAt = result.completedAt.coerceAtLeast(0L)
+                    )
+                )
+            }
+            return
+        }
+
+        record(
+            RuntimeEvalObservation(
+                observationId = "task:${result.taskId}:${result.executedNodeId}",
+                taskId = result.taskId,
+                taskKind = result.taskKind,
+                workload = workload,
+                nodeId = result.executedNodeId.ifBlank { "unknown-node" },
+                nodeName = result.executedNodeName.ifBlank { "Nœud inconnu" },
+                nodeKind = nodeKindFor(result.executionLocation),
+                model = model,
+                success = result.success,
+                durationMs = result.durationMs.coerceAtLeast(0L),
+                outputChars = result.output.length,
+                tokensPerSecond = tokensPerSecond,
+                fallbackUsed = result.fallbackUsed,
+                error = result.fallbackReason
+                    ?.takeIf { !result.success }
+                    ?.take(240),
+                createdAt = result.completedAt.coerceAtLeast(0L)
+            )
         )
-        record(observation)
     }
 
     fun recordCognitiveCycle(event: CognitiveTraceEvent) {
@@ -170,6 +193,21 @@ class RuntimeEvalStore(context: Context) {
     }
 
     fun count(): Int = synchronized(lock) { loadUnsafe().size }
+
+    private fun workloadFor(taskKind: String): TaskWorkload = when (taskKind) {
+        "genesis_probe" -> TaskWorkload.MEDIUM
+        "memory_consolidation",
+        "brain_chat",
+        "vision_analyze",
+        "screen_analyze" -> TaskWorkload.HEAVY
+        else -> TaskWorkload.LIGHT
+    }
+
+    private fun nodeKindFor(location: TaskExecutionLocation): NodeKind =
+        when (location) {
+            TaskExecutionLocation.LOCAL -> NodeKind.PHONE
+            TaskExecutionLocation.REMOTE -> NodeKind.UNKNOWN
+        }
 
     private fun shouldEvaluate(taskKind: String): Boolean =
         taskKind.isNotBlank() && taskKind != "shared_state_sync"

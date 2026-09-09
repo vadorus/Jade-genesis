@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Jade Genesis Node Runtime 0.1.4 entrypoint.
+"""Jade Genesis Node Runtime 0.1.5 entrypoint.
 
 The 0.1.2 runtime core is kept as a stable module while this wrapper layers the
-Shared Genesis State replica and bounded VPS Night Cycle supervisor on top. The
-wire protocol remains compatible with already paired Android clients.
+Shared Genesis State replica, bounded VPS Night Cycle supervisor and Night
+Learning Lab on top. The wire protocol remains compatible with already paired
+Android clients.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import jade_node_runtime_core as core
 from shared_genesis_state import run_shared_state_sync, shared_state_status
 from vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 
-VERSION = "0.1.4"
+VERSION = "0.1.5"
 PROTOCOL = core.PROTOCOL
 
 _original_execute = core.execute_allowlisted_task
@@ -40,6 +41,7 @@ def _health_payload(config: dict, store=None) -> dict:
             "durable_state_replica_v1",
             "shared_state_sync",
             "vps_night_cycle_supervisor_v1",
+            "night_learning_lab_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
@@ -69,7 +71,7 @@ def _runtime_stopping() -> None:
 
 # Patch the core module before its main loop constructs handlers/stores. Functions
 # defined in the core resolve these globals dynamically, so synchronous and async
-# task paths both see the 0.1.4 extension.
+# task paths both see the 0.1.5 extension.
 core.VERSION = VERSION
 core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync",)
 core.execute_allowlisted_task = _execute_allowlisted_task

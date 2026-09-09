@@ -12,7 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.jadegenesis.mobile.screen.FocusCropActivity
 import com.jadegenesis.mobile.screen.ScreenObserverRepository
-import com.jadegenesis.mobile.ui.JadeApp
+import com.jadegenesis.mobile.ui.JadeAppV2
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            JadeApp()
+            JadeAppV2()
         }
         confirmSharedImageIfPresent(intent)
     }

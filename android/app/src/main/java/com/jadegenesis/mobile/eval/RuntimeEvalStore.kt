@@ -80,11 +80,8 @@ class RuntimeEvalStore(context: Context) {
         taskKind: String,
         model: String? = null
     ): RuntimeEvalStats? = synchronized(lock) {
-        val config = JadeConfigRuntime.current().validated()
-        val window = config.evaluation.reportWindowItems
-            .coerceIn(1, SafetyPolicy.MAX_RUNTIME_EVAL_REPORT_WINDOW)
         RuntimeEvalEngine.aggregate(
-            observations = loadUnsafe().take(window),
+            observations = loadUnsafe().take(reportWindow()),
             nodeId = nodeId,
             taskKind = taskKind,
             model = model
@@ -93,11 +90,9 @@ class RuntimeEvalStore(context: Context) {
 
     fun report(): RuntimeEvalReport = synchronized(lock) {
         val config = JadeConfigRuntime.current().validated()
-        val window = config.evaluation.reportWindowItems
-            .coerceIn(1, SafetyPolicy.MAX_RUNTIME_EVAL_REPORT_WINDOW)
         RuntimeEvalEngine.report(
-            observations = loadUnsafe().take(window),
-            tuning = config.evaluation
+            observations = loadUnsafe().take(reportWindow()),
+            routing = config.routing
         )
     }
 
@@ -106,12 +101,18 @@ class RuntimeEvalStore(context: Context) {
     private fun shouldEvaluate(taskKind: String): Boolean =
         taskKind.isNotBlank() && taskKind != "shared_state_sync"
 
-    private fun maxItems(): Int =
-        JadeConfigRuntime.current()
+    private fun maxItems(): Int {
+        val history = JadeConfigRuntime.current()
             .validated()
             .retention
-            .runtimeEvalMaxItems
-            .coerceIn(1, SafetyPolicy.MAX_RUNTIME_EVAL_OBSERVATIONS)
+            .taskHistoryMaxItems
+        return (history * 6)
+            .coerceAtLeast(120)
+            .coerceAtMost(SafetyPolicy.MAX_RUNTIME_EVAL_OBSERVATIONS)
+    }
+
+    private fun reportWindow(): Int =
+        maxItems().coerceAtMost(SafetyPolicy.MAX_RUNTIME_EVAL_REPORT_WINDOW)
 
     private fun loadUnsafe(): List<RuntimeEvalObservation> {
         val primary = prefs.getString(KEY_OBSERVATIONS, null)

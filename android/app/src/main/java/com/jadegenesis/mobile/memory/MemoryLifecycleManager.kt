@@ -150,6 +150,18 @@ class MemoryLifecycleManager(context: Context) {
         )
     }
 
+    /**
+     * Compatibilité pendant la migration du Core : enregistre le résultat mais
+     * n'avance pas le nouveau curseur historique faute de positions temporelles.
+     */
+    fun markConsolidated(
+        analysis: MemoryLifecycleAnalysis,
+        knowledgeId: String,
+        resultSha256: String
+    ) {
+        saveConsolidationMetadata(analysis, knowledgeId, resultSha256)
+    }
+
     fun markConsolidated(
         analysis: MemoryLifecycleAnalysis,
         knowledgeId: String,
@@ -175,12 +187,8 @@ class MemoryLifecycleManager(context: Context) {
             "Le curseur mémoire ne peut pas reculer."
         }
 
+        saveConsolidationMetadata(analysis, knowledgeId, resultSha256)
         prefs.edit()
-            .putString(KEY_LAST_FINGERPRINT, analysis.sourceFingerprint)
-            .putStringSet(KEY_LAST_SOURCE_IDS, analysis.sourceIds)
-            .putLong(KEY_LAST_CONSOLIDATED_AT, System.currentTimeMillis())
-            .putString(KEY_LAST_KNOWLEDGE_ID, knowledgeId)
-            .putString(KEY_LAST_RESULT_SHA256, resultSha256)
             .putLong(KEY_CURSOR_CREATED_AT, lastProcessed.createdAt)
             .putString(KEY_CURSOR_ID, lastProcessed.id)
             .apply()
@@ -197,6 +205,20 @@ class MemoryLifecycleManager(context: Context) {
             append("${analysis.obsoleteCandidateCount} OBSOLETE_CANDIDATE. ")
             append("Empreinte : ${analysis.sourceFingerprint.take(16)}.")
         }
+
+    private fun saveConsolidationMetadata(
+        analysis: MemoryLifecycleAnalysis,
+        knowledgeId: String,
+        resultSha256: String
+    ) {
+        prefs.edit()
+            .putString(KEY_LAST_FINGERPRINT, analysis.sourceFingerprint)
+            .putStringSet(KEY_LAST_SOURCE_IDS, analysis.sourceIds)
+            .putLong(KEY_LAST_CONSOLIDATED_AT, System.currentTimeMillis())
+            .putString(KEY_LAST_KNOWLEDGE_ID, knowledgeId)
+            .putString(KEY_LAST_RESULT_SHA256, resultSha256)
+            .apply()
+    }
 
     private fun sourceFingerprint(memories: List<MemorySnapshot>): String {
         if (memories.isEmpty()) return sha256("empty")

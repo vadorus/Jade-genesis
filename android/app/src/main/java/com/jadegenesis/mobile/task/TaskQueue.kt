@@ -1,6 +1,8 @@
 package com.jadegenesis.mobile.task
 
 import android.content.Context
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.DistributedTaskRequest
 import com.jadegenesis.mobile.model.QueueTaskStatus
 import com.jadegenesis.mobile.model.QueuedTaskSnapshot
@@ -16,7 +18,6 @@ class TaskQueue(context: Context) {
 
     companion object {
         private const val KEY_QUEUE = "task_queue_v1"
-        private const val MAX_ITEMS = 30
     }
 
     init {
@@ -92,7 +93,7 @@ class TaskQueue(context: Context) {
 
     @Synchronized
     fun recent(limit: Int = 12): List<QueuedTaskSnapshot> {
-        val safeLimit = limit.coerceIn(0, MAX_ITEMS)
+        val safeLimit = limit.coerceIn(0, maxItems())
         if (safeLimit == 0) return emptyList()
 
         return load()
@@ -145,6 +146,13 @@ class TaskQueue(context: Context) {
         save(items)
     }
 
+    private fun maxItems(): Int =
+        JadeConfigRuntime.current()
+            .validated()
+            .retention
+            .queueMaxItems
+            .coerceIn(1, SafetyPolicy.MAX_QUEUE_ITEMS)
+
     private fun load(): List<QueuedTaskSnapshot> {
         val raw = prefs.getString(KEY_QUEUE, null)
             ?: return emptyList()
@@ -184,7 +192,7 @@ class TaskQueue(context: Context) {
         val array = JSONArray()
         items
             .sortedByDescending { it.updatedAt }
-            .take(MAX_ITEMS)
+            .take(maxItems())
             .forEach { item ->
                 array.put(
                     JSONObject().apply {

@@ -56,13 +56,12 @@ class NightCycleWorker(
                 .setRequiresCharging(true)
                 .setRequiresBatteryNotLow(true)
                 .setRequiresStorageNotLow(true)
-                .setRequiresDeviceIdle(true)
                 .build()
             val periodic = PeriodicWorkRequestBuilder<NightCycleWorker>(
                 24,
                 TimeUnit.HOURS
             )
-                .setInitialDelay(initialDelayMs())
+                .setInitialDelay(initialDelayMs(), TimeUnit.MILLISECONDS)
                 .setConstraints(constraints)
                 .setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL,

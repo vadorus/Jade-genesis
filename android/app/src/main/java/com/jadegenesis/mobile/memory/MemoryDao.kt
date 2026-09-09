@@ -82,6 +82,16 @@ interface MemoryDao {
 
     @Query(
         """
+        SELECT * FROM memory_events
+        WHERE id IN (:ids)
+        ORDER BY createdAt DESC, id DESC
+        LIMIT 1
+        """
+    )
+    suspend fun newestByIds(ids: List<String>): MemoryEntity?
+
+    @Query(
+        """
         SELECT id FROM memory_events
         WHERE createdAt <= :processedThroughCreatedAt
           AND createdAt < :cutoffCreatedAt

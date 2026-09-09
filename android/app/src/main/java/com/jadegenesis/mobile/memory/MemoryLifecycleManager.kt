@@ -1,6 +1,8 @@
 package com.jadegenesis.mobile.memory
 
 import android.content.Context
+import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.MemorySnapshot
 import java.security.MessageDigest
 
@@ -33,10 +35,13 @@ data class MemoryLifecycleAnalysis(
 )
 
 class MemoryLifecycleManager(context: Context) {
-    private val prefs = context.getSharedPreferences(
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(
         "jade_genesis_memory_lifecycle",
         Context.MODE_PRIVATE
     )
+    private val dao = JadeDatabase.get(appContext).memoryDao()
+    private val store = MemoryStore(dao)
 
     companion object {
         private const val KEY_LAST_FINGERPRINT = "last_source_fingerprint_v1"
@@ -47,6 +52,7 @@ class MemoryLifecycleManager(context: Context) {
 
         private const val KEY_CURSOR_CREATED_AT = "consolidation_cursor_created_at_v2"
         private const val KEY_CURSOR_ID = "consolidation_cursor_id_v2"
+        private const val KEY_LAST_RETENTION_DELETED = "last_retention_deleted_v2"
 
         private val STOP_WORDS = setOf(
             "le", "la", "les", "un", "une", "des", "de", "du",
@@ -71,18 +77,40 @@ class MemoryLifecycleManager(context: Context) {
 
     fun processedThroughCreatedAt(): Long = currentCursor().createdAt
 
-    fun sourceMemories(
+    fun lastRetentionDeletedCount(): Int =
+        prefs.getInt(KEY_LAST_RETENTION_DELETED, 0).coerceAtLeast(0)
+
+    /**
+     * Le paramètre memories est conservé pour compatibilité avec le Core 0.1.7.1,
+     * mais le lot est désormais lu directement dans Room à partir d'un curseur
+     * chronologique persistant. Cela évite de rester bloqué sur les souvenirs récents.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    suspend fun sourceMemories(
         memories: List<MemorySnapshot>,
         limit: Int = 24
-    ): List<MemorySnapshot> = memories
-        .filterNot { it.source.startsWith("JADE_CONSOLIDATION_") }
-        .take(limit.coerceAtLeast(1))
+    ): List<MemorySnapshot> {
+        val cursor = currentCursor()
+        val safeLimit = limit.coerceIn(1, SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
+        return dao.consolidationCandidates(
+            afterCreatedAt = cursor.createdAt,
+            afterId = cursor.id,
+            limit = safeLimit
+        ).map { entity ->
+            MemorySnapshot(
+                id = entity.id,
+                type = entity.type,
+                content = entity.content,
+                source = entity.source,
+                confidence = entity.confidence,
+                createdAt = entity.createdAt
+            )
+        }
+    }
 
     fun analyze(memories: List<MemorySnapshot>): MemoryLifecycleAnalysis {
-        val sources = sourceMemories(
-            memories = memories,
-            limit = memories.size.coerceAtLeast(1)
-        )
+        val sources = memories
+            .filterNot { it.source.startsWith("JADE_CONSOLIDATION_") }
         val sourceIds = sources.map { it.id }.toSet()
         val previousIds = prefs
             .getStringSet(KEY_LAST_SOURCE_IDS, emptySet())
@@ -151,18 +179,31 @@ class MemoryLifecycleManager(context: Context) {
     }
 
     /**
-     * Compatibilité pendant la migration du Core : enregistre le résultat mais
-     * n'avance pas le nouveau curseur historique faute de positions temporelles.
+     * Appelé par le Core actuel. Le dernier élément du lot est retrouvé par IDs,
+     * ce qui permet d'avancer le curseur sans changer immédiatement la signature
+     * publique de JadeCore.
      */
-    fun markConsolidated(
+    suspend fun markConsolidated(
         analysis: MemoryLifecycleAnalysis,
         knowledgeId: String,
         resultSha256: String
     ) {
-        saveConsolidationMetadata(analysis, knowledgeId, resultSha256)
+        require(analysis.sourceIds.isNotEmpty()) {
+            "Impossible d'avancer le curseur sans mémoire traitée."
+        }
+        val lastProcessed = dao.newestByIds(analysis.sourceIds.toList())
+            ?: error("Lot mémoire traité introuvable dans Room.")
+
+        advanceAfterSuccess(
+            analysis = analysis,
+            knowledgeId = knowledgeId,
+            resultSha256 = resultSha256,
+            lastProcessedCreatedAt = lastProcessed.createdAt,
+            lastProcessedId = lastProcessed.id
+        )
     }
 
-    fun markConsolidated(
+    suspend fun markConsolidated(
         analysis: MemoryLifecycleAnalysis,
         knowledgeId: String,
         resultSha256: String,
@@ -171,27 +212,18 @@ class MemoryLifecycleManager(context: Context) {
         require(processedMemories.isNotEmpty()) {
             "Impossible d'avancer le curseur sans mémoire traitée."
         }
-
         val lastProcessed = processedMemories.maxWith(
             compareBy<MemorySnapshot> { it.createdAt }
                 .thenBy { it.id }
         )
-        val current = currentCursor()
-        require(
-            lastProcessed.createdAt > current.createdAt ||
-                (
-                    lastProcessed.createdAt == current.createdAt &&
-                        lastProcessed.id > current.id
-                    )
-        ) {
-            "Le curseur mémoire ne peut pas reculer."
-        }
 
-        saveConsolidationMetadata(analysis, knowledgeId, resultSha256)
-        prefs.edit()
-            .putLong(KEY_CURSOR_CREATED_AT, lastProcessed.createdAt)
-            .putString(KEY_CURSOR_ID, lastProcessed.id)
-            .apply()
+        advanceAfterSuccess(
+            analysis = analysis,
+            knowledgeId = knowledgeId,
+            resultSha256 = resultSha256,
+            lastProcessedCreatedAt = lastProcessed.createdAt,
+            lastProcessedId = lastProcessed.id
+        )
     }
 
     fun lifecycleSummary(analysis: MemoryLifecycleAnalysis): String =
@@ -206,17 +238,40 @@ class MemoryLifecycleManager(context: Context) {
             append("Empreinte : ${analysis.sourceFingerprint.take(16)}.")
         }
 
-    private fun saveConsolidationMetadata(
+    private suspend fun advanceAfterSuccess(
         analysis: MemoryLifecycleAnalysis,
         knowledgeId: String,
-        resultSha256: String
+        resultSha256: String,
+        lastProcessedCreatedAt: Long,
+        lastProcessedId: String
     ) {
+        val current = currentCursor()
+        require(
+            lastProcessedCreatedAt > current.createdAt ||
+                (
+                    lastProcessedCreatedAt == current.createdAt &&
+                        lastProcessedId > current.id
+                    )
+        ) {
+            "Le curseur mémoire ne peut pas reculer."
+        }
+
         prefs.edit()
             .putString(KEY_LAST_FINGERPRINT, analysis.sourceFingerprint)
             .putStringSet(KEY_LAST_SOURCE_IDS, analysis.sourceIds)
             .putLong(KEY_LAST_CONSOLIDATED_AT, System.currentTimeMillis())
             .putString(KEY_LAST_KNOWLEDGE_ID, knowledgeId)
             .putString(KEY_LAST_RESULT_SHA256, resultSha256)
+            .putLong(KEY_CURSOR_CREATED_AT, lastProcessedCreatedAt)
+            .putString(KEY_CURSOR_ID, lastProcessedId)
+            .apply()
+
+        val retention = store.applyRetention(
+            processedThroughCreatedAt = lastProcessedCreatedAt,
+            tuning = JadeConfigRuntime.current().retention
+        )
+        prefs.edit()
+            .putInt(KEY_LAST_RETENTION_DELETED, retention.totalDeleted)
             .apply()
     }
 

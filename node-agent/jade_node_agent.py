@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Jade Genesis Node Runtime 0.1.5 entrypoint.
+"""Jade Genesis Node Runtime 0.1.6 entrypoint.
 
 The 0.1.2 runtime core is kept as a stable module while this wrapper layers the
-Shared Genesis State replica, bounded VPS Night Cycle supervisor and Night
-Learning Lab on top. The wire protocol remains compatible with already paired
-Android clients.
+Shared Genesis State replica, bounded VPS Night Cycle supervisor, Night
+Learning Lab and role-aware Cognitive Brain profiles on top. The wire protocol
+remains compatible with already paired Android clients.
 """
 
 from __future__ import annotations
 
 import jade_node_runtime_core as core
+from brain_profiles import brain_profiles_status, run_brain_chat_profiled
 from shared_genesis_state import run_shared_state_sync, shared_state_status
 from vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 PROTOCOL = core.PROTOCOL
 
 _original_execute = core.execute_allowlisted_task
@@ -32,8 +33,18 @@ def _execute_allowlisted_task(
     return _original_execute(task_kind, payload, iterations, config)
 
 
+def _profiled_brain_chat(payload: str, config: dict):
+    return run_brain_chat_profiled(payload, config, core)
+
+
 def _health_payload(config: dict, store=None) -> dict:
     result = _original_health(config, store)
+    capabilities = list(result.get("capabilities", []))
+    if "cognitive_brain_profiles_v1" not in capabilities:
+        capabilities.append("cognitive_brain_profiles_v1")
+    result["capabilities"] = capabilities
+    result["brain_profiles"] = brain_profiles_status(config, core)
+
     if str(config.get("node_kind", "")).upper() == "VPS":
         capabilities = list(result.get("capabilities", []))
         for capability in (
@@ -55,6 +66,7 @@ def _health_payload(config: dict, store=None) -> dict:
 def _runtime_payload(config: dict) -> dict:
     result = _original_runtime(config)
     result["runtime_version"] = VERSION
+    result["brain_profiles"] = brain_profiles_status(config, core)
     if str(config.get("node_kind", "")).upper() == "VPS":
         result["shared_state"] = shared_state_status()
         result["night_cycle_supervisor"] = supervisor_status(config)
@@ -71,9 +83,10 @@ def _runtime_stopping() -> None:
 
 # Patch the core module before its main loop constructs handlers/stores. Functions
 # defined in the core resolve these globals dynamically, so synchronous and async
-# task paths both see the 0.1.5 extension.
+# task paths both see the 0.1.6 extension.
 core.VERSION = VERSION
 core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync",)
+core.run_brain_chat = _profiled_brain_chat
 core.execute_allowlisted_task = _execute_allowlisted_task
 core.health_payload = _health_payload
 core.runtime_payload = _runtime_payload

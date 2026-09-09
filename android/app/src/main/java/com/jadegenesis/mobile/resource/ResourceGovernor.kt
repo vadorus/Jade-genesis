@@ -25,13 +25,34 @@ class ResourceGovernor {
 
         val thermalRank = thermalRank(device.thermalStatus)
         val batteryKnown = device.batteryPercent in 0..100
+        val memoryThresholdKnown = device.ramLowThresholdGb > 0.0
+
+        val memoryCritical =
+            device.ramLow ||
+                (
+                    memoryThresholdKnown &&
+                        device.ramAvailableGb <= device.ramLowThresholdGb * 1.10
+                    ) ||
+                (
+                    !memoryThresholdKnown &&
+                        ramRatio <= 0.05
+                    )
+
+        val memoryEco =
+            !memoryCritical &&
+                (
+                    (
+                        memoryThresholdKnown &&
+                            device.ramAvailableGb <= device.ramLowThresholdGb * 1.75
+                        ) ||
+                        ramRatio <= 0.10
+                    )
 
         val storageLowThresholdGb =
             max(1.0, min(4.0, device.storageTotalGb * 0.01))
 
         val critical =
-            device.ramLow ||
-                ramRatio <= 0.10 ||
+            memoryCritical ||
                 heapRatio >= 0.90 ||
                 thermalRank >= 3 ||
                 (
@@ -42,8 +63,8 @@ class ResourceGovernor {
                 device.storageFreeGb < 0.75
 
         val eco =
-            device.powerSaveMode ||
-                ramRatio <= 0.22 ||
+            memoryEco ||
+                device.powerSaveMode ||
                 heapRatio >= 0.75 ||
                 thermalRank >= 2 ||
                 (
@@ -53,11 +74,20 @@ class ResourceGovernor {
                     ) ||
                 device.storageFreeGb < storageLowThresholdGb
 
+        val healthyMemoryForPerformance = if (memoryThresholdKnown) {
+            device.ramAvailableGb >= max(
+                device.ramTotalGb * 0.25,
+                device.ramLowThresholdGb * 2.5
+            )
+        } else {
+            ramRatio >= 0.35
+        }
+
         val performance =
             device.charging &&
                 batteryKnown &&
                 device.batteryPercent >= 60 &&
-                ramRatio >= 0.35 &&
+                healthyMemoryForPerformance &&
                 heapRatio < 0.60 &&
                 thermalRank <= 1 &&
                 !device.powerSaveMode &&
@@ -76,6 +106,8 @@ class ResourceGovernor {
             heapRatio = heapRatio,
             thermalRank = thermalRank,
             storageLowThresholdGb = storageLowThresholdGb,
+            memoryCritical = memoryCritical,
+            memoryEco = memoryEco,
             mode = mode
         )
 
@@ -100,8 +132,26 @@ class ResourceGovernor {
             ResourceMode.PERFORMANCE -> 0.50
         }
 
+        val thresholdReserveGb = if (memoryThresholdKnown) {
+            device.ramLowThresholdGb * 1.75
+        } else {
+            0.0
+        }
+        val reserveGb = round(
+            max(
+                1.0,
+                max(
+                    device.ramTotalGb * 0.12,
+                    thresholdReserveGb
+                )
+            )
+                .coerceAtMost(3.0) * 100.0
+        ) / 100.0
+
+        val safelyAvailableGb =
+            max(0.0, device.ramAvailableGb - reserveGb)
         val systemBudgetMb =
-            device.ramAvailableGb * 1024.0 * systemFraction
+            safelyAvailableGb * 1024.0 * systemFraction
 
         val heapHeadroomMb =
             max(0.0, device.processHeapMaxMb - device.processHeapUsedMb)
@@ -119,9 +169,6 @@ class ResourceGovernor {
             )
                 .roundToInt()
                 .coerceAtLeast(8)
-
-        val reserveGb =
-            round(max(1.5, device.ramTotalGb * 0.25) * 100.0) / 100.0
 
         return ResourceBudget(
             mode = mode,
@@ -155,17 +202,29 @@ class ResourceGovernor {
         heapRatio: Double,
         thermalRank: Int,
         storageLowThresholdGb: Double,
+        memoryCritical: Boolean,
+        memoryEco: Boolean,
         mode: ResourceMode
     ): List<String> {
         val reasons = mutableListOf<String>()
+        val ramPercent = (ramRatio * 100.0).roundToInt()
+        val memoryThresholdKnown = device.ramLowThresholdGb > 0.0
 
         if (device.ramLow) {
-            reasons += "Android signale une pression mémoire système."
-        }
-
-        if (ramRatio <= 0.22) {
             reasons +=
-                "RAM disponible faible : ${(ramRatio * 100.0).roundToInt()}%."
+                "Android signale officiellement une pression mémoire système."
+        } else if (memoryCritical && memoryThresholdKnown) {
+            reasons +=
+                "RAM au seuil critique Android : ${device.ramAvailableGb} Go libres, " +
+                    "seuil système ${device.ramLowThresholdGb} Go."
+        } else if (memoryEco && memoryThresholdKnown) {
+            reasons +=
+                "Marge mémoire réduite : ${device.ramAvailableGb} Go libres " +
+                    "($ramPercent%), seuil critique Android ${device.ramLowThresholdGb} Go."
+        } else if (ramRatio <= 0.10) {
+            reasons +=
+                "RAM disponible faible : ${device.ramAvailableGb} Go ($ramPercent%). " +
+                    "Android ne signale pas encore de pression mémoire critique."
         }
 
         if (heapRatio >= 0.75) {

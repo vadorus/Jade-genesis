@@ -148,6 +148,49 @@ class HardeningRegressionTest {
     }
 
     @Test
+    fun resourceGovernorUsesAndroidThresholdInsteadOfRawTenPercentForCritical() {
+        val budget = ResourceGovernor().evaluate(
+            healthyDevice(
+                batteryPercent = 90,
+                charging = true,
+                ramTotalGb = 12.0,
+                ramAvailableGb = 0.48,
+                ramLowThresholdGb = 0.20,
+                ramLow = false
+            )
+        )
+
+        assertEquals(ResourceMode.ECO, budget.mode)
+        assertTrue(budget.preferRemoteCompute)
+        assertTrue(
+            budget.reasons.any {
+                it.contains("Android ne signale pas encore") ||
+                    it.contains("Marge mémoire réduite")
+            }
+        )
+    }
+
+    @Test
+    fun resourceGovernorEntersCriticalNearAndroidMemoryThreshold() {
+        val budget = ResourceGovernor().evaluate(
+            healthyDevice(
+                batteryPercent = 90,
+                charging = true,
+                ramTotalGb = 12.0,
+                ramAvailableGb = 0.21,
+                ramLowThresholdGb = 0.20,
+                ramLow = false
+            )
+        )
+
+        assertEquals(ResourceMode.CRITICAL, budget.mode)
+        assertTrue(budget.preferRemoteCompute)
+        assertTrue(
+            budget.reasons.any { it.contains("seuil critique Android") }
+        )
+    }
+
+    @Test
     fun resourceGovernorEntersPerformanceModeOnlyWithHealthyChargingDevice() {
         val budget = ResourceGovernor().evaluate(
             healthyDevice(
@@ -181,7 +224,8 @@ class HardeningRegressionTest {
         powerSaveMode: Boolean = false,
         ramLow: Boolean = false,
         storageTotalGb: Double = 128.0,
-        storageFreeGb: Double = 64.0
+        storageFreeGb: Double = 64.0,
+        ramLowThresholdGb: Double = 0.0
     ): DeviceProfile = DeviceProfile(
         manufacturer = "Google",
         model = "Pixel Test",
@@ -205,7 +249,8 @@ class HardeningRegressionTest {
         powerSaveMode = powerSaveMode,
         deviceIdleMode = false,
         thermalStatus = thermalStatus,
-        capturedAt = 1L
+        capturedAt = 1L,
+        ramLowThresholdGb = ramLowThresholdGb
     )
 
     private fun balancedBudget(): ResourceBudget = ResourceBudget(

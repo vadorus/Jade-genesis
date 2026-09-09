@@ -57,7 +57,8 @@ class DeviceProfiler(private val context: Context) {
             powerSaveMode = powerManager.isPowerSaveMode,
             deviceIdleMode = powerManager.isDeviceIdleMode,
             thermalStatus = thermalStatusName(powerManager.currentThermalStatus),
-            capturedAt = System.currentTimeMillis()
+            capturedAt = System.currentTimeMillis(),
+            ramLowThresholdGb = bytesToGb(memoryInfo.threshold)
         )
     }
 

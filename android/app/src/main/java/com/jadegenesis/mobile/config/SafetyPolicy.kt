@@ -66,6 +66,15 @@ object SafetyPolicy {
     const val MAX_EVOLUTION_SUCCESS_RATE_REGRESSION = 0.02
     const val MIN_EVOLUTION_SCORE_DELTA = 2.0
 
+    // Night Cycle : cadence et volume maximum restent compilés. Une évolution
+    // de configuration ne peut donc pas transformer une fenêtre nocturne en
+    // boucle continue ni multiplier les consolidations sans borne.
+    const val MAX_NIGHT_CYCLE_RUNS = 30
+    const val MAX_NIGHT_CYCLE_STEPS = 12
+    const val MAX_NIGHT_CYCLE_STEP_SUMMARY_CHARS = 500
+    const val MAX_NIGHT_MEMORY_BATCHES = 3
+    const val MIN_NIGHT_CYCLE_INTERVAL_HOURS = 20
+
     // Shared Genesis State : protège le téléphone et le VPS contre des lots
     // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
     const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200

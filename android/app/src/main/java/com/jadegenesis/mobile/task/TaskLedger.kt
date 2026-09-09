@@ -3,6 +3,7 @@ package com.jadegenesis.mobile.task
 import android.content.Context
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.config.SafetyPolicy
+import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.TaskAttempt
 import com.jadegenesis.mobile.model.TaskExecutionLocation
@@ -35,6 +36,8 @@ class TaskLedger(context: Context) {
         prefs.edit()
             .putString(KEY_HISTORY, next.toString())
             .apply()
+
+        RuntimeEvalRuntime.currentOrNull()?.recordTaskResult(result)
     }
 
     @Synchronized

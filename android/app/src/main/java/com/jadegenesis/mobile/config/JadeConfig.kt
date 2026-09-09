@@ -508,18 +508,33 @@ data class TaskTuning(
 data class RetentionTuning(
     val taskHistoryMaxItems: Int = 40,
     val queueMaxItems: Int = 30,
-    val cognitiveEventsMaxItems: Int = 100
+    val cognitiveEventsMaxItems: Int = 100,
+    val ephemeralMemoryRetentionDays: Int = 90,
+    val supersededMemoryRetentionDays: Int = 30,
+    val memoryRecallProtectionCount: Int = 2,
+    val memoryLowConfidenceThreshold: Double = 0.60,
+    val memoryPurgeBatchSize: Int = 50
 ) {
     fun validate() {
         require(taskHistoryMaxItems >= 1)
         require(queueMaxItems >= 1)
         require(cognitiveEventsMaxItems >= 1)
+        require(ephemeralMemoryRetentionDays >= 1)
+        require(supersededMemoryRetentionDays >= 1)
+        require(memoryRecallProtectionCount >= 0)
+        requireRatio(memoryLowConfidenceThreshold, "memoryLowConfidenceThreshold")
+        require(memoryPurgeBatchSize >= 1)
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("task_history_max_items", taskHistoryMaxItems)
         put("queue_max_items", queueMaxItems)
         put("cognitive_events_max_items", cognitiveEventsMaxItems)
+        put("ephemeral_memory_retention_days", ephemeralMemoryRetentionDays)
+        put("superseded_memory_retention_days", supersededMemoryRetentionDays)
+        put("memory_recall_protection_count", memoryRecallProtectionCount)
+        put("memory_low_confidence_threshold", memoryLowConfidenceThreshold)
+        put("memory_purge_batch_size", memoryPurgeBatchSize)
     }
 
     companion object {
@@ -534,6 +549,27 @@ data class RetentionTuning(
                 cognitiveEventsMaxItems = json.optInt(
                     "cognitive_events_max_items",
                     defaults.cognitiveEventsMaxItems
+                ),
+                ephemeralMemoryRetentionDays = json.optInt(
+                    "ephemeral_memory_retention_days",
+                    defaults.ephemeralMemoryRetentionDays
+                ),
+                supersededMemoryRetentionDays = json.optInt(
+                    "superseded_memory_retention_days",
+                    defaults.supersededMemoryRetentionDays
+                ),
+                memoryRecallProtectionCount = json.optInt(
+                    "memory_recall_protection_count",
+                    defaults.memoryRecallProtectionCount
+                ),
+                memoryLowConfidenceThreshold = finiteDouble(
+                    json,
+                    "memory_low_confidence_threshold",
+                    defaults.memoryLowConfidenceThreshold
+                ),
+                memoryPurgeBatchSize = json.optInt(
+                    "memory_purge_batch_size",
+                    defaults.memoryPurgeBatchSize
                 )
             ).also { it.validate() }
         }

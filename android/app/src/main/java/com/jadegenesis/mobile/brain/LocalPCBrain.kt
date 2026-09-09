@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.brain
 
+import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.model.BrainBackendType
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainInfo
@@ -11,6 +12,7 @@ import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
+import com.jadegenesis.mobile.resource.NodeResourceScorer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -20,7 +22,7 @@ class LocalPCBrain(
 ) : BrainBackend {
 
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.2",
+        id = "distributed-local-brain-0.1.3",
         displayName = "Distributed Local Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",
@@ -31,7 +33,7 @@ class LocalPCBrain(
         priority = 110,
         details =
             "Backend génératif distribué via un Node Runtime et un modèle local. " +
-                "Le nœud peut être un PC ou un VPS, sans API payante obligatoire."
+                "La sélection utilise la télémétrie réelle et les performances mesurées quand elles existent."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
@@ -40,17 +42,15 @@ class LocalPCBrain(
     override suspend fun think(context: BrainContext): BrainResult {
         val compatible = compatibleNodes(context.selfModel.knownNodes)
         val preferredId = context.selfModel.preferredComputeNodeId
+        val routing = JadeConfigRuntime.current().validated().routing
         val node = compatible
-            .sortedWith(
-                compareByDescending<GenesisNode> {
-                    it.nodeId == preferredId
-                }.thenByDescending {
-                    it.ramAvailableGb
-                }.thenByDescending {
-                    it.cpuCores
-                }
-            )
-            .firstOrNull()
+            .maxByOrNull { candidate ->
+                NodeResourceScorer.generativeScore(
+                    node = candidate,
+                    routing = routing,
+                    preferredNodeId = preferredId
+                )
+            }
             ?: error(
                 "Aucun nœud génératif en ligne n'annonce brain_chat."
             )
@@ -102,6 +102,8 @@ class LocalPCBrain(
                             ?.name
                             ?: "aucun"
                     )
+                    put("selected_brain_node_id", node.nodeId)
+                    put("selected_brain_node", node.name)
                 }
             )
             put(
@@ -115,11 +117,23 @@ class LocalPCBrain(
                                 put("kind", known.kind.name)
                                 put("status", known.status.name)
                                 put("cpu_cores", known.cpuCores)
+                                put("cpu_load_percent", known.cpuLoadPercent)
                                 put("ram_total_gb", known.ramTotalGb)
                                 put("ram_available_gb", known.ramAvailableGb)
+                                put("gpu_name", known.gpuName)
+                                put("gpu_vram_total_gb", known.gpuVramTotalGb)
+                                put("gpu_vram_free_gb", known.gpuVramFreeGb)
+                                put("gpu_utilization_percent", known.gpuUtilizationPercent)
+                                put("gpu_temperature_c", known.gpuTemperatureC)
+                                put("active_task_count", known.activeTaskCount)
                                 put("runtime_version", known.runtimeVersion)
                                 put("brain_backend", known.brainBackend)
                                 put("brain_model", known.brainModel)
+                                put("brain_ready", known.brainReady)
+                                put("brain_loaded", known.brainLoaded)
+                                put("brain_loaded_model", known.brainLoadedModel)
+                                put("brain_tokens_per_second", known.brainTokensPerSecond)
+                                put("brain_last_duration_ms", known.brainLastDurationMs)
                                 put("capabilities", JSONArray(known.capabilities))
                                 put(
                                     "routes",

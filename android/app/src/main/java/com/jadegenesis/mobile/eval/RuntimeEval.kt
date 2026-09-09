@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.eval
 
-import com.jadegenesis.mobile.config.RuntimeEvalTuning
+import com.jadegenesis.mobile.config.RoutingTuning
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.TaskWorkload
 import kotlin.math.ceil
@@ -56,18 +57,6 @@ data class RuntimeEvalReport(
     val confidence: Double
 )
 
-data class RuntimeEvalComparison(
-    val baselineScore: Double,
-    val candidateScore: Double,
-    val scoreDelta: Double,
-    val baselineSuccessRate: Double,
-    val candidateSuccessRate: Double,
-    val enoughEvidence: Boolean,
-    val successRateProtected: Boolean,
-    val promotionEligible: Boolean,
-    val reason: String
-)
-
 object RuntimeEvalEngine {
     const val SCHEMA_VERSION = 1
 
@@ -89,7 +78,7 @@ object RuntimeEvalEngine {
 
     fun report(
         observations: List<RuntimeEvalObservation>,
-        tuning: RuntimeEvalTuning,
+        routing: RoutingTuning,
         generatedAt: Long = System.currentTimeMillis()
     ): RuntimeEvalReport {
         val ordered = observations.sortedByDescending { it.createdAt }
@@ -115,13 +104,13 @@ object RuntimeEvalEngine {
         } else {
             val totalWeight = groups.sumOf { it.samples }.coerceAtLeast(1)
             groups.sumOf { stats ->
-                normalizedGroupScore(stats, tuning) * stats.samples.toDouble()
+                normalizedGroupScore(stats, routing) * stats.samples.toDouble()
             } / totalWeight.toDouble()
         }
-        val confidence = evidenceConfidence(
-            samples = ordered.size,
-            tuning = tuning
-        )
+        val confidence = (
+            ordered.size.toDouble() /
+                SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES.toDouble()
+            ).coerceIn(0.0, 1.0)
 
         return RuntimeEvalReport(
             schemaVersion = SCHEMA_VERSION,
@@ -138,89 +127,57 @@ object RuntimeEvalEngine {
     /**
      * Ajustement de routage fondé sur les mesures réelles.
      *
-     * Avant minPosteriorSamples, le matériel et l'ancien TaskLedger restent le
-     * prior dominant. La confiance monte progressivement puis, à
-     * strongPosteriorSamples, le posterior mesuré peut peser davantage que les
-     * heuristiques matérielles.
+     * Avant le minimum de preuves, le matériel et l'ancien TaskLedger restent
+     * le prior. La confiance augmente ensuite jusqu'au seuil fort compilé dans
+     * SafetyPolicy afin qu'une seule mesure chanceuse ne puisse pas dominer le
+     * routage.
      */
     fun posteriorAdjustment(
         stats: RuntimeEvalStats?,
-        tuning: RuntimeEvalTuning
+        routing: RoutingTuning
     ): Double {
-        if (stats == null || stats.samples < tuning.minPosteriorSamples) return 0.0
+        if (
+            stats == null ||
+            stats.samples < SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES
+        ) {
+            return 0.0
+        }
 
-        val confidence = posteriorConfidence(stats.samples, tuning)
+        val confidence = posteriorConfidence(stats.samples)
         val centeredReliability = (stats.successRate - 0.5) * 2.0
-        val reliability = centeredReliability * tuning.posteriorSuccessWeight
+        val reliability = centeredReliability *
+            routing.historySuccessRateWeight * 2.0
         val latency = if (stats.averageDurationMs > 0.0) {
-            tuning.posteriorLatencyBonus /
-                (1.0 + stats.averageDurationMs / tuning.posteriorLatencyScaleMs)
+            routing.historyDurationBonus * 1.5 /
+                (1.0 + stats.averageDurationMs / routing.historyDurationScaleMs)
         } else {
             0.0
         }
-        val fallbackPenalty = stats.fallbackRate * tuning.posteriorFallbackPenalty
+        val fallbackPenalty = stats.fallbackRate *
+            routing.historyFailurePenalty * 3.0
+        val failureRate = 1.0 - stats.successRate
+        val failurePenalty = failureRate *
+            routing.historyFailurePenalty * 4.0
         val throughput = stats.averageTokensPerSecond
-            .coerceIn(0.0, tuning.posteriorMaxTokensPerSecond) *
-            tuning.posteriorTokensPerSecondWeight
+            .coerceIn(0.0, 200.0) *
+            routing.brainTokensPerSecondWeight
 
         return confidence * (
-            reliability + latency + throughput - fallbackPenalty
+            reliability + latency + throughput -
+                fallbackPenalty - failurePenalty
             )
     }
 
-    fun posteriorConfidence(
-        samples: Int,
-        tuning: RuntimeEvalTuning
-    ): Double {
-        if (samples < tuning.minPosteriorSamples) return 0.0
-        if (samples >= tuning.strongPosteriorSamples) return 1.0
-        val span = (
-            tuning.strongPosteriorSamples - tuning.minPosteriorSamples
-            ).coerceAtLeast(1)
+    fun posteriorConfidence(samples: Int): Double {
+        val minimum = SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES
+        val strong = SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES
+        if (samples < minimum) return 0.0
+        if (samples >= strong) return 1.0
+        val span = (strong - minimum).coerceAtLeast(1)
         return (
-            (samples - tuning.minPosteriorSamples + 1).toDouble() /
+            (samples - minimum + 1).toDouble() /
                 (span + 1).toDouble()
             ).coerceIn(0.0, 1.0)
-    }
-
-    fun compare(
-        baseline: RuntimeEvalReport,
-        candidate: RuntimeEvalReport,
-        tuning: RuntimeEvalTuning
-    ): RuntimeEvalComparison {
-        val enoughEvidence =
-            baseline.observationCount >= tuning.promotionMinSamples &&
-                candidate.observationCount >= tuning.promotionMinSamples
-        val protected = candidate.overallSuccessRate +
-            tuning.promotionMaxSuccessRateRegression >=
-            baseline.overallSuccessRate
-        val delta = candidate.score - baseline.score
-        val eligible = enoughEvidence &&
-            protected &&
-            delta >= tuning.promotionMinScoreDelta
-
-        val reason = when {
-            !enoughEvidence ->
-                "Échantillon insuffisant pour une promotion objective."
-            !protected ->
-                "La fiabilité régresse au-delà de la tolérance autorisée."
-            delta < tuning.promotionMinScoreDelta ->
-                "Le gain mesuré est trop faible pour justifier une promotion."
-            else ->
-                "Le candidat dépasse le seuil mesuré sans régression de fiabilité."
-        }
-
-        return RuntimeEvalComparison(
-            baselineScore = baseline.score,
-            candidateScore = candidate.score,
-            scoreDelta = delta,
-            baselineSuccessRate = baseline.overallSuccessRate,
-            candidateSuccessRate = candidate.overallSuccessRate,
-            enoughEvidence = enoughEvidence,
-            successRateProtected = protected,
-            promotionEligible = eligible,
-            reason = reason
-        )
     }
 
     private fun aggregateGroup(
@@ -269,36 +226,24 @@ object RuntimeEvalEngine {
 
     private fun normalizedGroupScore(
         stats: RuntimeEvalStats,
-        tuning: RuntimeEvalTuning
+        routing: RoutingTuning
     ): Double {
         val reliability = stats.successRate * 70.0
         val latency = if (stats.averageDurationMs <= 0.0) {
             0.0
         } else {
             20.0 /
-                (1.0 + stats.averageDurationMs / tuning.posteriorLatencyScaleMs)
+                (1.0 + stats.averageDurationMs / routing.historyDurationScaleMs)
         }
         val throughput = if (stats.averageTokensPerSecond <= 0.0) {
             0.0
         } else {
-            10.0 * (
-                stats.averageTokensPerSecond /
-                    tuning.posteriorMaxTokensPerSecond
-                ).coerceIn(0.0, 1.0)
+            10.0 * (stats.averageTokensPerSecond / 200.0)
+                .coerceIn(0.0, 1.0)
         }
         val fallbackPenalty = stats.fallbackRate * 10.0
         return (reliability + latency + throughput - fallbackPenalty)
             .coerceIn(0.0, 100.0)
-    }
-
-    private fun evidenceConfidence(
-        samples: Int,
-        tuning: RuntimeEvalTuning
-    ): Double {
-        if (samples <= 0) return 0.0
-        return (
-            samples.toDouble() / tuning.promotionMinSamples.coerceAtLeast(1).toDouble()
-            ).coerceIn(0.0, 1.0)
     }
 
     private fun percentile90(values: List<Long>): Long {

@@ -1,8 +1,21 @@
 package com.jadegenesis.mobile.memory
 
+import com.jadegenesis.mobile.config.RetentionTuning
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.MemoryType
 import java.util.UUID
+import kotlin.math.max
+import kotlin.math.min
+
+data class MemoryRetentionResult(
+    val deletedSuperseded: Int,
+    val deletedEphemeral: Int,
+    val processedThroughCreatedAt: Long
+) {
+    val totalDeleted: Int
+        get() = deletedSuperseded + deletedEphemeral
+}
 
 class MemoryStore(private val dao: MemoryDao) {
 
@@ -35,13 +48,149 @@ class MemoryStore(private val dao: MemoryDao) {
             originNode = originNode
         )
 
+    /**
+     * Lecture d'affichage/administration : ne compte pas comme un rappel cognitif.
+     */
     suspend fun latest(limit: Int = 20): List<MemorySnapshot> =
-        dao.latest(limit).map { it.toSnapshot() }
+        dao.latest(limit.coerceAtLeast(1)).map { it.toSnapshot() }
+
+    /**
+     * Mémoire réellement injectée dans un contexte de raisonnement.
+     * Ces éléments sont marqués comme rappelés afin que la rétention puisse
+     * distinguer une mémoire utile d'un simple événement ancien.
+     */
+    suspend fun latestForContext(limit: Int = 20): List<MemorySnapshot> {
+        val entities = dao.latest(limit.coerceAtLeast(1))
+        markRecalled(entities)
+        return entities.map { it.toSnapshot() }
+    }
 
     suspend fun search(query: String, limit: Int = 10): List<MemorySnapshot> =
-        dao.search(query, limit).map { it.toSnapshot() }
+        dao.search(query.trim(), limit.coerceAtLeast(1)).map { it.toSnapshot() }
+
+    suspend fun searchForContext(
+        query: String,
+        limit: Int = 10
+    ): List<MemorySnapshot> {
+        val entities = dao.search(query.trim(), limit.coerceAtLeast(1))
+        markRecalled(entities)
+        return entities.map { it.toSnapshot() }
+    }
+
+    /**
+     * Parcourt l'historique dans l'ordre chronologique avec un curseur stable.
+     * La consolidation ne dépend donc plus des N souvenirs les plus récents.
+     */
+    suspend fun consolidationBatch(
+        afterCreatedAt: Long,
+        afterId: String,
+        limit: Int
+    ): List<MemorySnapshot> =
+        dao.consolidationCandidates(
+            afterCreatedAt = afterCreatedAt.coerceAtLeast(0L),
+            afterId = afterId,
+            limit = limit.coerceIn(1, SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
+        ).map { it.toSnapshot() }
+
+    suspend fun markVerified(id: String, verifiedAt: Long = System.currentTimeMillis()) {
+        require(id.isNotBlank()) { "Identifiant mémoire vide." }
+        dao.markVerified(id, verifiedAt)
+    }
+
+    suspend fun markSuperseded(id: String, replacementId: String) {
+        require(id.isNotBlank()) { "Identifiant mémoire vide." }
+        require(replacementId.isNotBlank()) { "Identifiant de remplacement vide." }
+        require(id != replacementId) { "Une mémoire ne peut pas se remplacer elle-même." }
+        dao.markSuperseded(id, replacementId)
+    }
+
+    /**
+     * Purge uniquement ce que le cycle de consolidation a déjà dépassé.
+     * Les faits USER, mémoires vérifiées, fortement rappelées ou trop confiantes
+     * restent protégés par la requête DAO et par les plafonds SafetyPolicy.
+     */
+    suspend fun applyRetention(
+        processedThroughCreatedAt: Long,
+        tuning: RetentionTuning,
+        now: Long = System.currentTimeMillis()
+    ): MemoryRetentionResult {
+        if (processedThroughCreatedAt <= 0L) {
+            return MemoryRetentionResult(0, 0, 0L)
+        }
+
+        val safeEphemeralDays = max(
+            tuning.ephemeralMemoryRetentionDays,
+            SafetyPolicy.MIN_EPHEMERAL_MEMORY_RETENTION_DAYS
+        )
+        val safeSupersededDays = max(
+            tuning.supersededMemoryRetentionDays,
+            SafetyPolicy.MIN_SUPERSEDED_MEMORY_RETENTION_DAYS
+        )
+        val safeRecallProtection = max(
+            tuning.memoryRecallProtectionCount,
+            SafetyPolicy.MIN_RECALL_PROTECTION_COUNT
+        )
+        val safeConfidence = min(
+            tuning.memoryLowConfidenceThreshold,
+            SafetyPolicy.MAX_AUTO_DELETE_CONFIDENCE
+        )
+        val safeBatch = min(
+            tuning.memoryPurgeBatchSize,
+            SafetyPolicy.MAX_MEMORY_PURGE_BATCH_SIZE
+        ).coerceAtLeast(1)
+
+        val supersededCutoff = now - daysToMillis(safeSupersededDays)
+        val ephemeralCutoff = now - daysToMillis(safeEphemeralDays)
+
+        val supersededIds = dao.supersededRetentionCandidateIds(
+            processedThroughCreatedAt = processedThroughCreatedAt,
+            cutoffCreatedAt = supersededCutoff,
+            limit = safeBatch
+        )
+        val deletedSuperseded = if (supersededIds.isEmpty()) {
+            0
+        } else {
+            dao.deleteByIds(supersededIds)
+        }
+
+        val remaining = (safeBatch - deletedSuperseded).coerceAtLeast(0)
+        val ephemeralIds = if (remaining == 0) {
+            emptyList()
+        } else {
+            dao.ephemeralRetentionCandidateIds(
+                processedThroughCreatedAt = processedThroughCreatedAt,
+                cutoffCreatedAt = ephemeralCutoff,
+                recallProtectionCount = safeRecallProtection,
+                maxConfidence = safeConfidence,
+                limit = remaining
+            )
+        }
+        val deletedEphemeral = if (ephemeralIds.isEmpty()) {
+            0
+        } else {
+            dao.deleteByIds(ephemeralIds)
+        }
+
+        return MemoryRetentionResult(
+            deletedSuperseded = deletedSuperseded,
+            deletedEphemeral = deletedEphemeral,
+            processedThroughCreatedAt = processedThroughCreatedAt
+        )
+    }
 
     suspend fun count(): Int = dao.count()
+
+    suspend fun activeCount(): Int = dao.activeCount()
+
+    private suspend fun markRecalled(entities: List<MemoryEntity>) {
+        val ids = entities.map { it.id }.distinct()
+        if (ids.isNotEmpty()) {
+            dao.markRecalled(ids, System.currentTimeMillis())
+        }
+    }
+
+    private fun daysToMillis(days: Int): Long =
+        days.toLong().coerceAtLeast(1L) * 24L * 60L * 60L * 1_000L
 
     private fun MemoryEntity.toSnapshot() = MemorySnapshot(
         id = id,

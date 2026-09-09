@@ -63,12 +63,12 @@ class SelfModelBuilder {
 
         val capabilities = listOf(
             Capability("persistent_identity", true, "DataStore"),
-            Capability("local_memory", true, "Room 3"),
+            Capability("local_memory", true, "Room 3 schema v2"),
             Capability(
                 "memory_lifecycle",
                 true,
-                "MemoryLifecycleManager 0.0.7",
-                "Empreinte les sources, bloque les consolidations identiques et conserve les contradictions comme signaux à vérifier."
+                "MemoryLifecycleManager v2",
+                "Parcourt l'historique avec un curseur persistant, suit les rappels et applique une rétention bornée seulement après traitement du lot."
             ),
             Capability(
                 "device_inspection",
@@ -91,7 +91,7 @@ class SelfModelBuilder {
                 "multi_route_nodes",
                 true,
                 if (multiRouteNode) "MultiRoute_active" else "MultiRoute_ready",
-                "Un même nœud peut avoir plusieurs chemins, notamment LAN et Tailscale, avec sélection par disponibilité et latence."
+                "Un même nœud peut conserver plusieurs routes ; les requêtes Jade authentifiées utilisent les routes Tailscale autorisées et privilégient la route joignable la plus rapide."
             ),
             Capability(
                 "on_demand_connectivity",
@@ -176,7 +176,8 @@ class SelfModelBuilder {
                     "DistributedMemoryConsolidation"
                 } else {
                     "LocalMemoryConsolidation"
-                }
+                },
+                "Les lots sont parcourus chronologiquement ; un lot réussi avance le curseur, un échec ne le fait pas."
             ),
             Capability(
                 "distributed_execution",
@@ -270,7 +271,7 @@ class SelfModelBuilder {
             "La protection Admin utilise un PIN local dans cette V0.1 ; l'intégration biométrique pourra la remplacer.",
             "Le runtime conserve une liste blanche stricte. Screen Observer utilise seulement des tâches dédiées ; aucune commande shell arbitraire n'est exposée à distance.",
             "Tool Lab v1 ne peut pas encore activer ou exécuter seul un outil candidat : une étape de sandbox et promotion contrôlée reste nécessaire.",
-            "Memory Lifecycle 0.0.7 ne supprime jamais automatiquement une mémoire contradictoire ou obsolète.",
+            "Memory Lifecycle v2 ne supprime automatiquement que des éléments anciens déjà traversés par le curseur et autorisés par SafetyPolicy ; faits USER, mémoires vérifiées, fortement rappelées ou trop confiantes restent protégés.",
             "Tailscale fournit le transport privé quand il est actif ; Jade ne contourne pas un réseau absent."
         )
 

@@ -246,3 +246,17 @@ class RuntimeEvalStore(context: Context) {
         private const val KEY_OBSERVATIONS_BACKUP = "observations_v1_backup"
     }
 }
+
+object RuntimeEvalRuntime {
+    @Volatile
+    private var store: RuntimeEvalStore? = null
+
+    fun initialize(context: Context): RuntimeEvalStore = synchronized(this) {
+        store ?: RuntimeEvalStore(context.applicationContext).also { store = it }
+    }
+
+    fun currentOrNull(): RuntimeEvalStore? = store
+
+    fun current(): RuntimeEvalStore =
+        store ?: error("Runtime Eval n'est pas initialisé.")
+}

@@ -90,8 +90,6 @@ class SharedGenesisStateStore:
             return primary
         backup = self._load_file(self.backup_path)
         if backup is not None:
-            # Restore the valid backup before a later save can rotate the broken
-            # primary over it.
             try:
                 self.path.write_bytes(self.backup_path.read_bytes())
             except OSError:
@@ -325,6 +323,7 @@ class SharedGenesisStateStore:
         if clean_kind not in {
             "vps_night_cycle_report",
             "vps_maintenance_snapshot",
+            "vps_learning_snapshot",
         }:
             raise ValueError("unsupported_replica_event_kind")
         clean_identity = _clean_text(identity_id, "identity_id")

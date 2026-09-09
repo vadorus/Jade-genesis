@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Jade Genesis Distributed Node Runtime 0.1.1
+Jade Genesis Distributed Node Runtime 0.1.2
 
 Dependency-free runtime for Windows/Linux/macOS.
 The wire protocol intentionally stays jade-genesis-node/0.0.6 for backward
@@ -19,6 +19,8 @@ Allow-listed tasks only:
 - text_analysis
 - memory_consolidation
 - brain_chat (requires local Ollama)
+- screen_analyze (requires local capture + Ollama vision)
+- vision_analyze (requires Ollama vision)
 
 No arbitrary shell/system command execution is exposed.
 """
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import ctypes
 import hashlib
 import hmac
@@ -51,7 +54,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 PROTOCOL = "jade-genesis-node/0.0.6"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 DEFAULT_PORT = 8765
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 MAX_BODY_BYTES = 4 * 1024 * 1024
@@ -106,6 +109,14 @@ NEGATION_WORDS = {
 
 _DIAGNOSTICS: deque[dict[str, Any]] = deque(maxlen=300)
 _DIAGNOSTICS_LOCK = threading.Lock()
+_BRAIN_METRICS: dict[str, Any] = {
+    "model": "",
+    "tokens_per_second": 0.0,
+    "duration_ms": 0,
+    "load_duration_ms": 0,
+    "measured_at": 0,
+}
+_BRAIN_METRICS_LOCK = threading.Lock()
 
 
 def log_event(level: str, event: str, message: str, **metadata: Any) -> None:
@@ -141,6 +152,33 @@ def diagnostic_snapshot(limit: int = 100) -> list[dict[str, Any]]:
 
 def round_gb(value: int | float) -> float:
     return round(float(value) / (1024 ** 3), 2)
+
+
+def bytes_to_gb(value: Any) -> float:
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if amount <= 0:
+        return 0.0
+    return round(amount / (1024 ** 3), 2)
+
+
+def safe_float(value: Any, fallback: float = -1.0) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed != parsed or parsed in (float("inf"), float("-inf")):
+        return fallback
+    return parsed
+
+
+def safe_int(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def normalize_ollama_url(raw: str) -> str:
@@ -327,6 +365,77 @@ def cpu_name() -> str:
     return platform.machine() or "CPU inconnu"
 
 
+def _linux_cpu_times() -> tuple[int, int] | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        line = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError):
+        return None
+    parts = line.split()
+    if not parts or parts[0] != "cpu":
+        return None
+    try:
+        values = [int(value) for value in parts[1:]]
+    except ValueError:
+        return None
+    if len(values) < 4:
+        return None
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    total = sum(values)
+    return idle, total
+
+
+def _windows_cpu_times() -> tuple[int, int] | None:
+    if not sys.platform.startswith("win"):
+        return None
+
+    class FILETIME(ctypes.Structure):
+        _fields_ = [
+            ("dwLowDateTime", ctypes.c_ulong),
+            ("dwHighDateTime", ctypes.c_ulong),
+        ]
+
+    idle = FILETIME()
+    kernel = FILETIME()
+    user = FILETIME()
+    ok = ctypes.windll.kernel32.GetSystemTimes(
+        ctypes.byref(idle),
+        ctypes.byref(kernel),
+        ctypes.byref(user),
+    )
+    if not ok:
+        return None
+
+    def value(item: FILETIME) -> int:
+        return (int(item.dwHighDateTime) << 32) | int(item.dwLowDateTime)
+
+    idle_value = value(idle)
+    total_value = value(kernel) + value(user)
+    return idle_value, total_value
+
+
+def cpu_load_percent(sample_seconds: float = 0.06) -> float:
+    first = _windows_cpu_times() or _linux_cpu_times()
+    if first is not None:
+        time.sleep(max(0.02, min(sample_seconds, 0.20)))
+        second = _windows_cpu_times() or _linux_cpu_times()
+        if second is not None:
+            idle_delta = second[0] - first[0]
+            total_delta = second[1] - first[1]
+            if total_delta > 0:
+                busy = 100.0 * (1.0 - max(0, idle_delta) / total_delta)
+                return round(max(0.0, min(100.0, busy)), 1)
+
+    try:
+        load1 = os.getloadavg()[0]
+        cores = max(1, os.cpu_count() or 1)
+        normalized = 100.0 * load1 / cores
+        return round(max(0.0, min(100.0, normalized)), 1)
+    except (AttributeError, OSError):
+        return -1.0
+
+
 def local_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -336,6 +445,98 @@ def local_ip() -> str:
         return "0.0.0.0"
     finally:
         sock.close()
+
+
+def _nvidia_smi_path() -> str | None:
+    found = shutil.which("nvidia-smi")
+    if found:
+        return found
+    if sys.platform.startswith("win"):
+        candidates = (
+            Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32" / "nvidia-smi.exe",
+            Path(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+        )
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def gpu_telemetry() -> dict[str, Any]:
+    empty = {
+        "backend": "",
+        "gpus": [],
+        "gpu_name": "",
+        "gpu_vram_total_gb": 0.0,
+        "gpu_vram_free_gb": 0.0,
+        "gpu_utilization_percent": -1.0,
+        "gpu_temperature_c": -1.0,
+        "gpu_power_draw_w": -1.0,
+    }
+    executable = _nvidia_smi_path()
+    if not executable:
+        return empty
+
+    query = (
+        "index,name,memory.total,memory.free,utilization.gpu,"
+        "temperature.gpu,power.draw"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                executable,
+                f"--query-gpu={query}",
+                "--format=csv,noheader,nounits",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=1.5,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return empty
+    if completed.returncode != 0:
+        return empty
+
+    gpus: list[dict[str, Any]] = []
+    for row in csv.reader(completed.stdout.splitlines(), skipinitialspace=True):
+        if len(row) < 7:
+            continue
+        index = safe_int(row[0], len(gpus))
+        name = row[1].strip()
+        total_mib = safe_float(row[2], 0.0)
+        free_mib = safe_float(row[3], 0.0)
+        utilization = safe_float(row[4], -1.0)
+        temperature = safe_float(row[5], -1.0)
+        power = safe_float(row[6], -1.0)
+        gpus.append(
+            {
+                "index": index,
+                "name": name,
+                "vram_total_gb": round(max(0.0, total_mib) / 1024.0, 2),
+                "vram_free_gb": round(max(0.0, free_mib) / 1024.0, 2),
+                "utilization_percent": round(utilization, 1) if utilization >= 0 else -1.0,
+                "temperature_c": round(temperature, 1) if temperature >= 0 else -1.0,
+                "power_draw_w": round(power, 1) if power >= 0 else -1.0,
+            }
+        )
+
+    if not gpus:
+        return empty
+    primary = max(gpus, key=lambda item: float(item.get("vram_total_gb", 0.0)))
+    return {
+        "backend": "nvidia-smi",
+        "gpus": gpus,
+        "gpu_name": str(primary.get("name", "")),
+        "gpu_vram_total_gb": float(primary.get("vram_total_gb", 0.0)),
+        "gpu_vram_free_gb": float(primary.get("vram_free_gb", 0.0)),
+        "gpu_utilization_percent": float(primary.get("utilization_percent", -1.0)),
+        "gpu_temperature_c": float(primary.get("temperature_c", -1.0)),
+        "gpu_power_draw_w": float(primary.get("power_draw_w", -1.0)),
+    }
 
 
 def _json_request(
@@ -394,6 +595,15 @@ def ollama_models(config: dict[str, Any], timeout: float = 0.8) -> list[dict[str
     return models
 
 
+def ollama_running_models(config: dict[str, Any], timeout: float = 0.7) -> list[dict[str, Any]]:
+    base = normalize_ollama_url(str(config.get("ollama_url", DEFAULT_OLLAMA_URL)))
+    data = _json_request(f"{base}/api/ps", timeout=timeout)
+    raw_models = data.get("models", [])
+    if not isinstance(raw_models, list):
+        return []
+    return [item for item in raw_models if isinstance(item, dict)]
+
+
 def select_ollama_model(
     config: dict[str, Any],
     models: list[dict[str, Any]],
@@ -424,10 +634,7 @@ def select_ollama_model(
             return preferred
 
     def size_key(item: dict[str, Any]) -> tuple[int, str]:
-        try:
-            size = int(item.get("size", 0))
-        except (TypeError, ValueError):
-            size = 0
+        size = safe_int(item.get("size", 0), 0)
         name = str(item.get("name") or item.get("model") or "")
         return (size if size > 0 else 2**63 - 1, name)
 
@@ -435,15 +642,45 @@ def select_ollama_model(
     return str(selected.get("name") or selected.get("model") or "").strip() or None
 
 
+def _model_by_name(models: list[dict[str, Any]], selected: str) -> dict[str, Any] | None:
+    selected_base = selected.split(":", 1)[0]
+    for item in models:
+        name = str(item.get("name") or item.get("model") or "").strip()
+        if name == selected:
+            return item
+    for item in models:
+        name = str(item.get("name") or item.get("model") or "").strip()
+        if name.split(":", 1)[0] == selected_base:
+            return item
+    return None
+
+
 def ollama_status(config: dict[str, Any]) -> dict[str, Any]:
     try:
         models = ollama_models(config)
         model = select_ollama_model(config, models)
+        model_item = _model_by_name(models, model) if model else None
+        running: list[dict[str, Any]] = []
+        try:
+            running = ollama_running_models(config)
+        except Exception:
+            running = []
+        running_item = _model_by_name(running, model) if model else None
+        loaded_model = ""
+        if running_item is not None:
+            loaded_model = str(
+                running_item.get("name") or running_item.get("model") or model or ""
+            ).strip()
         return {
             "reachable": True,
             "ready": model is not None,
             "model": model or "",
             "model_count": len(models),
+            "model_size_gb": bytes_to_gb(model_item.get("size", 0)) if model_item else 0.0,
+            "loaded": running_item is not None,
+            "loaded_model": loaded_model,
+            "loaded_size_gb": bytes_to_gb(running_item.get("size", 0)) if running_item else 0.0,
+            "loaded_vram_gb": bytes_to_gb(running_item.get("size_vram", 0)) if running_item else 0.0,
             "error": "" if model else "Aucun modèle conversationnel Ollama utilisable.",
         }
     except Exception as exc:
@@ -452,9 +689,13 @@ def ollama_status(config: dict[str, Any]) -> dict[str, Any]:
             "ready": False,
             "model": "",
             "model_count": 0,
+            "model_size_gb": 0.0,
+            "loaded": False,
+            "loaded_model": "",
+            "loaded_size_gb": 0.0,
+            "loaded_vram_gb": 0.0,
             "error": str(exc)[:160],
         }
-
 
 
 def select_vision_model(
@@ -698,7 +939,16 @@ def run_screen_analyze(payload: str, config: dict[str, Any]) -> tuple[str, int]:
     }
     return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(total_duration_ms)
 
-def health_payload(config: dict[str, Any]) -> dict[str, Any]:
+
+def brain_metrics_snapshot() -> dict[str, Any]:
+    with _BRAIN_METRICS_LOCK:
+        return dict(_BRAIN_METRICS)
+
+
+def health_payload(
+    config: dict[str, Any],
+    store: "AsyncTaskStore | None" = None,
+) -> dict[str, Any]:
     total_ram, available_ram = memory_bytes()
     try:
         storage_free = shutil.disk_usage(Path.home()).free
@@ -707,11 +957,19 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
     brain = ollama_status(config)
     vision = ollama_vision_status(config)
     capture_ready = screen_capture_supported()
+    gpu = gpu_telemetry()
+    task_stats = store.stats() if store is not None else {
+        "active": 0,
+        "queued": 0,
+        "running": 0,
+    }
+    metrics = brain_metrics_snapshot()
     capabilities = [
         "node_runtime",
         "compute",
         "python_runtime",
         "hardware_profile",
+        "resource_telemetry_v2",
         "task_execution_v1",
         "task_execution_v2",
         "task_execution_v3",
@@ -723,6 +981,8 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
         "memory_consolidation",
         "task_queue_v1",
     ]
+    if gpu["gpu_name"]:
+        capabilities.append("gpu_telemetry_v1")
     if brain["ready"]:
         capabilities.extend(["local_brain", "brain_chat", "ollama_local"])
     if vision["ready"]:
@@ -742,13 +1002,33 @@ def health_payload(config: dict[str, Any]) -> dict[str, Any]:
         "os": f"{platform.system()} {platform.release()}".strip(),
         "cpu": cpu_name(),
         "cpu_cores": os.cpu_count() or 1,
+        "cpu_load_percent": cpu_load_percent(),
         "ram_total_gb": round_gb(total_ram) if total_ram else 0.0,
         "ram_available_gb": round_gb(available_ram) if available_ram else 0.0,
         "storage_free_gb": round_gb(storage_free) if storage_free else 0.0,
+        "gpu_backend": gpu["backend"],
+        "gpus": gpu["gpus"],
+        "gpu_name": gpu["gpu_name"],
+        "gpu_vram_total_gb": gpu["gpu_vram_total_gb"],
+        "gpu_vram_free_gb": gpu["gpu_vram_free_gb"],
+        "gpu_utilization_percent": gpu["gpu_utilization_percent"],
+        "gpu_temperature_c": gpu["gpu_temperature_c"],
+        "gpu_power_draw_w": gpu["gpu_power_draw_w"],
+        "active_task_count": int(task_stats["active"]),
+        "queued_task_count": int(task_stats["queued"]),
+        "running_task_count": int(task_stats["running"]),
         "capabilities": capabilities,
         "brain_backend": "ollama" if brain["ready"] else "",
         "brain_model": brain["model"],
         "brain_ready": bool(brain["ready"]),
+        "brain_loaded": bool(brain["loaded"]),
+        "brain_loaded_model": brain["loaded_model"],
+        "brain_model_size_gb": brain["model_size_gb"],
+        "brain_model_vram_gb": brain["loaded_vram_gb"],
+        "brain_tokens_per_second": float(metrics.get("tokens_per_second", 0.0) or 0.0),
+        "brain_last_duration_ms": int(metrics.get("duration_ms", 0) or 0),
+        "brain_load_duration_ms": int(metrics.get("load_duration_ms", 0) or 0),
+        "brain_last_measured_at": int(metrics.get("measured_at", 0) or 0),
         "brain_error": brain["error"],
         "vision_ready": bool(vision["ready"]),
         "vision_model": vision["model"],
@@ -993,6 +1273,7 @@ def _brain_user_prompt(context: dict[str, Any]) -> str:
         f"- appareil : {self_info.get('device', 'inconnu')}",
         f"- mode ressources : {self_info.get('resource_mode', 'inconnu')}",
         f"- nœud de calcul préféré : {self_info.get('preferred_compute_node', 'aucun')}",
+        f"- nœud cerveau sélectionné : {self_info.get('selected_brain_node', 'inconnu')}",
         "",
         "Nœuds connus :",
     ]
@@ -1007,12 +1288,25 @@ def _brain_user_prompt(context: dict[str, Any]) -> str:
                 if isinstance(route, dict)
             ) or "aucune route détaillée"
             caps = item.get("capabilities", []) if isinstance(item.get("capabilities"), list) else []
+            gpu_text = ""
+            if item.get("gpu_name"):
+                gpu_text = (
+                    f", GPU={item.get('gpu_name')} "
+                    f"VRAM={item.get('gpu_vram_free_gb',0)}/{item.get('gpu_vram_total_gb',0)} Go "
+                    f"charge={item.get('gpu_utilization_percent','?')}%"
+                )
+            brain_perf = ""
+            if safe_float(item.get("brain_tokens_per_second", 0), 0) > 0:
+                brain_perf = f", perf={item.get('brain_tokens_per_second')} tok/s"
             lines.append(
                 "- "
                 f"{item.get('name','nœud')} [{item.get('kind','UNKNOWN')}/{item.get('status','UNKNOWN')}] "
-                f"CPU={item.get('cpu_cores',0)}, RAM libre={item.get('ram_available_gb',0)} Go, "
-                f"runtime={item.get('runtime_version','') or 'inconnu'}, brain={item.get('brain_backend','') or 'aucun'} "
-                f"{item.get('brain_model','') or ''}; routes={route_text}; capacités={','.join(str(x) for x in caps[:12])}"
+                f"CPU={item.get('cpu_cores',0)} charge={item.get('cpu_load_percent','?')}%, "
+                f"RAM libre={item.get('ram_available_gb',0)} Go{gpu_text}, "
+                f"tâches={item.get('active_task_count',0)}, runtime={item.get('runtime_version','') or 'inconnu'}, "
+                f"brain={item.get('brain_backend','') or 'aucun'} {item.get('brain_model','') or ''} "
+                f"loaded={item.get('brain_loaded',False)}{brain_perf}; "
+                f"routes={route_text}; capacités={','.join(str(x) for x in caps[:12])}"
             )
     else:
         lines.append("- aucun nœud fourni")
@@ -1093,7 +1387,30 @@ def run_brain_chat(payload: str, config: dict[str, Any]) -> tuple[str, int]:
     if not text:
         raise RuntimeError("Ollama a renvoyé une réponse vide.")
 
-    duration_ms = (time.perf_counter_ns() - started) // 1_000_000
+    duration_ms = int((time.perf_counter_ns() - started) // 1_000_000)
+    eval_count = max(0, safe_int(response.get("eval_count", 0), 0))
+    eval_duration_ns = max(0, safe_int(response.get("eval_duration", 0), 0))
+    prompt_eval_count = max(0, safe_int(response.get("prompt_eval_count", 0), 0))
+    prompt_eval_duration_ns = max(0, safe_int(response.get("prompt_eval_duration", 0), 0))
+    load_duration_ns = max(0, safe_int(response.get("load_duration", 0), 0))
+    total_duration_ns = max(0, safe_int(response.get("total_duration", 0), 0))
+    tokens_per_second = (
+        eval_count / (eval_duration_ns / 1_000_000_000.0)
+        if eval_count > 0 and eval_duration_ns > 0
+        else 0.0
+    )
+    load_duration_ms = load_duration_ns // 1_000_000
+    with _BRAIN_METRICS_LOCK:
+        _BRAIN_METRICS.update(
+            {
+                "model": model,
+                "tokens_per_second": round(tokens_per_second, 2),
+                "duration_ms": duration_ms,
+                "load_duration_ms": int(load_duration_ms),
+                "measured_at": int(time.time() * 1000),
+            }
+        )
+
     result = {
         "text": text,
         "backend": "ollama",
@@ -1102,8 +1419,15 @@ def run_brain_chat(payload: str, config: dict[str, Any]) -> tuple[str, int]:
         "operation": str(context.get("operation", "answer")),
         "memory_count": min(len(context.get("memories", [])) if isinstance(context.get("memories"), list) else 0, 10),
         "node_count": min(len(context.get("nodes", [])) if isinstance(context.get("nodes"), list) else 0, 20),
+        "eval_count": eval_count,
+        "eval_duration_ms": eval_duration_ns // 1_000_000,
+        "prompt_eval_count": prompt_eval_count,
+        "prompt_eval_duration_ms": prompt_eval_duration_ns // 1_000_000,
+        "tokens_per_second": round(tokens_per_second, 2),
+        "load_duration_ms": int(load_duration_ms),
+        "ollama_total_duration_ms": total_duration_ns // 1_000_000,
     }
-    return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(duration_ms)
+    return json.dumps(result, ensure_ascii=False, separators=(",", ":")), duration_ms
 
 
 def execute_allowlisted_task(
@@ -1246,6 +1570,17 @@ class AsyncTaskStore:
             item = self.tasks.get(task_id)
             return dict(item) if item is not None else None
 
+    def stats(self) -> dict[str, int]:
+        with self.lock:
+            self._cleanup_locked()
+            queued = sum(1 for item in self.tasks.values() if item.get("status") == "QUEUED")
+            running = sum(1 for item in self.tasks.values() if item.get("status") == "RUNNING")
+            return {
+                "active": queued + running,
+                "queued": queued,
+                "running": running,
+            }
+
 
 def validate_task_request(request: dict[str, Any]) -> tuple[str, str, str, int]:
     protocol = str(request.get("protocol", ""))
@@ -1317,7 +1652,7 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
                 return
 
             if path == "/health":
-                self._send_json(200, health_payload(config))
+                self._send_json(200, health_payload(config, store))
                 return
             if path == "/runtime":
                 self._send_json(200, runtime_payload(config))
@@ -1444,7 +1779,6 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
             )
 
         def log_message(self, fmt: str, *args: Any) -> None:
-            # HTTP access lines are deliberately kept short and contain no auth headers.
             message = fmt % args
             print(f"[{time.strftime('%H:%M:%S')}] HTTP {self.client_address[0]} {message}", flush=True)
 
@@ -1453,6 +1787,7 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
 
 def print_status(config: dict[str, Any], show_token: bool = False) -> None:
     status = ollama_status(config)
+    gpu = gpu_telemetry()
     print(f"Jade Genesis Node Runtime {VERSION}")
     print(f"Protocol : {PROTOCOL}")
     print(f"Node ID  : {config['node_id']}")
@@ -1467,18 +1802,26 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
         print("Token    : conservé dans le fichier de configuration (non affiché)")
     print(f"Ollama   : {config.get('ollama_url', DEFAULT_OLLAMA_URL)}")
     if status["ready"]:
-        print(f"Brain    : prêt — Ollama / {status['model']}")
+        loaded = " chargé" if status["loaded"] else " froid"
+        print(f"Brain    : prêt — Ollama / {status['model']} ({loaded.strip()})")
     elif status["reachable"]:
         print(f"Brain    : Ollama joignable mais aucun modèle utilisable ({status['error']})")
     else:
         print(f"Brain    : indisponible ({status['error']})")
+    if gpu["gpu_name"]:
+        print(
+            f"GPU      : {gpu['gpu_name']} — VRAM {gpu['gpu_vram_free_gb']}/"
+            f"{gpu['gpu_vram_total_gb']} Go libre/total"
+        )
+    else:
+        print("GPU      : télémétrie NVIDIA non disponible (autres backends à venir)")
     print("Async    : activé — POST /tasks + GET /tasks/<id>")
     print("Allowed  : " + ", ".join(ALLOWED_TASKS))
     print("Aucune commande shell arbitraire n'est exposée.")
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Jade Genesis Node Runtime 0.1.1")
+    parser = argparse.ArgumentParser(description="Jade Genesis Node Runtime 0.1.2")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--reset-token", action="store_true")
     parser.add_argument("--show-token", action="store_true")

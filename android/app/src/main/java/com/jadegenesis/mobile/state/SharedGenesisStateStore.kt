@@ -217,7 +217,8 @@ class SharedGenesisStateStore(context: Context) {
             "identity_presence",
             "config_snapshot",
             "phone_node_snapshot",
-            "memory_cursor"
+            "memory_cursor",
+            "resource_lease_snapshot"
         )
     }
 }

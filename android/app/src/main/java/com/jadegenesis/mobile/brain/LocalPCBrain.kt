@@ -177,14 +177,8 @@ class LocalPCBrain(
                         ).filter { it.isNotBlank() }
                             .joinToString(" ")
                     )
-                    put(
-                        "resource_mode",
-                        context.selfModel.resourceBudget.mode.name
-                    )
-                    put(
-                        "preferred_compute_node_id",
-                        preferredId ?: ""
-                    )
+                    put("resource_mode", context.selfModel.resourceBudget.mode.name)
+                    put("preferred_compute_node_id", preferredId ?: "")
                     put(
                         "preferred_compute_node",
                         context.selfModel.knownNodes
@@ -285,6 +279,22 @@ class LocalPCBrain(
             admissionController.release(lease)
         }
 
+        val json = JSONObject(response.output)
+        val text = json.optString("text").trim()
+        if (text.isBlank()) {
+            evalStore?.recordExecution(
+                request = admissionProbe,
+                node = node,
+                success = false,
+                durationMs = response.durationMs,
+                output = response.output,
+                error = "Réponse générative vide",
+                brainProfile = brainPlan.profile.name.lowercase(),
+                createdAt = System.currentTimeMillis()
+            )
+            error("Le backend génératif a renvoyé une réponse vide.")
+        }
+
         val evalObservation = evalStore?.recordExecution(
             request = admissionProbe,
             node = node,
@@ -294,12 +304,6 @@ class LocalPCBrain(
             brainProfile = brainPlan.profile.name.lowercase(),
             createdAt = System.currentTimeMillis()
         )
-
-        val json = JSONObject(response.output)
-        val text = json.optString("text").trim()
-        if (text.isBlank()) {
-            error("Le backend génératif a renvoyé une réponse vide.")
-        }
         val actualModel = json.optString("model").trim()
             .ifBlank { evalObservation?.model.orEmpty() }
 

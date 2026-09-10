@@ -27,6 +27,24 @@ MAX_COLLECTION_ITEMS = 256
 MAX_JSON_BYTES = 16_384
 EXECUTABLE_SOURCE_KINDS = frozenset({"DEVELOPER"})
 
+_SOURCE_SPEC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "skill_id",
+        "skill_version",
+        "task_family",
+        "domain",
+        "description",
+        "input_contract",
+        "output_contract",
+        "body_kind",
+        "body",
+        "dependencies",
+        "provenance",
+        "evaluation_policy",
+    }
+)
+
 
 class ProcedureRuntimeError(ValueError):
     """Deterministic execution failure with a stable error code."""
@@ -112,6 +130,40 @@ def _value_cost(value: Any, depth: int = 0) -> int:
             )
         )
     raise ProcedureRuntimeError("procedure_unsupported_value_type")
+
+
+def _validated_skill_spec(raw_spec: dict[str, Any]) -> dict[str, Any]:
+    """Accept source or canonical normalized SkillSpec, never unchecked derived state.
+
+    Registries/verifiers persist the canonical normalized representation because
+    it includes stable hashes and explicit safety flags. The source contract
+    validator intentionally rejects those derived fields. For a persisted
+    normalized spec, reconstruct the source contract, normalize it again, and
+    require byte-for-byte-equivalent Python data before execution. Any changed
+    hash, safety flag, body, contract or unexpected field therefore fails closed.
+    """
+
+    if not isinstance(raw_spec, dict):
+        raise ProcedureRuntimeError("procedure_skill_spec_must_be_object")
+
+    if "spec_sha256" not in raw_spec and "body_sha256" not in raw_spec:
+        return normalize_skill_spec(raw_spec)
+
+    source = {
+        key: raw_spec[key]
+        for key in _SOURCE_SPEC_FIELDS
+        if key in raw_spec
+    }
+    try:
+        canonical = normalize_skill_spec(source)
+    except (ValueError, PermissionError) as exc:
+        raise ProcedureRuntimeError("procedure_normalized_skill_invalid") from exc
+
+    if set(raw_spec.keys()) != set(canonical.keys()):
+        raise ProcedureRuntimeError("procedure_normalized_skill_shape_invalid")
+    if raw_spec != canonical:
+        raise ProcedureRuntimeError("procedure_normalized_skill_integrity_mismatch")
+    return canonical
 
 
 def _is_number(value: Any) -> bool:
@@ -346,7 +398,7 @@ def execute_skill(
 ) -> dict[str, Any]:
     """Execute one developer-authorized pure SkillSpec under deterministic budgets."""
 
-    spec = normalize_skill_spec(raw_spec)
+    spec = _validated_skill_spec(raw_spec)
     allowed = {str(item).strip().upper() for item in allowed_source_kinds}
     source_kind = str(spec["provenance"]["source_kind"]).upper()
     if source_kind not in allowed:

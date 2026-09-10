@@ -155,6 +155,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
                                         put("node_name", group.nodeName)
                                         put("task_kind", group.taskKind)
                                         put("model", group.model)
+                                        put("brain_profile", group.brainProfile)
                                         put("samples", group.samples)
                                         put("success_rate", group.successRate)
                                         put("average_duration_ms", group.averageDurationMs)

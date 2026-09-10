@@ -53,7 +53,7 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
             now_ms=1_300,
         )
 
-    def test_learning_view_never_exposes_sealed_test_case(self) -> None:
+    def test_learning_view_never_exposes_sealed_test_case_or_nonce(self) -> None:
         self.add_three_partitions()
         manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
         view = self.ledger.learning_view(self.identity, self.dataset)
@@ -63,10 +63,31 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         self.assertEqual(1, manifest["sealed_test_count"])
         self.assertFalse(manifest["sealed_test_inputs_exposed"])
         self.assertFalse(manifest["sealed_test_answers_exposed"])
+        self.assertFalse(manifest["seal_nonce_exposed"])
+        self.assertNotIn("seal_nonce", manifest)
         self.assertEqual(2, len(view["cases"]))
         self.assertEqual({"TRAIN", "VALIDATION"}, {case["partition"] for case in view["cases"]})
+        self.assertFalse(view["sealed_test_inputs_exposed"])
         self.assertFalse(view["sealed_test_answers_exposed"])
+        self.assertFalse(view["seal_nonce_exposed"])
+        self.assertNotIn("seal_nonce", view)
         self.assertNotIn("sealed-1", {case["case_id"] for case in view["cases"]})
+
+    def test_adding_sealed_case_does_not_return_hidden_input_or_answer_digest(self) -> None:
+        result = self.ledger.add_case(
+            self.identity,
+            self.dataset,
+            "sealed-1",
+            "SEALED_TEST",
+            {"secret_input": 8},
+            {"value": 16},
+            now_ms=1_100,
+        )
+        self.assertTrue(result["hidden"])
+        self.assertNotIn("input_sha256", result)
+        self.assertNotIn("expected_output_sha256", result)
+        self.assertNotIn("input", result)
+        self.assertNotIn("expected_output", result)
 
     def test_sealed_dataset_is_immutable(self) -> None:
         self.add_three_partitions()
@@ -127,8 +148,10 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         self.assertTrue(passed["verdict"])
         self.assertFalse(failed["verdict"])
         self.assertFalse(passed["expected_output_exposed"])
+        self.assertFalse(passed["seal_nonce_exposed"])
         self.assertNotIn("expected_output", passed)
         self.assertNotIn("expected_output_sha256", passed)
+        self.assertNotIn("seal_nonce", passed)
 
     def test_exact_json_verifier_is_canonical_not_key_order_sensitive(self) -> None:
         self.ledger.add_case(
@@ -183,7 +206,10 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         self.path.write_text("{not-json", encoding="utf-8")
         status = VerifiableTaskLedger(self.path).status()
         self.assertEqual(1, status["dataset_count"])
+        self.assertTrue(status["sealed_commitment_salted"])
+        self.assertFalse(status["sealed_test_inputs_exposed"])
         self.assertFalse(status["sealed_test_answers_exposed"])
+        self.assertFalse(status["seal_nonce_exposed"])
         self.assertFalse(status["learned_code_execution"])
 
 

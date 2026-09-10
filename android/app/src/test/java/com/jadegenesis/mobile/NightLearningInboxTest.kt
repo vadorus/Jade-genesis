@@ -112,14 +112,16 @@ class NightLearningInboxTest {
 
     @Test
     fun oldSnapshotWithoutOutcomeFieldsRemainsCompatible() {
-        val old = JSONObject(validPayload())
-            .remove("outcome_feedback_count")
-            .remove("overall_outcome_quality")
-            .remove("outcome_groups_with_minimum_evidence")
-            .remove("outcome_consolidation_used")
-            .remove("raw_conversation_text_used")
-            .remove("user_feedback_promoted_to_external_fact")
-            .toString()
+        val oldJson = JSONObject(validPayload())
+        listOf(
+            "outcome_feedback_count",
+            "overall_outcome_quality",
+            "outcome_groups_with_minimum_evidence",
+            "outcome_consolidation_used",
+            "raw_conversation_text_used",
+            "user_feedback_promoted_to_external_fact"
+        ).forEach { key -> oldJson.remove(key) }
+        val old = oldJson.toString()
 
         val snapshot = NightLearningInbox.parseLatest(
             listOf(event(payload = old, revision = 10L))

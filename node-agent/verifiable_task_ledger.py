@@ -1,12 +1,18 @@
-"""Machine-verifiable task ledger for Jade Genesis 0.1.19.
+"""Machine-verifiable task ledger for Jade Genesis 0.1.20.
 
-The ledger is the measurement substrate required before Jade can claim that it
-learned a skill. It stores bounded deterministic task cases, separates visible
+The ledger stores bounded deterministic task cases, separates visible
 TRAIN/VALIDATION evidence from a hidden SEALED_TEST partition, commits the
 hidden set before evaluation, and scores exact JSON outputs internally.
 
-It executes no learned code, calls no LLM, performs no network access and is not
-conversation memory.
+0.1.20 hardens the final sealed evaluation:
+- individual SEALED_TEST cases cannot be queried through evaluate_case();
+- the whole sealed set can be consumed only by run_sealed_skill_exam();
+- one sealed dataset is burned by the first final candidate;
+- retries of the exact same frozen spec are idempotent;
+- the public final result exposes only aggregate PASS/FAIL, never per-case
+  expected values, per-case verdicts or the private nonce.
+
+The ledger itself performs no LLM calls and is not conversation memory.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -40,6 +47,7 @@ FORBIDDEN_TASK_KEYS = {
     "system_prompt",
     "chat_history",
 }
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 CONFIG_DIR = Path(
     os.environ.get("JADE_GENESIS_CONFIG_DIR", str(Path.home() / ".jade-genesis"))
@@ -209,6 +217,7 @@ class VerifiableTaskLedger:
                 "seal_nonce": "",
                 "created_at": now,
                 "sealed_at": 0,
+                "sealed_exam": None,
                 "cases": {},
             }
             datasets[dataset_id] = dataset
@@ -285,7 +294,8 @@ class VerifiableTaskLedger:
             if dataset.get("sealed") is True:
                 return self._sealed_manifest(dataset)
             hidden = [
-                case for case in dataset["cases"].values()
+                case
+                for case in dataset["cases"].values()
                 if isinstance(case, dict) and case.get("partition") == "SEALED_TEST"
             ]
             if not hidden:
@@ -311,11 +321,13 @@ class VerifiableTaskLedger:
             dataset["sealed_set_sha256"] = _sha256_json(commitment)
             dataset["sealed"] = True
             dataset["sealed_at"] = now
+            dataset.setdefault("sealed_exam", None)
             self._touch_and_save(state, now)
             return self._sealed_manifest(dataset)
 
     def learning_view(self, identity_id: str, dataset_id: str) -> dict[str, Any]:
         """Expose teachable examples but never SEALED_TEST cases or the nonce."""
+
         dataset_id = _clean_id(dataset_id, "dataset_id")
         with self.lock:
             state = self._load()
@@ -342,6 +354,7 @@ class VerifiableTaskLedger:
                 "cases": visible,
                 "sealed_test_count": self._partition_count(dataset, "SEALED_TEST"),
                 "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
+                "sealed_exam_consumed": isinstance(dataset.get("sealed_exam"), dict),
                 "sealed_test_inputs_exposed": False,
                 "sealed_test_answers_exposed": False,
                 "seal_nonce_exposed": False,
@@ -367,6 +380,12 @@ class VerifiableTaskLedger:
         producer_id: str,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
+        """Evaluate TRAIN/VALIDATION only.
+
+        SEALED_TEST is intentionally unavailable through this interactive API so
+        its verdict cannot become an iterative training oracle.
+        """
+
         dataset_id = _clean_id(dataset_id, "dataset_id")
         case_id = _clean_id(case_id, "case_id")
         producer_kind = _clean_id(producer_kind, "producer_kind")
@@ -382,28 +401,32 @@ class VerifiableTaskLedger:
             case = dataset["cases"].get(case_id)
             if not isinstance(case, dict):
                 raise ValueError("task_case_not_found")
-            if case.get("partition") == "SEALED_TEST" and dataset.get("sealed") is not True:
-                raise PermissionError("sealed_test_must_be_committed_before_evaluation")
+            if case.get("partition") == "SEALED_TEST":
+                raise PermissionError("sealed_test_case_evaluation_forbidden")
             if dataset.get("verifier_kind") != VERIFIER_KIND:
                 raise ValueError("unsupported_verifier_kind")
 
             verdict = _canonical_json(actual) == _canonical_json(case["expected_output"])
             actual_sha = _sha256_json(actual)
             attempt_id = hashlib.sha256(
-                f"{dataset_id}|{case_id}|{producer_kind}|{producer_id}|{now}|{actual_sha}".encode("utf-8")
+                f"{dataset_id}|{case_id}|{producer_kind}|{producer_id}|{now}|{actual_sha}".encode(
+                    "utf-8"
+                )
             ).hexdigest()[:24]
             attempts = [item for item in state["attempts"] if isinstance(item, dict)]
-            attempts.append({
-                "attempt_id": attempt_id,
-                "dataset_id": dataset_id,
-                "case_id": case_id,
-                "partition": case.get("partition", ""),
-                "producer_kind": producer_kind,
-                "producer_id": producer_id,
-                "actual_output_sha256": actual_sha,
-                "verdict": bool(verdict),
-                "evaluated_at": now,
-            })
+            attempts.append(
+                {
+                    "attempt_id": attempt_id,
+                    "dataset_id": dataset_id,
+                    "case_id": case_id,
+                    "partition": case.get("partition", ""),
+                    "producer_kind": producer_kind,
+                    "producer_id": producer_id,
+                    "actual_output_sha256": actual_sha,
+                    "verdict": bool(verdict),
+                    "evaluated_at": now,
+                }
+            )
             state["attempts"] = attempts[-MAX_ATTEMPTS:]
             self._touch_and_save(state, now)
             return {
@@ -418,6 +441,145 @@ class VerifiableTaskLedger:
                 "seal_nonce_exposed": False,
             }
 
+    def run_sealed_skill_exam(
+        self,
+        identity_id: str,
+        dataset_id: str,
+        raw_skill_spec: dict[str, Any],
+        now_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Consume one sealed dataset with one frozen developer SkillSpec.
+
+        The verifier owns the expected outputs and calls the restricted
+        procedure runtime internally. A different candidate can never reuse an
+        already-consumed sealed dataset. Repeating the exact same candidate is
+        idempotent and returns the stored aggregate verdict without re-running
+        the cases.
+        """
+
+        from procedure_runtime import execute_skill
+        from skill_spec import normalize_skill_spec
+
+        dataset_id = _clean_id(dataset_id, "dataset_id")
+        normalized_spec = normalize_skill_spec(raw_skill_spec)
+        candidate_sha = str(normalized_spec.get("spec_sha256", "")).lower()
+        if not _SHA256_RE.fullmatch(candidate_sha):
+            raise ValueError("invalid_candidate_spec_sha256")
+        now = _now_ms() if now_ms is None else max(0, int(now_ms))
+
+        with self.lock:
+            state = self._load()
+            self._bind_identity(state, identity_id)
+            dataset = state["datasets"].get(dataset_id)
+            if not isinstance(dataset, dict):
+                raise ValueError("dataset_not_found")
+            if dataset.get("sealed") is not True:
+                raise PermissionError("sealed_test_must_be_committed_before_final_exam")
+            if dataset.get("verifier_kind") != VERIFIER_KIND:
+                raise ValueError("unsupported_verifier_kind")
+
+            expected_commitment = str(dataset.get("sealed_set_sha256", "")).lower()
+            policy_commitment = str(
+                normalized_spec["evaluation_policy"].get("sealed_set_sha256", "")
+            ).lower()
+            if not expected_commitment or policy_commitment != expected_commitment:
+                raise ValueError("skill_sealed_set_mismatch")
+
+            existing = dataset.get("sealed_exam")
+            if isinstance(existing, dict):
+                existing_sha = str(existing.get("candidate_spec_sha256", "")).lower()
+                if existing_sha != candidate_sha:
+                    raise PermissionError("sealed_dataset_exam_already_consumed")
+                return self._sealed_exam_public(existing, replayed=True)
+
+            hidden = [
+                case
+                for case in dataset["cases"].values()
+                if isinstance(case, dict) and case.get("partition") == "SEALED_TEST"
+            ]
+            hidden.sort(key=lambda item: str(item.get("case_id", "")))
+            if not hidden:
+                raise ValueError("sealed_test_partition_required")
+
+            passed_count = 0
+            execution_failures = 0
+            for case in hidden:
+                try:
+                    execution = execute_skill(normalized_spec, case["input"])
+                    actual = execution["result"]
+                    passed = _canonical_json(actual) == _canonical_json(
+                        case["expected_output"]
+                    )
+                except Exception:
+                    passed = False
+                    execution_failures += 1
+                if passed:
+                    passed_count += 1
+
+            total = len(hidden)
+            pass_rate = passed_count / total
+            min_pass_rate = float(
+                normalized_spec["evaluation_policy"].get("min_pass_rate", 1.0)
+            )
+            verdict = pass_rate >= min_pass_rate
+
+            exam_id = hashlib.sha256(
+                (
+                    f"{dataset_id}|{expected_commitment}|{candidate_sha}|"
+                    f"{dataset.get('sealed_at', 0)}"
+                ).encode("utf-8")
+            ).hexdigest()[:24]
+
+            internal = {
+                "exam_id": exam_id,
+                "candidate_spec_sha256": candidate_sha,
+                "sealed_set_sha256": expected_commitment,
+                "verdict": bool(verdict),
+                "passed_count": passed_count,
+                "total_count": total,
+                "execution_failures": execution_failures,
+                "evaluated_at": now,
+                "feedback_detail_exposed": False,
+                "per_case_verdicts_exposed": False,
+                "expected_outputs_exposed": False,
+            }
+            dataset["sealed_exam"] = internal
+            attempts = [item for item in state["attempts"] if isinstance(item, dict)]
+            attempts.append(
+                {
+                    "attempt_id": exam_id,
+                    "dataset_id": dataset_id,
+                    "partition": "SEALED_TEST",
+                    "producer_kind": "frozen_skill_spec",
+                    "producer_id": candidate_sha,
+                    "verdict": bool(verdict),
+                    "evaluated_at": now,
+                    "sealed_final_exam": True,
+                }
+            )
+            state["attempts"] = attempts[-MAX_ATTEMPTS:]
+            self._touch_and_save(state, now)
+            return self._sealed_exam_public(internal, replayed=False)
+
+    @staticmethod
+    def _sealed_exam_public(
+        exam: dict[str, Any],
+        *,
+        replayed: bool,
+    ) -> dict[str, Any]:
+        return {
+            "exam_id": exam.get("exam_id", ""),
+            "candidate_spec_sha256": exam.get("candidate_spec_sha256", ""),
+            "sealed_set_sha256": exam.get("sealed_set_sha256", ""),
+            "verdict": bool(exam.get("verdict", False)),
+            "replayed": bool(replayed),
+            "dataset_consumed": True,
+            "feedback_detail_exposed": False,
+            "per_case_verdicts_exposed": False,
+            "expected_outputs_exposed": False,
+            "seal_nonce_exposed": False,
+        }
+
     def _touch_and_save(self, state: dict[str, Any], now: int) -> None:
         state["revision"] = max(0, int(state.get("revision", 0))) + 1
         state["updated_at"] = now
@@ -426,7 +588,8 @@ class VerifiableTaskLedger:
     @staticmethod
     def _partition_count(dataset: dict[str, Any], partition: str) -> int:
         return sum(
-            1 for case in dataset.get("cases", {}).values()
+            1
+            for case in dataset.get("cases", {}).values()
             if isinstance(case, dict) and case.get("partition") == partition
         )
 
@@ -442,6 +605,7 @@ class VerifiableTaskLedger:
             "validation_count": cls._partition_count(dataset, "VALIDATION"),
             "sealed_test_count": cls._partition_count(dataset, "SEALED_TEST"),
             "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
+            "sealed_exam_consumed": isinstance(dataset.get("sealed_exam"), dict),
             "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
             "seal_nonce_exposed": False,
@@ -457,6 +621,7 @@ class VerifiableTaskLedger:
             "sealed_at": max(0, int(dataset.get("sealed_at", 0))),
             "sealed_test_count": cls._partition_count(dataset, "SEALED_TEST"),
             "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
+            "sealed_exam_consumed": isinstance(dataset.get("sealed_exam"), dict),
             "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
             "seal_nonce_exposed": False,
@@ -465,20 +630,32 @@ class VerifiableTaskLedger:
     def status(self) -> dict[str, Any]:
         with self.lock:
             state = self._load()
-            datasets = [item for item in state["datasets"].values() if isinstance(item, dict)]
+            datasets = [
+                item for item in state["datasets"].values() if isinstance(item, dict)
+            ]
             return {
                 "schema_version": SCHEMA_VERSION,
                 "identity_bound": bool(str(state.get("identity_id", "")).strip()),
                 "revision": max(0, int(state.get("revision", 0))),
                 "dataset_count": len(datasets),
-                "sealed_dataset_count": sum(1 for item in datasets if item.get("sealed") is True),
+                "sealed_dataset_count": sum(
+                    1 for item in datasets if item.get("sealed") is True
+                ),
+                "sealed_exam_consumed_count": sum(
+                    1 for item in datasets if isinstance(item.get("sealed_exam"), dict)
+                ),
                 "case_count": sum(len(item.get("cases", {})) for item in datasets),
-                "attempt_count": len([item for item in state["attempts"] if isinstance(item, dict)]),
+                "attempt_count": len(
+                    [item for item in state["attempts"] if isinstance(item, dict)]
+                ),
                 "verifier_kind": VERIFIER_KIND,
                 "sealed_commitment_salted": True,
                 "sealed_test_inputs_exposed": False,
                 "sealed_test_answers_exposed": False,
                 "seal_nonce_exposed": False,
+                "sealed_case_evaluation_allowed": False,
+                "sealed_final_exam_single_use": True,
+                "sealed_final_exam_feedback": "aggregate_pass_fail_only",
                 "learned_code_execution": False,
                 "llm_judge_used": False,
                 "network_access": False,
@@ -502,6 +679,9 @@ def verifiable_task_ledger_status() -> dict[str, Any]:
             "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
             "seal_nonce_exposed": False,
+            "sealed_case_evaluation_allowed": False,
+            "sealed_final_exam_single_use": True,
+            "sealed_final_exam_feedback": "aggregate_pass_fail_only",
             "learned_code_execution": False,
             "llm_judge_used": False,
             "network_access": False,

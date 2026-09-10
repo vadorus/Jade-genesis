@@ -44,10 +44,6 @@ object ConversationLearningPolicy {
         "la bonne réponse"
     )
 
-    /**
-     * Ces formulations décrivent directement le résultat et peuvent être
-     * suivies d'un complément court ("maintenant", ":)", etc.).
-     */
     private val positiveStatementPrefixes = listOf(
         "ca marche",
         "ca fonctionne",
@@ -59,11 +55,6 @@ object ConversationLearningPolicy {
         "merci ca fonctionne"
     )
 
-    /**
-     * Ces marqueurs sont trop ambigus pour être acceptés comme simples préfixes.
-     * Ils valident seuls, ou lorsqu'ils introduisent ensuite une vraie proposition
-     * positive reconnue (ex. "parfait, ça marche maintenant").
-     */
     private val positiveStandaloneStatements = listOf(
         "c'est bon",
         "c est bon",
@@ -73,17 +64,6 @@ object ConversationLearningPolicy {
         "resolu",
         "nickel",
         "super"
-    )
-
-    private val adversativeMarkers = listOf(
-        " mais ",
-        ", mais ",
-        " sauf que ",
-        ", sauf que ",
-        " par contre ",
-        ", par contre ",
-        " cependant ",
-        ", cependant "
     )
 
     private val stopWords = setOf(
@@ -119,18 +99,23 @@ object ConversationLearningPolicy {
 
         val positiveCandidate = stripPositiveLeadIn(statement)
         if (startsLikePositive(positiveCandidate)) {
-            val containsNegativeTail = containsMarkerAnywhere(
-                positiveCandidate,
-                negativePrefixes
-            )
-            if (containsNegativeTail) {
+            val tail = adversativeTail(positiveCandidate)
+            if (tail != null) {
+                val negativeTail = stripNegativeLeadIn(tail)
+                if (matchesAnchored(negativeTail, negativePrefixes)) {
+                    return ConversationFeedbackSignal(
+                        kind = ConversationFeedbackKind.NEGATIVE,
+                        confidence = 0.94
+                    )
+                }
+                return null
+            }
+
+            if (containsMarkerAnywhere(positiveCandidate, negativePrefixes)) {
                 return ConversationFeedbackSignal(
                     kind = ConversationFeedbackKind.NEGATIVE,
                     confidence = 0.94
                 )
-            }
-            if (containsAdversative(positiveCandidate)) {
-                return null
             }
         }
 
@@ -233,9 +218,11 @@ object ConversationLearningPolicy {
     private fun containsMarkerAnywhere(value: String, markers: List<String>): Boolean =
         markers.map(::normalize).any { marker -> marker in value }
 
-    private fun containsAdversative(value: String): Boolean {
-        val padded = " $value "
-        return adversativeMarkers.any { marker -> marker in padded }
+    private fun adversativeTail(value: String): String? {
+        val match = Regex("\\b(?:mais|sauf que|par contre|cependant)\\b\\s+(.+)$")
+            .find(value)
+            ?: return null
+        return match.groupValues.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
     }
 
     private fun startsLikePositive(value: String): Boolean {

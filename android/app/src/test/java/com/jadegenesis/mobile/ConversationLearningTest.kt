@@ -51,6 +51,11 @@ class ConversationLearningTest {
                 "Pourquoi ce n'est pas disponible sur Android ?"
             )
         )
+        assertNull(
+            ConversationLearningPolicy.classifyFeedback(
+                "Comment ça marche Vulkan sur Android ?"
+            )
+        )
     }
 
     @Test

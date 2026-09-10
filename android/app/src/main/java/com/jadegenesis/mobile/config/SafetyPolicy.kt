@@ -114,6 +114,17 @@ object SafetyPolicy {
     const val MAX_NIGHT_IMPROVEMENT_CANDIDATES = 4
     const val MAX_NIGHT_LEARNING_TEXT_CHARS = 500
 
+    // Strategy Registry : premier substrat adaptatif persistant propre à Jade.
+    // Les candidats peuvent être persistés automatiquement, mais jamais promus
+    // ni appliqués au routage automatiquement dans la 0.1.18. Une stratégie
+    // validée exige un test sandbox et une quantité minimale de preuves.
+    const val MAX_STRATEGY_REGISTRY_ENTRIES = 100
+    const val MAX_STRATEGY_REGISTRY_SNAPSHOT_ENTRIES = 8
+    const val MAX_STRATEGY_REGISTRY_EVALUATIONS_PER_ENTRY = 20
+    const val MAX_STRATEGY_REGISTRY_TEXT_CHARS = 500
+    const val MIN_STRATEGY_PROMOTION_SAMPLES = 5
+    const val MIN_STRATEGY_PROMOTION_CONFIDENCE = 0.75
+
     // Shared Genesis State : protège le téléphone et le VPS contre des lots
     // démesurés. Ces plafonds restent compilés et non auto-évolutifs.
     const val MAX_SHARED_STATE_OUTBOX_EVENTS = 200

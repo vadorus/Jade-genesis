@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.brain
 
 import com.jadegenesis.mobile.config.JadeConfigRuntime
+import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.model.BrainBackendType
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainInfo
@@ -24,9 +25,18 @@ class LocalPCBrain(
         ResourceAdmissionController()
 ) : BrainBackend {
 
+    private data class RankedCandidate(
+        val node: GenesisNode,
+        val priorScore: Double,
+        val evidence: AdaptiveBrainEvidence
+    ) {
+        val score: Double
+            get() = priorScore + evidence.adjustment
+    }
+
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.13",
-        displayName = "Distributed Cognitive Brain",
+        id = "distributed-local-brain-0.1.14",
+        displayName = "Adaptive Distributed Cognitive Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",
         resourceClass = BrainResourceClass.HEAVY,
@@ -36,8 +46,8 @@ class LocalPCBrain(
         priority = 110,
         details =
             "Backend génératif distribué avec profils FAST/GENERAL/REASONING/CODE/CRITIC. " +
-                "Le modèle est une ressource cognitive interchangeable ; la sélection combine " +
-                "rôle demandé, télémétrie, performances mesurées et Resource Lease."
+                "Le prior matériel est maintenant corrigé par l'expérience Runtime Eval du profil " +
+                "sur chaque nœud, avec influence bornée et minimum de preuves."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
@@ -49,13 +59,22 @@ class LocalPCBrain(
         val preferredId = context.selfModel.preferredComputeNodeId
         val routing = JadeConfigRuntime.current().validated().routing
         val ranked = compatible
-            .sortedByDescending { candidate ->
-                NodeResourceScorer.generativeScore(
+            .map { candidate ->
+                RankedCandidate(
                     node = candidate,
-                    routing = routing,
-                    preferredNodeId = preferredId
+                    priorScore = NodeResourceScorer.generativeScore(
+                        node = candidate,
+                        routing = routing,
+                        preferredNodeId = preferredId
+                    ),
+                    evidence = AdaptiveBrainRouting.evidence(
+                        nodeId = candidate.nodeId,
+                        profile = brainPlan.profile,
+                        routing = routing
+                    )
                 )
             }
+            .sortedByDescending { it.score }
 
         if (ranked.isEmpty()) {
             error("Aucun nœud génératif en ligne n'annonce brain_chat.")
@@ -80,29 +99,30 @@ class LocalPCBrain(
             createdAt = System.currentTimeMillis()
         )
 
-        var selectedNode: GenesisNode? = null
+        var selected: RankedCandidate? = null
         var selectedLease: com.jadegenesis.mobile.resource.ResourceLease? = null
         val admissionFailures = mutableListOf<String>()
 
         for (candidate in ranked) {
             val admission = admissionController.tryAcquire(
                 request = admissionProbe,
-                node = candidate,
+                node = candidate.node,
                 budget = context.selfModel.resourceBudget
             )
             if (admission.admitted && admission.lease != null) {
-                selectedNode = candidate
+                selected = candidate
                 selectedLease = admission.lease
                 break
             }
             admissionFailures +=
-                "${candidate.name}: ${admission.action} ${admission.reason}"
+                "${candidate.node.name}: ${admission.action} ${admission.reason}"
         }
 
-        val node = selectedNode ?: error(
+        val selectedCandidate = selected ?: error(
             "Aucun nœud génératif n'a obtenu de Resource Lease. " +
                 admissionFailures.joinToString(" | ").take(700)
         )
+        val node = selectedCandidate.node
         val lease = selectedLease ?: error("Resource Lease génératif absent.")
 
         val payload = JSONObject().apply {
@@ -122,6 +142,22 @@ class LocalPCBrain(
             put("user_input", context.userInput.take(10_000))
             put("draft_response", context.draftResponse?.take(14_000) ?: "")
             put("review_note", context.reviewNote?.take(2_000) ?: "")
+            put(
+                "adaptive_routing",
+                JSONObject().apply {
+                    put("prior_score", selectedCandidate.priorScore)
+                    put("posterior_adjustment", selectedCandidate.evidence.adjustment)
+                    put("final_score", selectedCandidate.score)
+                    put("samples", selectedCandidate.evidence.samples)
+                    put("confidence", selectedCandidate.evidence.confidence)
+                    put("observed_success_rate", selectedCandidate.evidence.successRate)
+                    put("observed_average_duration_ms", selectedCandidate.evidence.averageDurationMs)
+                    put("observed_tokens_per_second", selectedCandidate.evidence.averageTokensPerSecond)
+                    put("observed_fallback_rate", selectedCandidate.evidence.fallbackRate)
+                    put("last_observed_model", selectedCandidate.evidence.lastModel)
+                    put("active", selectedCandidate.evidence.active)
+                }
+            )
             put(
                 "self",
                 JSONObject().apply {
@@ -221,14 +257,37 @@ class LocalPCBrain(
             )
         }.toString()
 
+        val evalStore = RuntimeEvalRuntime.currentOrNull()
+        val attemptedAt = System.currentTimeMillis()
         val response = try {
             nodeManager.executeTask(
                 nodeId = node.nodeId,
                 request = admissionProbe.copy(payload = payload)
             )
+        } catch (error: Exception) {
+            evalStore?.recordExecution(
+                request = admissionProbe,
+                node = node,
+                success = false,
+                durationMs = System.currentTimeMillis() - attemptedAt,
+                error = error.message,
+                brainProfile = brainPlan.profile.name.lowercase(),
+                createdAt = System.currentTimeMillis()
+            )
+            throw error
         } finally {
             admissionController.release(lease)
         }
+
+        evalStore?.recordExecution(
+            request = admissionProbe,
+            node = node,
+            success = true,
+            durationMs = response.durationMs,
+            output = response.output,
+            brainProfile = brainPlan.profile.name.lowercase(),
+            createdAt = System.currentTimeMillis()
+        )
 
         val json = JSONObject(response.output)
         val text = json.optString("text").trim()

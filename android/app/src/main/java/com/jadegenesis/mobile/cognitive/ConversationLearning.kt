@@ -44,23 +44,45 @@ object ConversationLearningPolicy {
         "la bonne réponse"
     )
 
-    private val positivePrefixes = listOf(
+    /**
+     * Ces formulations décrivent directement le résultat et peuvent être
+     * suivies d'un complément court ("maintenant", ":)", etc.).
+     */
+    private val positiveStatementPrefixes = listOf(
         "ca marche",
         "ca fonctionne",
         "ca a marche",
+        "c'est resolu",
+        "c est resolu",
+        "probleme resolu",
+        "merci ca marche",
+        "merci ca fonctionne"
+    )
+
+    /**
+     * Ces marqueurs sont trop ambigus pour être acceptés comme préfixes.
+     * Ils ne valident une réponse que lorsqu'ils constituent l'énoncé entier.
+     */
+    private val positiveStandaloneStatements = listOf(
         "c'est bon",
         "c est bon",
         "c'est ca",
         "c est ca",
-        "c'est resolu",
-        "c est resolu",
         "parfait",
         "resolu",
-        "probleme resolu",
-        "merci ca marche",
-        "merci ca fonctionne",
         "nickel",
         "super"
+    )
+
+    private val adversativeMarkers = listOf(
+        " mais ",
+        ", mais ",
+        " sauf que ",
+        ", sauf que ",
+        " par contre ",
+        ", par contre ",
+        " cependant ",
+        ", cependant "
     )
 
     private val stopWords = setOf(
@@ -93,6 +115,24 @@ object ConversationLearningPolicy {
                 confidence = 0.90
             )
         }
+
+        val positiveCandidate = stripPositiveLeadIn(statement)
+        if (startsLikePositive(positiveCandidate)) {
+            val containsNegativeTail = containsMarkerAnywhere(
+                positiveCandidate,
+                negativePrefixes
+            )
+            if (containsNegativeTail) {
+                return ConversationFeedbackSignal(
+                    kind = ConversationFeedbackKind.NEGATIVE,
+                    confidence = 0.94
+                )
+            }
+            if (containsAdversative(positiveCandidate)) {
+                return null
+            }
+        }
+
         if (isExplicitPositive(statement)) {
             return ConversationFeedbackSignal(
                 kind = ConversationFeedbackKind.POSITIVE,
@@ -151,8 +191,7 @@ object ConversationLearningPolicy {
             .trim()
 
     private fun isInterrogative(original: String, normalized: String): Boolean {
-        val trimmed = original.trim()
-        if (trimmed.endsWith('?')) return true
+        if ('?' in original) return true
         val questionStarts = listOf(
             "est-ce que ",
             "est ce que ",
@@ -175,6 +214,12 @@ object ConversationLearningPolicy {
         else -> value
     }
 
+    private fun stripPositiveLeadIn(value: String): String = when {
+        value.startsWith("oui, ") -> value.removePrefix("oui, ")
+        value.startsWith("oui ") -> value.removePrefix("oui ")
+        else -> value
+    }
+
     private fun matchesAnchored(value: String, prefixes: List<String>): Boolean =
         prefixes.map(::normalize).any { marker ->
             value == marker ||
@@ -184,8 +229,36 @@ object ConversationLearningPolicy {
                 value.startsWith("$marker;")
         }
 
+    private fun containsMarkerAnywhere(value: String, markers: List<String>): Boolean =
+        markers.map(::normalize).any { marker -> marker in value }
+
+    private fun containsAdversative(value: String): Boolean {
+        val padded = " $value "
+        return adversativeMarkers.any { marker -> marker in padded }
+    }
+
+    private fun startsLikePositive(value: String): Boolean {
+        val standalone = positiveStandaloneStatements.map(::normalize)
+        val prefixes = positiveStatementPrefixes.map(::normalize)
+        return standalone.any { marker ->
+            value == marker ||
+                value.startsWith("$marker ") ||
+                value.startsWith("$marker,") ||
+                value.startsWith("$marker:") ||
+                value.startsWith("$marker;")
+        } || prefixes.any { marker ->
+            value == marker ||
+                value.startsWith("$marker ") ||
+                value.startsWith("$marker,") ||
+                value.startsWith("$marker:") ||
+                value.startsWith("$marker;")
+        }
+    }
+
     private fun isExplicitPositive(statement: String): Boolean {
-        val candidates = listOf(statement, statement.removePrefix("oui, "), statement.removePrefix("oui "))
-        return candidates.any { candidate -> matchesAnchored(candidate, positivePrefixes) }
+        val candidate = stripPositiveLeadIn(statement)
+        val standalone = positiveStandaloneStatements.map(::normalize)
+        if (standalone.any { marker -> candidate == marker }) return true
+        return matchesAnchored(candidate, positiveStatementPrefixes)
     }
 }

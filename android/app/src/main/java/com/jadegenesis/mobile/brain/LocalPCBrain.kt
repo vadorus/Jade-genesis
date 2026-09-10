@@ -80,11 +80,12 @@ class LocalPCBrain(
             error("Aucun nœud génératif en ligne n'annonce brain_chat.")
         }
 
-        val memories = context.memories
-            .sortedBy {
-                if (it.source.startsWith("JADE_CONSOLIDATION_")) 1 else 0
-            }
-            .take(10)
+        // MemoryStore.latestForContext() already prepares a bounded cognitive
+        // mix with reserved USER and JADE_CONSOLIDATION slots. Do not reorder
+        // consolidated knowledge behind volatile observations here: the old
+        // sort + take(10) could discard exactly the durable knowledge produced
+        // by the night consolidation cycle.
+        val memories = context.memories.take(10)
 
         val taskId = "brain-${UUID.randomUUID()}"
         val admissionProbe = DistributedTaskRequest(

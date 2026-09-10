@@ -87,7 +87,13 @@ data class RuntimeEvalReport(
     val score: Double,
     val confidence: Double,
     val outcomeFeedbackCount: Int = 0,
-    val overallOutcomeQuality: Double = 0.0
+    val overallOutcomeQuality: Double = 0.0,
+    /**
+     * Score avant la borne UI 0..100. L'UI et le routage peuvent continuer à
+     * utiliser score, tandis qu'Evolution compare rawScore pour ne pas perdre
+     * l'information lorsqu'un champion atteint déjà 100.
+     */
+    val rawScore: Double = score
 )
 
 object RuntimeEvalEngine {
@@ -189,12 +195,12 @@ object RuntimeEvalEngine {
         } else {
             successes.toDouble() / ordered.size.toDouble()
         }
-        val weightedScore = if (groups.isEmpty()) {
+        val weightedRawScore = if (groups.isEmpty()) {
             0.0
         } else {
             val totalWeight = groups.sumOf { it.samples }.coerceAtLeast(1)
             groups.sumOf { stats ->
-                normalizedGroupScore(stats, routing) * stats.samples.toDouble()
+                rawGroupScore(stats, routing) * stats.samples.toDouble()
             } / totalWeight.toDouble()
         }
         val confidence = (
@@ -210,10 +216,11 @@ object RuntimeEvalEngine {
             successfulObservations = successes,
             overallSuccessRate = successRate,
             groups = groups,
-            score = weightedScore.coerceIn(0.0, 100.0),
+            score = weightedRawScore.coerceIn(0.0, 100.0),
             confidence = confidence,
             outcomeFeedbackCount = overallOutcome.samples,
-            overallOutcomeQuality = overallOutcome.quality
+            overallOutcomeQuality = overallOutcome.quality,
+            rawScore = weightedRawScore
         )
     }
 
@@ -389,7 +396,12 @@ object RuntimeEvalEngine {
         )
     }
 
-    private fun normalizedGroupScore(
+    /**
+     * Score objectif avant saturation d'affichage. Le maximum théorique peut
+     * dépasser 100 grâce à Outcome Quality. Le Runtime Report publie à la fois
+     * ce score brut pour Evolution et une vue bornée 0..100 pour le reste.
+     */
+    private fun rawGroupScore(
         stats: RuntimeEvalStats,
         routing: RoutingTuning
     ): Double {
@@ -409,10 +421,8 @@ object RuntimeEvalEngine {
         val fallbackPenalty = stats.fallbackRate * 10.0
         val outcomeQuality = stats.outcomeQualityScore *
             stats.outcomeConfidence * 15.0
-        return (
-            reliability + latency + throughput -
-                fallbackPenalty + outcomeQuality
-            ).coerceIn(0.0, 100.0)
+        return reliability + latency + throughput -
+            fallbackPenalty + outcomeQuality
     }
 
     private fun percentile90(values: List<Long>): Long {

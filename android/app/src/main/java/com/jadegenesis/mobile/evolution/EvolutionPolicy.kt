@@ -16,11 +16,26 @@ object EvolutionPolicy {
         scenarioSetId = scenarioSetId,
         observationCount = report.observationCount,
         overallSuccessRate = report.overallSuccessRate,
-        score = report.score,
-        confidence = report.confidence,
+        // Evolution intentionally compares the unsaturated objective score.
+        // The bounded report.score remains suitable for UI/health displays.
+        score = report.rawScore,
+        // Do not reuse Runtime Eval's 12-sample routing confidence here: that
+        // made the Evolution confidence gate automatically true as soon as the
+        // minimum trial size was reached. Evolution has its own evidence curve.
+        confidence = evidenceConfidence(report.observationCount),
         evidenceSha256 = evidenceSha256,
         generatedAt = report.generatedAt
     )
+
+    fun evidenceConfidence(observationCount: Int): Double {
+        if (observationCount < SafetyPolicy.MIN_EVOLUTION_TRIAL_SAMPLES) {
+            return 0.0
+        }
+        return (
+            observationCount.toDouble() /
+                SafetyPolicy.STRONG_EVOLUTION_EVIDENCE_SAMPLES.toDouble()
+            ).coerceIn(0.0, 1.0)
+    }
 
     fun compare(
         baseline: EvolutionEvidenceSnapshot,
@@ -52,7 +67,7 @@ object EvolutionPolicy {
             !enoughEvidence ->
                 "Échantillon insuffisant pour une promotion objective."
             !confidenceSatisfied ->
-                "Confiance Runtime Eval insuffisante pour une promotion."
+                "Confiance Evolution insuffisante pour une promotion."
             !successRateProtected ->
                 "Le challenger régresse trop en fiabilité."
             !scoreImproved ->

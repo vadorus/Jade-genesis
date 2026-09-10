@@ -53,6 +53,8 @@ class MemoryLifecycleManager(context: Context) {
         private const val KEY_CURSOR_CREATED_AT = "consolidation_cursor_created_at_v2"
         private const val KEY_CURSOR_ID = "consolidation_cursor_id_v2"
         private const val KEY_LAST_RETENTION_DELETED = "last_retention_deleted_v2"
+        private const val KEY_LAST_EXACT_DUPLICATES_SUPERSEDED =
+            "last_exact_duplicates_superseded_v3"
 
         private val STOP_WORDS = setOf(
             "le", "la", "les", "un", "une", "des", "de", "du",
@@ -79,6 +81,9 @@ class MemoryLifecycleManager(context: Context) {
 
     fun lastRetentionDeletedCount(): Int =
         prefs.getInt(KEY_LAST_RETENTION_DELETED, 0).coerceAtLeast(0)
+
+    fun lastExactDuplicatesSupersededCount(): Int =
+        prefs.getInt(KEY_LAST_EXACT_DUPLICATES_SUPERSEDED, 0).coerceAtLeast(0)
 
     /**
      * Le paramètre memories est conservé pour compatibilité avec le Core 0.1.7.1,
@@ -261,6 +266,13 @@ class MemoryLifecycleManager(context: Context) {
             "Le curseur mémoire ne peut pas reculer."
         }
 
+        // Une consolidation réellement réussie peut faire disparaître de la
+        // mémoire active les doublons textuels exacts du lot. Les contradictions
+        // approximatives restent seulement OBSOLETE_CANDIDATE et ne sont jamais
+        // supprimées automatiquement.
+        val exactDuplicatesSuperseded =
+            store.supersedeExactDuplicates(analysis.sourceIds.toList())
+
         prefs.edit()
             .putString(KEY_LAST_FINGERPRINT, analysis.sourceFingerprint)
             .putStringSet(KEY_LAST_SOURCE_IDS, analysis.sourceIds)
@@ -269,6 +281,10 @@ class MemoryLifecycleManager(context: Context) {
             .putString(KEY_LAST_RESULT_SHA256, resultSha256)
             .putLong(KEY_CURSOR_CREATED_AT, lastProcessedCreatedAt)
             .putString(KEY_CURSOR_ID, lastProcessedId)
+            .putInt(
+                KEY_LAST_EXACT_DUPLICATES_SUPERSEDED,
+                exactDuplicatesSuperseded
+            )
             .apply()
 
         val retention = store.applyRetention(

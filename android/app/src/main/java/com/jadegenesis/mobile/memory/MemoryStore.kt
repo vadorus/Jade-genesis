@@ -56,13 +56,31 @@ class MemoryStore(private val dao: MemoryDao) {
 
     /**
      * Mémoire réellement injectée dans un contexte de raisonnement.
-     * Ces éléments sont marqués comme rappelés afin que la rétention puisse
-     * distinguer une mémoire utile d'un simple événement ancien.
+     *
+     * Le contexte ne doit pas être composé uniquement des événements les plus
+     * récents : un flux visuel ou de télémétrie pouvait auparavant repousser le
+     * savoir consolidé hors de la fenêtre. On réserve donc de petits quotas aux
+     * faits USER et aux connaissances JADE_CONSOLIDATION, puis on remplit le
+     * reste avec les souvenirs actifs les plus récents. Seuls les éléments
+     * réellement retournés sont marqués comme rappelés.
      */
     suspend fun latestForContext(limit: Int = 20): List<MemorySnapshot> {
-        val entities = dao.latest(limit.coerceAtLeast(1))
-        val recalledAt = markRecalled(entities)
-        return entities.map { entity ->
+        val safeLimit = limit.coerceIn(1, SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
+        val protectedQuota = (safeLimit / 4).coerceAtLeast(1).coerceAtMost(2)
+        val userFacts = dao.latestUserFacts(protectedQuota)
+        val consolidated = dao.latestConsolidated(protectedQuota)
+        val recentWindow = (safeLimit * 3)
+            .coerceAtMost(SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
+        val recent = dao.latest(recentWindow)
+
+        val selectedById = linkedMapOf<String, MemoryEntity>()
+        userFacts.forEach { selectedById.putIfAbsent(it.id, it) }
+        consolidated.forEach { selectedById.putIfAbsent(it.id, it) }
+        recent.forEach { selectedById.putIfAbsent(it.id, it) }
+
+        val selected = selectedById.values.take(safeLimit)
+        val recalledAt = markRecalled(selected)
+        return selected.map { entity ->
             entity.toSnapshot(
                 recalledAtOverride = recalledAt,
                 recallCountOverride = entity.recallCount + 1
@@ -115,9 +133,50 @@ class MemoryStore(private val dao: MemoryDao) {
     }
 
     /**
+     * Après une consolidation réussie, retire de la mémoire active uniquement
+     * les doublons textuels exacts du lot traité. Ce n'est PAS une vérification
+     * sémantique : aucune contradiction approximative n'est supprimée ici.
+     * Les faits USER ne sont jamais auto-superseded.
+     */
+    suspend fun supersedeExactDuplicates(ids: List<String>): Int {
+        val cleanIds = ids.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.size < 2) return 0
+
+        val active = dao.activeByIds(cleanIds)
+        val groups = active.groupBy { entity ->
+            "${entity.type}|${normalizeExactDuplicateText(entity.content)}"
+        }.values.filter { group ->
+            group.size > 1 && normalizeExactDuplicateText(group.first().content).isNotBlank()
+        }
+
+        var superseded = 0
+        groups.forEach { group ->
+            val survivor = group.maxWith(
+                compareBy<MemoryEntity> { it.source == "USER" }
+                    .thenBy { it.verifiedAt != null }
+                    .thenBy { it.confidence }
+                    .thenBy { it.createdAt }
+                    .thenBy { it.id }
+            )
+            group
+                .filter { it.id != survivor.id && it.source != "USER" }
+                .forEach { duplicate ->
+                    dao.markSuperseded(duplicate.id, survivor.id)
+                    superseded += 1
+                }
+        }
+        return superseded
+    }
+
+    /**
      * Purge uniquement ce que le cycle de consolidation a déjà dépassé.
      * Les faits USER, mémoires vérifiées, fortement rappelées ou trop confiantes
      * restent protégés par la requête DAO et par les plafonds SafetyPolicy.
+     *
+     * Les captures visuelles sont des observations transitoires : elles disposent
+     * d'un plafond de rétention dédié, compilé et conservateur, afin qu'une
+     * confiance de perception standard (0.68 aujourd'hui) ne rende pas ces
+     * instantanés immortels.
      */
     suspend fun applyRetention(
         processedThroughCreatedAt: Long,
@@ -172,6 +231,8 @@ class MemoryStore(private val dao: MemoryDao) {
                 cutoffCreatedAt = ephemeralCutoff,
                 recallProtectionCount = safeRecallProtection,
                 maxConfidence = safeConfidence,
+                maxTransientVisionConfidence =
+                    SafetyPolicy.MAX_TRANSIENT_VISION_RETENTION_CONFIDENCE,
                 limit = remaining
             )
         }
@@ -200,6 +261,9 @@ class MemoryStore(private val dao: MemoryDao) {
         dao.markRecalled(ids, recalledAt)
         return recalledAt
     }
+
+    private fun normalizeExactDuplicateText(text: String): String =
+        text.trim().lowercase().replace(Regex("\\s+"), " ")
 
     private fun daysToMillis(days: Int): Long =
         days.toLong().coerceAtLeast(1L) * 24L * 60L * 60L * 1_000L

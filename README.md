@@ -4,11 +4,11 @@ Jade Genesis is an experimental personal AI architecture built around one persis
 
 The project is **not** designed around a single permanent LLM as Jade's identity or central brain. Local and external language/vision models are intended to remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, evaluate outcomes, consolidate useful evidence and progressively retain reusable strategies and skills under explicit safety boundaries.
 
-> Current Android product version on this branch: **0.1.20** (`versionCode 37`)
+> Current Android product version on this branch: **0.1.20.1** (`versionCode 38`)
 >
 > Current dependency-free Node Runtime version: **0.1.7** / protocol `jade-genesis-node/0.0.6`
 >
-> Status: **experimental / personal research project**. Jade can now execute approved deterministic procedures, but it does not yet autonomously synthesize and promote model-generated skills.
+> Status: **experimental / personal research project**. Jade can execute approved deterministic procedures. 0.1.20.1 hardens the existing cognitive plumbing before autonomous Skill synthesis is attempted.
 
 ## What exists today
 
@@ -29,9 +29,9 @@ The repository contains working foundations for:
 - a single-use aggregate sealed final-exam path for deterministic skills;
 - GitHub Actions that compile/test Android and validate the Node Runtime.
 
-## Important limits in 0.1.20
+## Important limits
 
-Jade 0.1.20 must not be confused with autonomous general learning.
+Jade must not yet be confused with autonomous general learning.
 
 - only `DEVELOPER`-authored SkillSpecs are executable;
 - `EXTERNAL_TEACHER` and future generated SkillSpecs remain non-executable;
@@ -41,8 +41,9 @@ Jade 0.1.20 must not be confused with autonomous general learning.
 - the Procedure Runtime is **not** exposed as an arbitrary remote task;
 - Skill Registry registration/activation is not automatic and activation requires explicit approval;
 - adaptive strategies still cannot automatically rewrite production code or mutate model weights;
+- the Android Evolution Engine is intentionally **not wired to autonomous proposal/testing/promotion** in 0.1.20.1;
 - the restricted interpreter is an in-process interpreter, **not** an OS/container security sandbox for hostile native code;
-- autonomous gap detection, synthesis, promotion and broad recall are planned for later milestones.
+- autonomous gap detection, Skill synthesis, promotion and broad recall remain future work.
 
 ## Repository layout
 
@@ -78,6 +79,36 @@ flowchart LR
 
 Detailed architecture: [`docs/ARCHITECTURE_OVERVIEW.md`](docs/ARCHITECTURE_OVERVIEW.md).
 
+## Cognitive plumbing hardening — 0.1.20.1
+
+A code audit after 0.1.20 found several places where state existed but did not reliably reach later decisions. 0.1.20.1 fixes those paths before autonomous synthesis is enabled.
+
+### Durable memory reaches the brain
+
+`MemoryStore.latestForContext()` now reserves bounded slots for active USER facts and `JADE_CONSOLIDATION_*` knowledge before filling the remaining context with recent memories. `LocalPCBrain` preserves that ordering instead of pushing consolidated knowledge behind recent observations before truncation.
+
+This means a busy stream of recent visual/operational memories can no longer automatically evict all consolidated knowledge from the model payload.
+
+### Memory lifecycle performs conservative cleanup
+
+After a **successful consolidation**, exact textual duplicates in the processed batch can now be marked superseded. USER facts are never automatically superseded. Heuristic contradictions remain candidates only; they are not automatically deleted or declared false.
+
+Old transient `VISION_*` observations also use a separate compiled retention ceiling so the normal visual confidence value does not make temporary screenshots immortal after the configured retention period.
+
+### Shared State cache resists operational churn
+
+The phone cache now coalesces the latest operational snapshots by `(originNode, kind, entityId)` for the seven high-frequency snapshot kinds. Durable/non-operational events continue to deduplicate only by event ID. This prevents continuously regenerated snapshot UUIDs from consuming the entire bounded cache and preferentially evicting rarer Night Learning/VPS events.
+
+### Evolution metrics are no longer self-neutralizing
+
+Evolution evidence now has its own confidence curve: the 12-observation minimum gives only 0.5 confidence, the 0.75 gate is reached at 18 observations, and strong evidence reaches 1.0 at 24 observations.
+
+Runtime Eval also retains an **unsaturated `rawScore`** for Evolution comparison while keeping the normal display/routing score bounded to 0..100. A champion displayed at 100 can therefore still be compared to a genuinely better challenger instead of making `+2` mathematically impossible.
+
+These fixes make the guard rails meaningful, but they do **not** activate the dormant Evolution Engine automatically.
+
+See [`docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md).
+
 ## Learning trajectory
 
 The learning-related stack deliberately separates evidence, governance, executable capability and future autonomous acquisition:
@@ -93,8 +124,9 @@ experience
   -> SkillSpec
   -> restricted deterministic execution       [0.1.20]
   -> developer-approved registry/reuse         [0.1.20]
+  -> cognitive plumbing hardening              [0.1.20.1]
   -> frozen candidate + sealed final exam      [0.1.20 substrate]
-  -> autonomous synthesis/promotion/recall     [future 0.1.21+]
+  -> autonomous synthesis + minimal recall     [future 0.1.21]
 ```
 
 The first convincing autonomous-learning proof must require Jade to acquire a capability whose final SkillSpec body was not written by the developer, survive restart, retrieve that retained skill for a new matching task and execute it successfully without asking the teaching LLM to solve the task again.
@@ -102,8 +134,6 @@ The first convincing autonomous-learning proof must require Jade to acquire a ca
 ### SEALED_TEST anti-oracle boundary
 
 `SEALED_TEST` is treated as a final examination rather than iterative training feedback.
-
-In 0.1.20:
 
 - individual sealed cases cannot be queried through the normal case evaluator;
 - the hidden set is committed with a private random nonce;
@@ -120,13 +150,13 @@ The hidden cases still live in the local ledger state file, so future 0.1.21 syn
 
 `node-agent/procedure_runtime.py` interprets only normalized `JADE_PROCEDURE_DSL_V1` ASTs. The language is intentionally small and deterministic: bounded JSON input/literals, object/array construction, field/index access, basic string transformations, arithmetic, comparisons, boolean operators and conditional execution.
 
-There are no loop, recursion, import, dynamic-code, shell, process, filesystem or network primitives. Skill-to-Skill dependencies are rejected in this milestone.
+There are no loop, recursion, import, dynamic-code, shell, process, filesystem or network primitives. Skill-to-Skill dependencies are rejected.
 
 Execution reports deterministic resource accounting (`steps`, `cost_units`) and fails closed on invalid types, missing values, division/modulo by zero, non-finite numbers or resource-limit violations.
 
 See [`docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`](docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md).
 
-## Skill Registry — 0.1.20
+## Skill Registry
 
 The restricted Skill Registry persists approved developer procedures and proves the causal path:
 
@@ -140,7 +170,7 @@ SkillSpec
 -> persistence across restart
 ```
 
-This registry is deliberately separate from the Adaptive Strategy Registry. It does not accept generated/external-teacher skills in 0.1.20, does not fuzzy-match tasks and does not use an LLM for selection.
+This registry is deliberately separate from the Adaptive Strategy Registry. It does not accept generated/external-teacher skills, does not fuzzy-match tasks and does not use an LLM for selection.
 
 ## Android
 
@@ -161,7 +191,7 @@ The phone application already exposes Jade's identity, UI, local state and distr
 
 ## Build / reproducibility
 
-Canonical Android CI currently runs real tests and debug/release assembly with Gradle 9.6.0.
+Canonical Android CI runs real tests and debug/release assembly with Gradle 9.6.0.
 
 ```bash
 gradle --no-daemon --stacktrace --console=plain -p android \
@@ -196,7 +226,7 @@ See [`node-agent/README.md`](node-agent/README.md).
 
 ## CI and verification policy
 
-The repository currently validates Android and the dependency-free Python Node Runtime with GitHub Actions. A green check alone is not considered sufficient evidence for a release: verification should also confirm the exact commit, Android version/package/debuggable state, signing identity when applicable, evaluation results and that validation did not rewrite tracked sources.
+The repository validates Android and the dependency-free Python Node Runtime with GitHub Actions. A green check alone is not considered sufficient evidence for a release: verification should also confirm the exact commit, Android version/package/debuggable state, signing identity when applicable, evaluation results and that validation did not rewrite tracked sources.
 
 ## Versioning and distribution
 
@@ -211,7 +241,8 @@ version -> Git tag -> exact source commit -> successful CI -> signed artifact ->
 ## Roadmap
 
 - **0.1.19 — Verifiable Task Ledger + SkillSpec:** machine-verifiable datasets and declarative skill payload. Implemented.
-- **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry, exact-family reuse and sealed final-exam hardening. Current milestone.
+- **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry, exact-family reuse and sealed final-exam hardening. Implemented and validated on `main`.
+- **0.1.20.1 — Cognitive Plumbing Hardening:** durable memory delivery, conservative lifecycle cleanup, Shared State cache compaction and meaningful Evolution metrics. Current hardening milestone.
 - **0.1.21 — Skill Synthesis + minimal recall proof:** gap/goal, external teacher proposal, visible training/validation, frozen candidate, sealed exam, persistence, restart and reuse without an LLM solving the final task.
 - **0.1.22 — Retrieval quality / confidence / lifecycle:** multiple-skill selection, abstention, regression, rollback, pruning and maintenance.
 - **0.1.23+ — Composition / generalisation:** controlled Skill-to-Skill composition and broader transfer tests after the single-skill safety model is proven.

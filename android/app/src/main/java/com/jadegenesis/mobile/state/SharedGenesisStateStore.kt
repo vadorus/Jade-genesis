@@ -34,7 +34,9 @@ class SharedGenesisStateStore(context: Context) {
             createdAt = createdAt.coerceAtLeast(0L)
         )
         val existing = loadEvents(KEY_OUTBOX, KEY_OUTBOX_BACKUP)
-        val current = if (event.kind in COALESCED_OPERATIONAL_KINDS) {
+        val current = if (
+            event.kind in SharedStateCachePolicy.COALESCED_OPERATIONAL_KINDS
+        ) {
             existing.filterNot {
                 it.originNode == event.originNode &&
                     it.kind == event.kind &&
@@ -116,17 +118,20 @@ class SharedGenesisStateStore(context: Context) {
         )
 
         val currentCache = if (response.resetRequired) {
-            response.snapshot
+            SharedStateCachePolicy.compact(
+                response.snapshot,
+                SafetyPolicy.MAX_SHARED_STATE_CACHE_EVENTS
+            )
         } else {
-            mergeCache(
-                loadEvents(KEY_CACHE, KEY_CACHE_BACKUP),
-                response.events
+            SharedStateCachePolicy.compact(
+                loadEvents(KEY_CACHE, KEY_CACHE_BACKUP) + response.events,
+                SafetyPolicy.MAX_SHARED_STATE_CACHE_EVENTS
             )
         }
         saveEvents(
             KEY_CACHE,
             KEY_CACHE_BACKUP,
-            currentCache.takeLast(SafetyPolicy.MAX_SHARED_STATE_CACHE_EVENTS)
+            currentCache
         )
 
         prefs.edit()
@@ -149,25 +154,6 @@ class SharedGenesisStateStore(context: Context) {
             hasMore = response.hasMore,
             resetApplied = response.resetRequired,
             syncedAt = syncedAt.coerceAtLeast(0L)
-        )
-    }
-
-    private fun mergeCache(
-        current: List<SharedStateEvent>,
-        incoming: List<SharedStateEvent>
-    ): List<SharedStateEvent> {
-        if (incoming.isEmpty()) return current
-        val byId = linkedMapOf<String, SharedStateEvent>()
-        (current + incoming).forEach { event ->
-            val previous = byId[event.eventId]
-            if (previous == null || event.serverRevision >= previous.serverRevision) {
-                byId[event.eventId] = event
-            }
-        }
-        return byId.values.sortedWith(
-            compareBy<SharedStateEvent> { it.serverRevision }
-                .thenBy { it.createdAt }
-                .thenBy { it.eventId }
         )
     }
 
@@ -213,15 +199,6 @@ class SharedGenesisStateStore(context: Context) {
         private const val KEY_CACHE_BACKUP = "cache_v1_backup"
         private const val KEY_KNOWN_REVISION = "known_server_revision_v1"
         private const val KEY_LAST_SYNC_AT = "last_sync_at_v1"
-        private val COALESCED_OPERATIONAL_KINDS = setOf(
-            "identity_presence",
-            "config_snapshot",
-            "phone_node_snapshot",
-            "memory_cursor",
-            "resource_lease_snapshot",
-            "runtime_eval_snapshot",
-            "evolution_snapshot"
-        )
     }
 }
 

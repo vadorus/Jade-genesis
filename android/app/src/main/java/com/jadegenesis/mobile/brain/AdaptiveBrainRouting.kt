@@ -7,12 +7,15 @@ import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.eval.RuntimeEvalStats
 
 /**
- * Combine le prior matériel du routeur avec l'expérience réellement mesurée.
+ * Combine le prior matériel avec l'expérience réellement mesurée.
  *
- * Ce module n'évalue pas encore la qualité sémantique d'une réponse. Il apprend
- * uniquement la fiabilité opérationnelle d'un profil cognitif sur un nœud :
- * succès/échec, latence, débit et fallback. Avant le nombre minimum de preuves,
- * il n'influence pas du tout le choix.
+ * Depuis 0.1.16, le posterior distingue deux familles de preuves :
+ * - opérationnelles : succès d'exécution, latence, débit, fallback ;
+ * - outcome : validation, rejet ou correction explicite de la réponse par
+ *   l'utilisateur, rattachée à l'observation exacte qui a produit la réponse.
+ *
+ * Chaque famille possède son propre minimum de preuves et l'ajustement final
+ * reste borné par SafetyPolicy.
  */
 data class AdaptiveBrainEvidence(
     val nodeId: String,
@@ -24,11 +27,19 @@ data class AdaptiveBrainEvidence(
     val averageTokensPerSecond: Double,
     val fallbackRate: Double,
     val lastModel: String,
+    val outcomeSamples: Int,
+    val outcomeConfidence: Double,
+    val outcomeQualityScore: Double,
+    val positiveOutcomes: Int,
+    val negativeOutcomes: Int,
+    val corrections: Int,
     val adjustment: Double
 ) {
     val active: Boolean
-        get() = samples >= SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES &&
-            adjustment != 0.0
+        get() = (
+            samples >= SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES ||
+                outcomeSamples >= SafetyPolicy.MIN_RUNTIME_EVAL_OUTCOME_SAMPLES
+            ) && adjustment != 0.0
 }
 
 object AdaptiveBrainRouting {
@@ -66,6 +77,12 @@ object AdaptiveBrainRouting {
             averageTokensPerSecond = stats?.averageTokensPerSecond ?: 0.0,
             fallbackRate = stats?.fallbackRate ?: 0.0,
             lastModel = stats?.model.orEmpty(),
+            outcomeSamples = stats?.outcomeSamples ?: 0,
+            outcomeConfidence = stats?.outcomeConfidence ?: 0.0,
+            outcomeQualityScore = stats?.outcomeQualityScore ?: 0.0,
+            positiveOutcomes = stats?.positiveOutcomes ?: 0,
+            negativeOutcomes = stats?.negativeOutcomes ?: 0,
+            corrections = stats?.corrections ?: 0,
             adjustment = bounded
         )
     }

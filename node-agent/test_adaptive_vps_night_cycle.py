@@ -56,7 +56,19 @@ class FakeLearningLab:
             "automatic_promotion": False,
             "production_code_rewrite": False,
             "shell_execution": False,
+            "raw_conversation_text_used": False,
+            "user_feedback_promoted_to_external_fact": False,
         }
+
+
+class UnsafeLearningLab(FakeLearningLab):
+    def __init__(self, unsafe_field: str):
+        self.unsafe_field = unsafe_field
+
+    def review(self, view: dict, now_ms: int | None = None) -> dict:
+        result = super().review(view, now_ms)
+        result[self.unsafe_field] = True
+        return result
 
 
 class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
@@ -135,7 +147,7 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
             "events": events,
         })
 
-    def supervisor(self) -> AdaptiveVpsNightCycleSupervisor:
+    def supervisor(self, learning_lab=None) -> AdaptiveVpsNightCycleSupervisor:
         return AdaptiveVpsNightCycleSupervisor(
             config={
                 "node_id": "vps-test",
@@ -144,7 +156,7 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
             },
             state_store=self.state,
             journal=self.journal,
-            learning_lab=FakeLearningLab(),
+            learning_lab=learning_lab or FakeLearningLab(),
             strategy_registry=self.registry,
         )
 
@@ -182,6 +194,7 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual(0, payload["active_strategy_count"])
         self.assertEqual("balanced", payload["entries"][0]["scope"]["brain_profile"])
         self.assertFalse(payload["raw_conversation_text_stored"])
+        self.assertFalse(payload["user_feedback_promoted_to_external_fact"])
         self.assertFalse(payload["automatic_activation"])
         self.assertFalse(payload["automatic_promotion"])
         self.assertFalse(payload["model_weight_mutation"])
@@ -197,6 +210,36 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
         snapshot = self.registry.snapshot("jade-test")
         self.assertEqual(1, snapshot["strategy_count"])
         self.assertEqual(1, snapshot["entries"][0]["evidence_count"])
+
+    def test_raw_conversation_learning_snapshot_is_rejected_fail_closed(self) -> None:
+        result = self.supervisor(
+            UnsafeLearningLab("raw_conversation_text_used")
+        ).run_once(now_ms=self.now)
+
+        self.assertEqual("SUCCESS", result["status"])
+        self.assertEqual("ERROR", result["strategy_registry_status"])
+        self.assertEqual("ValueError", result["strategy_registry_error"])
+        self.assertFalse(result["strategy_activation_performed"])
+        self.assertFalse(result["strategy_promotion_performed"])
+        self.assertEqual(0, self.registry.snapshot("jade-test")["strategy_count"])
+        shared = [
+            item for item in self.state.supervision_view()["entities"]
+            if item.get("kind") == "vps_maintenance_snapshot"
+            and item.get("entity_id") == "adaptive-strategy-registry"
+        ]
+        self.assertEqual([], shared)
+
+    def test_feedback_promoted_to_external_fact_is_rejected_fail_closed(self) -> None:
+        result = self.supervisor(
+            UnsafeLearningLab("user_feedback_promoted_to_external_fact")
+        ).run_once(now_ms=self.now)
+
+        self.assertEqual("SUCCESS", result["status"])
+        self.assertEqual("ERROR", result["strategy_registry_status"])
+        self.assertEqual("ValueError", result["strategy_registry_error"])
+        self.assertFalse(result["strategy_activation_performed"])
+        self.assertFalse(result["strategy_promotion_performed"])
+        self.assertEqual(0, self.registry.snapshot("jade-test")["strategy_count"])
 
     def test_status_exposes_registry_without_claiming_automatic_promotion(self) -> None:
         status = self.supervisor().status()

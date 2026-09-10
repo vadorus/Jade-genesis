@@ -60,8 +60,9 @@ object ConversationLearningPolicy {
     )
 
     /**
-     * Ces marqueurs sont trop ambigus pour être acceptés comme préfixes.
-     * Ils ne valident une réponse que lorsqu'ils constituent l'énoncé entier.
+     * Ces marqueurs sont trop ambigus pour être acceptés comme simples préfixes.
+     * Ils valident seuls, ou lorsqu'ils introduisent ensuite une vraie proposition
+     * positive reconnue (ex. "parfait, ça marche maintenant").
      */
     private val positiveStandaloneStatements = listOf(
         "c'est bon",
@@ -259,6 +260,16 @@ object ConversationLearningPolicy {
         val candidate = stripPositiveLeadIn(statement)
         val standalone = positiveStandaloneStatements.map(::normalize)
         if (standalone.any { marker -> candidate == marker }) return true
-        return matchesAnchored(candidate, positiveStatementPrefixes)
+        if (matchesAnchored(candidate, positiveStatementPrefixes)) return true
+
+        return standalone.any { marker ->
+            val remainder = when {
+                candidate.startsWith("$marker, ") -> candidate.removePrefix("$marker, ")
+                candidate.startsWith("$marker: ") -> candidate.removePrefix("$marker: ")
+                candidate.startsWith("$marker; ") -> candidate.removePrefix("$marker; ")
+                else -> null
+            }
+            remainder != null && matchesAnchored(remainder, positiveStatementPrefixes)
+        }
     }
 }

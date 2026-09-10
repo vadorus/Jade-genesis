@@ -133,6 +133,42 @@ class MemoryStore(private val dao: MemoryDao) {
     }
 
     /**
+     * Après une consolidation réussie, retire de la mémoire active uniquement
+     * les doublons textuels exacts du lot traité. Ce n'est PAS une vérification
+     * sémantique : aucune contradiction approximative n'est supprimée ici.
+     * Les faits USER ne sont jamais auto-superseded.
+     */
+    suspend fun supersedeExactDuplicates(ids: List<String>): Int {
+        val cleanIds = ids.filter { it.isNotBlank() }.distinct()
+        if (cleanIds.size < 2) return 0
+
+        val active = dao.activeByIds(cleanIds)
+        val groups = active.groupBy { entity ->
+            "${entity.type}|${normalizeExactDuplicateText(entity.content)}"
+        }.values.filter { group ->
+            group.size > 1 && normalizeExactDuplicateText(group.first().content).isNotBlank()
+        }
+
+        var superseded = 0
+        groups.forEach { group ->
+            val survivor = group.maxWith(
+                compareBy<MemoryEntity> { it.source == "USER" }
+                    .thenBy { it.verifiedAt != null }
+                    .thenBy { it.confidence }
+                    .thenBy { it.createdAt }
+                    .thenBy { it.id }
+            )
+            group
+                .filter { it.id != survivor.id && it.source != "USER" }
+                .forEach { duplicate ->
+                    dao.markSuperseded(duplicate.id, survivor.id)
+                    superseded += 1
+                }
+        }
+        return superseded
+    }
+
+    /**
      * Purge uniquement ce que le cycle de consolidation a déjà dépassé.
      * Les faits USER, mémoires vérifiées, fortement rappelées ou trop confiantes
      * restent protégés par la requête DAO et par les plafonds SafetyPolicy.
@@ -225,6 +261,9 @@ class MemoryStore(private val dao: MemoryDao) {
         dao.markRecalled(ids, recalledAt)
         return recalledAt
     }
+
+    private fun normalizeExactDuplicateText(text: String): String =
+        text.trim().lowercase().replace(Regex("\\s+"), " ")
 
     private fun daysToMillis(days: Int): Long =
         days.toLong().coerceAtLeast(1L) * 24L * 60L * 60L * 1_000L

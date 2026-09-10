@@ -2,6 +2,8 @@
 
 Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. The runtime stays dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
 
+The Node Runtime internal version is intentionally independent from the Android product version. Current Android product version is 0.1.19.
+
 ## Start
 
 From the `node-agent` directory:
@@ -20,7 +22,7 @@ The node ID, pairing token, port, node kind and runtime configuration are persis
 
 ## Authenticated API
 
-All Jade requests use the existing authenticated Node Runtime transport. Android requires an authorized Tailscale route for authenticated node traffic.
+All Jade requests use the existing authenticated Node Runtime transport. Android requires an authorized route for authenticated node traffic.
 
 Endpoints include:
 
@@ -51,31 +53,57 @@ The runtime advertises `cognitive_brain_profiles_v1` plus a `brain_profiles` sna
 
 ## Shared Genesis State v1
 
-Runtime 0.1.6 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises:
-
-- `shared_genesis_state_v1`
-- `durable_state_replica_v1`
-- `shared_state_sync`
-- `vps_night_cycle_supervisor_v1`
-- `night_learning_lab_v1`
+Runtime 0.1.6 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises Shared Genesis State capabilities through `/health` and `/runtime`.
 
 The replica stores a bounded, versioned event stream and a compact latest-entity snapshot in `~/.jade-genesis/genesis-state.json`, with a backup copy. Sync is idempotent by event ID and bound to one Jade identity. A VPS replica does **not** become the sole owner of Jade's identity.
 
 The Pixel side keeps its own local cache and outbox. If the VPS is temporarily unavailable, unsynced operational snapshots remain on the phone and are retried later.
 
-## VPS-supervised Night Cycle + Night Learning Lab
+## VPS-supervised Night Cycle + Night Learning
 
-On a node configured as `VPS`, Runtime 0.1.6 starts a bounded local supervisor. It waits until the latest synchronized Pixel snapshot has been inactive for at least two hours, then runs at most once per twenty-hour protection window. The supervisor reviews the durable Shared Genesis State replica, the Memory v2 cursor, the latest Runtime Eval summary and the Evolution Engine candidate summary. Its journal is bounded to 30 runs and stored with a backup in `~/.jade-genesis/night-cycle-supervisor.json`.
+On a node configured as `VPS`, Runtime 0.1.6 starts a bounded local supervisor. It waits for the protected inactivity/night-cycle conditions before reviewing the durable Shared Genesis State replica, recent Runtime Evaluation summaries and bounded evolution signals.
 
-The Night Learning Lab turns measured Runtime Eval signals into a small review pipeline: at most 3 targeted research questions, 6 public evidence items, 4 falsifiable hypotheses, 4 experiment proposals and 4 improvement candidates. Public research is optional and fail-soft: it uses one fixed HTTPS provider with strict timeout/response limits, and a provider failure never creates invented evidence. Research queries are derived from structured runtime metrics rather than raw user text.
+Night Learning turns measured runtime evidence into a bounded review pipeline: targeted research questions, public evidence when available, falsifiable hypotheses, experiment proposals and improvement candidates.
 
-Experiments are plans only. They require paired scenarios, a frozen champion when relevant and explicit approval before any future promotion. Improvement artifacts remain `CANDIDATE` review items; they cannot activate themselves, rewrite production code, change compiled SafetyPolicy, mutate Pixel memory or execute shell commands.
+Experiments are plans only. Improvement artifacts cannot activate themselves, rewrite production code, change compiled SafetyPolicy, mutate Pixel memory, mutate model weights or execute shell commands.
 
-The VPS writes `vps_learning_snapshot`, `vps_maintenance_snapshot` and `vps_night_cycle_report` events back into Shared Genesis State so the Pixel receives them on its next normal sync. Android validates learning snapshots fail-closed and rejects any snapshot requesting automatic experiment execution, promotion, production-code rewrite or shell execution.
+The VPS writes bounded learning/maintenance/night-cycle snapshots back into Shared Genesis State so Android can receive them through normal synchronization. Dangerous learning flags are rejected fail-closed by the current integration.
+
+## Adaptive Strategy Registry — 0.1.18 substrate
+
+The Node Runtime now exposes `adaptive_strategy_registry_v1`.
+
+The registry persists identity-bound `STRATEGY_HINT` evidence across restarts with lifecycle metadata, provenance, sandbox-evaluation metadata, explicit promotion gates and rollback support.
+
+Important limitation: this is governance/persistence infrastructure. It does not mean Jade already owns a general executable learned skill. Automatic activation, automatic promotion, production-code rewrite and model-weight mutation remain disabled.
+
+See `../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md`.
+
+## Verifiable Task Ledger + SkillSpec — 0.1.19 substrate
+
+The Node Runtime now also exposes:
+
+- `verifiable_task_ledger_v1`
+- `skill_spec_v1`
+
+The Verifiable Task Ledger stores bounded deterministic task cases in `TRAIN`, `VALIDATION` and hidden `SEALED_TEST` partitions. Sealed datasets are immutable and use a salted commitment whose private nonce is not part of learning-visible data.
+
+`SkillSpec v1` defines a Jade-owned declarative skill payload with:
+
+- stable identity/version;
+- input/output contracts;
+- a `JADE_PROCEDURE_DSL_V1` AST body;
+- dependencies and provenance;
+- evaluation policy;
+- stable body/spec hashes.
+
+0.1.19 deliberately has no interpreter. Runtime telemetry reports the non-executable boundary and generated SkillSpecs cannot run yet.
+
+See `../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md`.
 
 ## Resource and model telemetry
 
-Runtime 0.1.6 preserves Resource Intelligence v3 from the stable 0.1.2 core: CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
+Runtime 0.1.6 preserves resource intelligence for CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
 
 ## Useful local commands
 
@@ -86,3 +114,7 @@ py jade_node_agent.py --show-token
 ```
 
 Use `--reset-token` only when intentionally rotating the pairing token; existing paired Android clients will then need the new token.
+
+## Safety / source-control note
+
+Do not commit pairing tokens, private keys, signing material or local runtime-state files. Historical CI logs should stay in GitHub Actions artifacts rather than being copied into the repository.

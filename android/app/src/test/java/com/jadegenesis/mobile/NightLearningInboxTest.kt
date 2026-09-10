@@ -5,6 +5,7 @@ import com.jadegenesis.mobile.state.SharedStateEvent
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -20,6 +21,10 @@ class NightLearningInboxTest {
         assertNotNull(snapshot)
         requireNotNull(snapshot)
         assertEquals("run-1", snapshot.runId)
+        assertEquals(6, snapshot.outcomeFeedbackCount)
+        assertEquals(-0.25, snapshot.overallOutcomeQuality, 0.0001)
+        assertEquals(1, snapshot.outcomeGroupsWithMinimumEvidence)
+        assertTrue(snapshot.outcomeConsolidationUsed)
         assertEquals(1, snapshot.researchQuestions.size)
         assertEquals(1, snapshot.researchEvidence.size)
         assertEquals(1, snapshot.hypotheses.size)
@@ -57,6 +62,75 @@ class NightLearningInboxTest {
                 listOf(event(payload = unsafe, revision = 10L))
             )
         )
+    }
+
+    @Test
+    fun rawConversationOutcomeSnapshotIsRejected() {
+        val unsafe = JSONObject(validPayload())
+            .put("raw_conversation_text_used", true)
+            .toString()
+
+        assertNull(
+            NightLearningInbox.parseLatest(
+                listOf(event(payload = unsafe, revision = 10L))
+            )
+        )
+    }
+
+    @Test
+    fun personalFeedbackPromotedAsExternalFactIsRejected() {
+        val unsafe = JSONObject(validPayload())
+            .put("user_feedback_promoted_to_external_fact", true)
+            .toString()
+
+        assertNull(
+            NightLearningInbox.parseLatest(
+                listOf(event(payload = unsafe, revision = 10L))
+            )
+        )
+    }
+
+    @Test
+    fun outcomeMetricsAreClampedToSafetyBounds() {
+        val payload = JSONObject(validPayload())
+            .put("outcome_feedback_count", 999_999)
+            .put("overall_outcome_quality", 8.0)
+            .put("outcome_groups_with_minimum_evidence", 999_999)
+            .toString()
+
+        val snapshot = NightLearningInbox.parseLatest(
+            listOf(event(payload = payload, revision = 10L))
+        )
+
+        assertNotNull(snapshot)
+        requireNotNull(snapshot)
+        assertEquals(200, snapshot.outcomeFeedbackCount)
+        assertEquals(1.0, snapshot.overallOutcomeQuality, 0.0001)
+        assertEquals(20, snapshot.outcomeGroupsWithMinimumEvidence)
+        assertTrue(snapshot.outcomeConsolidationUsed)
+    }
+
+    @Test
+    fun oldSnapshotWithoutOutcomeFieldsRemainsCompatible() {
+        val old = JSONObject(validPayload())
+            .remove("outcome_feedback_count")
+            .remove("overall_outcome_quality")
+            .remove("outcome_groups_with_minimum_evidence")
+            .remove("outcome_consolidation_used")
+            .remove("raw_conversation_text_used")
+            .remove("user_feedback_promoted_to_external_fact")
+            .toString()
+
+        val snapshot = NightLearningInbox.parseLatest(
+            listOf(event(payload = old, revision = 10L))
+        )
+
+        assertNotNull(snapshot)
+        requireNotNull(snapshot)
+        assertEquals(0, snapshot.outcomeFeedbackCount)
+        assertEquals(0.0, snapshot.overallOutcomeQuality, 0.0001)
+        assertEquals(0, snapshot.outcomeGroupsWithMinimumEvidence)
+        assertFalse(snapshot.outcomeConsolidationUsed)
     }
 
     @Test
@@ -107,6 +181,12 @@ class NightLearningInboxTest {
         put("reviewed_at", 1_500)
         put("runtime_observation_count", 20)
         put("runtime_confidence", 0.9)
+        put("outcome_feedback_count", 6)
+        put("overall_outcome_quality", -0.25)
+        put("outcome_groups_with_minimum_evidence", 1)
+        put("outcome_consolidation_used", true)
+        put("raw_conversation_text_used", false)
+        put("user_feedback_promoted_to_external_fact", false)
         put("external_research_evidence_count", 1)
         put("automatic_experiment_execution", false)
         put("automatic_promotion", false)

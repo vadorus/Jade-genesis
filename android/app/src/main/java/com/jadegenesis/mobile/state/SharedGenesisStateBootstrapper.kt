@@ -8,6 +8,7 @@ import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
 import com.jadegenesis.mobile.identity.IdentityManager
+import com.jadegenesis.mobile.memory.MemoryHealthMonitor
 import com.jadegenesis.mobile.memory.MemoryLifecycleManager
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceAdmissionController
@@ -22,6 +23,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
     private val nodeManager = NodeManager(appContext, profiler, diagnostics)
     private val identityManager = IdentityManager(appContext)
     private val memoryLifecycle = MemoryLifecycleManager(appContext)
+    private val memoryHealth = MemoryHealthMonitor(appContext)
     private val runtimeEval = RuntimeEvalRuntime.initialize(appContext)
     private val evolution = EvolutionRuntime.initialize(appContext)
     private val stateStore = SharedGenesisStateStore(appContext)
@@ -40,6 +42,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
         val budget = resourceGovernor.evaluate(device)
         val config = JadeConfigRuntime.current().validated()
         val cursor = memoryLifecycle.currentCursor()
+        val storage = memoryHealth.snapshot()
         val now = System.currentTimeMillis()
 
         coordinator.publish(
@@ -96,6 +99,16 @@ class SharedGenesisStateBootstrapper(context: Context) {
                     "last_retention_deleted",
                     memoryLifecycle.lastRetentionDeletedCount()
                 )
+                put("storage_total_bytes", storage.totalBytes)
+                put("core_database_bytes", storage.coreDatabaseBytes)
+                put("conversation_learning_bytes", storage.conversationLearningBytes)
+                put("runtime_eval_bytes", storage.runtimeEvalBytes)
+                put("shared_state_bytes", storage.sharedStateBytes)
+                put("other_jade_state_bytes", storage.otherJadeStateBytes)
+                put("growth_7d_bytes", storage.growth7dBytes ?: JSONObject.NULL)
+                put("growth_30d_bytes", storage.growth30dBytes ?: JSONObject.NULL)
+                put("storage_status", storage.status.name)
+                put("storage_sampled_at", storage.sampledAt)
                 put("observed_at", now)
             }.toString()
         )
@@ -143,6 +156,8 @@ class SharedGenesisStateBootstrapper(context: Context) {
                 put("overall_success_rate", runtimeReport.overallSuccessRate)
                 put("score", runtimeReport.score)
                 put("confidence", runtimeReport.confidence)
+                put("outcome_feedback_count", runtimeReport.outcomeFeedbackCount)
+                put("overall_outcome_quality", runtimeReport.overallOutcomeQuality)
                 put(
                     "groups",
                     JSONArray().apply {
@@ -161,6 +176,12 @@ class SharedGenesisStateBootstrapper(context: Context) {
                                         put("average_duration_ms", group.averageDurationMs)
                                         put("fallback_rate", group.fallbackRate)
                                         put("average_tokens_per_second", group.averageTokensPerSecond)
+                                        put("outcome_samples", group.outcomeSamples)
+                                        put("positive_outcomes", group.positiveOutcomes)
+                                        put("negative_outcomes", group.negativeOutcomes)
+                                        put("corrections", group.corrections)
+                                        put("outcome_quality_score", group.outcomeQualityScore)
+                                        put("outcome_confidence", group.outcomeConfidence)
                                         put("last_observed_at", group.lastObservedAt)
                                     }
                                 )

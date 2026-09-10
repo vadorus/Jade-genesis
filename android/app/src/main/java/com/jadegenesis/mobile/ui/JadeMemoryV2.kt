@@ -23,16 +23,24 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jadegenesis.mobile.memory.MemoryHealthMonitor
+import com.jadegenesis.mobile.memory.MemoryHealthSnapshot
+import com.jadegenesis.mobile.memory.MemoryHealthStatus
 import com.jadegenesis.mobile.model.MemorySnapshot
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,6 +51,15 @@ internal fun JadeMemoryV2(
 ) {
     var filter by remember { mutableStateOf("TOUT") }
     var selected by remember { mutableStateOf<MemorySnapshot?>(null) }
+    val context = LocalContext.current
+    val health by produceState<MemoryHealthSnapshot?>(
+        initialValue = null,
+        key1 = state.memoryCount
+    ) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { MemoryHealthMonitor(context).snapshot() }.getOrNull()
+        }
+    }
     val types = listOf("TOUT", "FACT", "OBSERVATION", "PROCEDURE", "HYPOTHESIS", "FAILURE", "EXPERIENCE", "KNOWLEDGE")
     val visible = state.memories.filter { filter == "TOUT" || it.type.equals(filter, ignoreCase = true) }
 
@@ -57,6 +74,9 @@ internal fun JadeMemoryV2(
                 title = "Ce que Jade sait",
                 subtitle = "${state.memoryCount} élément(s) persistants"
             )
+        }
+        item {
+            MemoryHealthCard(health)
         }
         item {
             Row(
@@ -144,6 +164,85 @@ internal fun JadeMemoryV2(
                 Spacer(Modifier.height(26.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun MemoryHealthCard(health: MemoryHealthSnapshot?) {
+    V2Card {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                V2SectionLabel("Memory Health")
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    health?.let { "${humanBytes(it.totalBytes)} sur le Pixel" }
+                        ?: "Mesure du stockage…",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = JadeColors.Ink
+                )
+            }
+            health?.let {
+                V2StatusBadge(memoryHealthLabel(it.status), memoryHealthTone(it.status))
+            }
+        }
+
+        if (health != null) {
+            Spacer(Modifier.height(12.dp))
+            V2KeyValue("Base mémoire", humanBytes(health.coreDatabaseBytes))
+            V2KeyValue("Conversation", humanBytes(health.conversationLearningBytes))
+            V2KeyValue("Runtime Eval", humanBytes(health.runtimeEvalBytes))
+            V2KeyValue("État distribué", humanBytes(health.sharedStateBytes))
+            V2KeyValue("Autres états Jade", humanBytes(health.otherJadeStateBytes))
+            V2KeyValue("Croissance 7 j", health.growth7dBytes?.let(::formatGrowth) ?: "collecte en cours")
+            V2KeyValue("Croissance 30 j", health.growth30dBytes?.let(::formatGrowth) ?: "collecte en cours")
+            Spacer(Modifier.height(10.dp))
+            V2InlineMessage(
+                "Surveillance uniquement : la taille ne déclenche jamais d'effacement automatique.",
+                memoryHealthTone(health.status)
+            )
+        } else {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Jade additionne la base Room, son journal SQLite et ses états persistants sans lire leur contenu.",
+                style = MaterialTheme.typography.bodySmall,
+                color = JadeColors.Muted
+            )
+        }
+    }
+}
+
+private fun memoryHealthTone(status: MemoryHealthStatus): Color = when (status) {
+    MemoryHealthStatus.NORMAL -> JadeColors.Jade
+    MemoryHealthStatus.WATCH -> JadeColors.Warn
+    MemoryHealthStatus.HIGH -> JadeColors.Error
+}
+
+private fun memoryHealthLabel(status: MemoryHealthStatus): String = when (status) {
+    MemoryHealthStatus.NORMAL -> "NORMAL"
+    MemoryHealthStatus.WATCH -> "À SURVEILLER"
+    MemoryHealthStatus.HIGH -> "IMPORTANT"
+}
+
+private fun formatGrowth(bytes: Long): String = when {
+    bytes > 0L -> "+${humanBytes(bytes)}"
+    bytes < 0L -> "−${humanBytes(-bytes)}"
+    else -> "stable"
+}
+
+private fun humanBytes(bytes: Long): String {
+    val safe = bytes.coerceAtLeast(0L).toDouble()
+    val kib = 1024.0
+    val mib = kib * 1024.0
+    val gib = mib * 1024.0
+    return when {
+        safe >= gib -> String.format(Locale.FRANCE, "%.2f Go", safe / gib)
+        safe >= mib -> String.format(Locale.FRANCE, "%.1f Mo", safe / mib)
+        safe >= kib -> String.format(Locale.FRANCE, "%.1f Ko", safe / kib)
+        else -> "${safe.toLong()} o"
     }
 }
 

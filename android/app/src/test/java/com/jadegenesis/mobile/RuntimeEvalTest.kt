@@ -6,6 +6,8 @@ import com.jadegenesis.mobile.config.RoutingTuning
 import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.eval.RuntimeEvalEngine
 import com.jadegenesis.mobile.eval.RuntimeEvalObservation
+import com.jadegenesis.mobile.eval.RuntimeOutcomeFeedback
+import com.jadegenesis.mobile.eval.RuntimeOutcomeKind
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.TaskWorkload
 import org.junit.Assert.assertEquals
@@ -126,6 +128,183 @@ class RuntimeEvalTest {
             RuntimeEvalEngine.posteriorAdjustment(stats, RoutingTuning()),
             0.0001
         )
+    }
+
+    @Test
+    fun outcomeQualityDoesNotActBeforeEnoughUserEvidence() {
+        val observations = (1 until SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES)
+            .map { index ->
+                observation(
+                    id = "sparse-$index",
+                    success = true,
+                    durationMs = 80,
+                    tokensPerSecond = 30.0,
+                    createdAt = index.toLong()
+                )
+            }
+        val feedback = observations
+            .take(SafetyPolicy.MIN_RUNTIME_EVAL_OUTCOME_SAMPLES - 1)
+            .mapIndexed { index, item ->
+                outcome(
+                    id = "feedback-$index",
+                    targetObservationId = item.observationId,
+                    kind = RuntimeOutcomeKind.NEGATIVE,
+                    createdAt = 100L + index
+                )
+            }
+        val stats = RuntimeEvalEngine.aggregate(
+            observations = observations,
+            nodeId = "node-a",
+            taskKind = "brain_chat",
+            brainProfile = "general",
+            outcomeFeedback = feedback
+        ) ?: error("Stats attendues")
+
+        assertEquals(feedback.size, stats.outcomeSamples)
+        assertEquals(0.0, stats.outcomeConfidence, 0.0001)
+        assertEquals(
+            0.0,
+            RuntimeEvalEngine.posteriorAdjustment(stats, RoutingTuning()),
+            0.0001
+        )
+    }
+
+    @Test
+    fun strongUserOutcomesRewardValidatedBrainAndPenalizeRejectedBrain() {
+        val observations = (1..SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES)
+            .map { index ->
+                observation(
+                    id = "quality-$index",
+                    success = true,
+                    durationMs = 100,
+                    tokensPerSecond = 35.0,
+                    createdAt = index.toLong()
+                )
+            }
+        val baseStats = RuntimeEvalEngine.aggregate(
+            observations,
+            "node-a",
+            "brain_chat",
+            brainProfile = "general"
+        ) ?: error("Stats de base attendues")
+        val base = RuntimeEvalEngine.posteriorAdjustment(baseStats, RoutingTuning())
+
+        val targets = observations.take(SafetyPolicy.STRONG_RUNTIME_EVAL_OUTCOME_SAMPLES)
+        val positive = targets.mapIndexed { index, item ->
+            outcome(
+                id = "positive-$index",
+                targetObservationId = item.observationId,
+                kind = RuntimeOutcomeKind.POSITIVE,
+                createdAt = 1_000L + index
+            )
+        }
+        val negative = targets.mapIndexed { index, item ->
+            outcome(
+                id = "negative-$index",
+                targetObservationId = item.observationId,
+                kind = RuntimeOutcomeKind.NEGATIVE,
+                createdAt = 2_000L + index
+            )
+        }
+
+        val goodStats = RuntimeEvalEngine.aggregate(
+            observations,
+            "node-a",
+            "brain_chat",
+            brainProfile = "general",
+            outcomeFeedback = positive
+        ) ?: error("Stats positives attendues")
+        val badStats = RuntimeEvalEngine.aggregate(
+            observations,
+            "node-a",
+            "brain_chat",
+            brainProfile = "general",
+            outcomeFeedback = negative
+        ) ?: error("Stats négatives attendues")
+        val good = RuntimeEvalEngine.posteriorAdjustment(goodStats, RoutingTuning())
+        val bad = RuntimeEvalEngine.posteriorAdjustment(badStats, RoutingTuning())
+
+        assertEquals(1.0, goodStats.outcomeConfidence, 0.0001)
+        assertEquals(1.0, goodStats.outcomeQualityScore, 0.0001)
+        assertEquals(-1.0, badStats.outcomeQualityScore, 0.0001)
+        assertTrue(good > base)
+        assertTrue(bad < base)
+        assertEquals(
+            2.0 * SafetyPolicy.MAX_RUNTIME_EVAL_OUTCOME_ADJUSTMENT,
+            good - bad,
+            0.0001
+        )
+    }
+
+    @Test
+    fun outcomeQualityStaysBoundToTargetObservationAndProfile() {
+        val observations = listOf(
+            observation("fast-1", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "fast", createdAt = 1),
+            observation("fast-2", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "fast", createdAt = 2),
+            observation("fast-3", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "fast", createdAt = 3),
+            observation("reason-1", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "reasoning", createdAt = 4),
+            observation("reason-2", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "reasoning", createdAt = 5),
+            observation("reason-3", success = true, durationMs = 50, tokensPerSecond = 60.0, brainProfile = "reasoning", createdAt = 6)
+        )
+        val feedback = listOf(
+            outcome("f1", "fast-1", RuntimeOutcomeKind.POSITIVE, brainProfile = "fast", createdAt = 10),
+            outcome("f2", "fast-2", RuntimeOutcomeKind.POSITIVE, brainProfile = "fast", createdAt = 11),
+            outcome("f3", "fast-3", RuntimeOutcomeKind.POSITIVE, brainProfile = "fast", createdAt = 12),
+            outcome("r1", "reason-1", RuntimeOutcomeKind.NEGATIVE, brainProfile = "reasoning", createdAt = 13),
+            outcome("r2", "reason-2", RuntimeOutcomeKind.NEGATIVE, brainProfile = "reasoning", createdAt = 14),
+            outcome("r3", "reason-3", RuntimeOutcomeKind.NEGATIVE, brainProfile = "reasoning", createdAt = 15),
+            outcome("orphan", "pruned-observation", RuntimeOutcomeKind.NEGATIVE, brainProfile = "fast", createdAt = 16)
+        )
+
+        val fast = RuntimeEvalEngine.aggregate(
+            observations,
+            "node-a",
+            "brain_chat",
+            brainProfile = "fast",
+            outcomeFeedback = feedback
+        ) ?: error("Stats FAST attendues")
+        val reasoning = RuntimeEvalEngine.aggregate(
+            observations,
+            "node-a",
+            "brain_chat",
+            brainProfile = "reasoning",
+            outcomeFeedback = feedback
+        ) ?: error("Stats REASONING attendues")
+
+        assertEquals(3, fast.outcomeSamples)
+        assertEquals(3, fast.positiveOutcomes)
+        assertEquals(0, fast.negativeOutcomes)
+        assertTrue(fast.outcomeQualityScore > 0.0)
+        assertEquals(3, reasoning.outcomeSamples)
+        assertEquals(3, reasoning.negativeOutcomes)
+        assertTrue(reasoning.outcomeQualityScore < 0.0)
+    }
+
+    @Test
+    fun latestOutcomeForSameResponseWinsInsteadOfDoubleCounting() {
+        val observation = observation(
+            id = "same-response",
+            success = true,
+            durationMs = 80,
+            tokensPerSecond = 40.0,
+            createdAt = 1
+        )
+        val feedback = listOf(
+            outcome("old-positive", observation.observationId, RuntimeOutcomeKind.POSITIVE, createdAt = 10),
+            outcome("new-correction", observation.observationId, RuntimeOutcomeKind.CORRECTION, createdAt = 20)
+        )
+        val stats = RuntimeEvalEngine.aggregate(
+            observations = listOf(observation),
+            nodeId = "node-a",
+            taskKind = "brain_chat",
+            brainProfile = "general",
+            outcomeFeedback = feedback
+        ) ?: error("Stats attendues")
+
+        assertEquals(1, stats.outcomeSamples)
+        assertEquals(0, stats.positiveOutcomes)
+        assertEquals(1, stats.corrections)
+        assertEquals(-1.0, stats.outcomeQualityScore, 0.0001)
     }
 
     @Test
@@ -269,6 +448,25 @@ class RuntimeEvalTest {
         tokensPerSecond = tokensPerSecond,
         fallbackUsed = fallback,
         error = if (success) null else "failure",
+        createdAt = createdAt
+    )
+
+    private fun outcome(
+        id: String,
+        targetObservationId: String,
+        kind: RuntimeOutcomeKind,
+        nodeId: String = "node-a",
+        brainProfile: String = "general",
+        createdAt: Long
+    ): RuntimeOutcomeFeedback = RuntimeOutcomeFeedback(
+        feedbackId = id,
+        targetObservationId = targetObservationId,
+        nodeId = nodeId,
+        taskKind = "brain_chat",
+        model = "jade-model",
+        brainProfile = brainProfile,
+        kind = kind,
+        confidence = 1.0,
         createdAt = createdAt
     )
 }

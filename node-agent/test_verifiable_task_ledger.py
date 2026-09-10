@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skill_spec import BODY_KIND
 from verifiable_task_ledger import VerifiableTaskLedger
 
 
@@ -53,6 +54,61 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
             now_ms=1_300,
         )
 
+    @staticmethod
+    def developer_sum_skill(sealed_hash: str, *, bias: int = 0) -> dict:
+        value_expr: dict = {
+            "op": "add",
+            "args": [
+                {"op": "get", "args": [{"op": "literal", "args": ["a"]}]},
+                {"op": "get", "args": [{"op": "literal", "args": ["b"]}]},
+            ],
+        }
+        if bias:
+            value_expr = {
+                "op": "add",
+                "args": [
+                    value_expr,
+                    {"op": "literal", "args": [bias]},
+                ],
+            }
+        return {
+            "schema_version": 1,
+            "skill_id": f"sum-fields-{bias}",
+            "skill_version": 1,
+            "task_family": "synthetic_json_transform",
+            "domain": "verifiable_procedure",
+            "description": "Deterministically sum a and b.",
+            "input_contract": {
+                "type": "object",
+                "required_fields": ["a", "b"],
+            },
+            "output_contract": {
+                "type": "object",
+                "required_fields": ["value"],
+            },
+            "body_kind": BODY_KIND,
+            "body": {
+                "op": "object",
+                "args": [
+                    {"op": "literal", "args": ["value"]},
+                    value_expr,
+                ],
+            },
+            "dependencies": [],
+            "provenance": {
+                "source_kind": "DEVELOPER",
+                "source_id": "ledger-test",
+                "source_model": "",
+                "created_at": 1_000,
+            },
+            "evaluation_policy": {
+                "verifier_kind": "exact_json_v1",
+                "sealed_set_sha256": sealed_hash,
+                "min_pass_rate": 1.0,
+                "max_protected_failures": 0,
+            },
+        }
+
     def test_learning_view_never_exposes_sealed_test_case_or_nonce(self) -> None:
         self.add_three_partitions()
         manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
@@ -64,14 +120,21 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         self.assertFalse(manifest["sealed_test_inputs_exposed"])
         self.assertFalse(manifest["sealed_test_answers_exposed"])
         self.assertFalse(manifest["seal_nonce_exposed"])
+        self.assertFalse(manifest["sealed_exam_consumed"])
         self.assertNotIn("seal_nonce", manifest)
         self.assertEqual(2, len(view["cases"]))
-        self.assertEqual({"TRAIN", "VALIDATION"}, {case["partition"] for case in view["cases"]})
+        self.assertEqual(
+            {"TRAIN", "VALIDATION"},
+            {case["partition"] for case in view["cases"]},
+        )
         self.assertFalse(view["sealed_test_inputs_exposed"])
         self.assertFalse(view["sealed_test_answers_exposed"])
         self.assertFalse(view["seal_nonce_exposed"])
         self.assertNotIn("seal_nonce", view)
-        self.assertNotIn("sealed-1", {case["case_id"] for case in view["cases"]})
+        self.assertNotIn(
+            "sealed-1",
+            {case["case_id"] for case in view["cases"]},
+        )
 
     def test_adding_sealed_case_does_not_return_hidden_input_or_answer_digest(self) -> None:
         result = self.ledger.add_case(
@@ -103,57 +166,38 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
                 now_ms=2_100,
             )
 
-    def test_sealed_test_cannot_be_evaluated_before_commitment(self) -> None:
-        self.ledger.add_case(
-            self.identity,
-            self.dataset,
-            "sealed-1",
-            "SEALED_TEST",
-            {"a": 8},
-            {"value": 16},
-            now_ms=1_100,
-        )
-        with self.assertRaisesRegex(PermissionError, "sealed_test_must_be_committed_before_evaluation"):
+    def test_sealed_test_is_never_interactively_evaluable(self) -> None:
+        self.add_three_partitions()
+        with self.assertRaisesRegex(
+            PermissionError,
+            "sealed_test_case_evaluation_forbidden",
+        ):
             self.ledger.evaluate_case(
                 self.identity,
                 self.dataset,
                 "sealed-1",
-                {"value": 16},
+                {"value": 17},
                 "candidate_skill",
                 "skill-1",
-                now_ms=1_200,
+                now_ms=1_400,
             )
 
-    def test_sealed_evaluator_returns_verdict_but_not_expected_answer(self) -> None:
-        self.add_three_partitions()
         self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
-        passed = self.ledger.evaluate_case(
-            self.identity,
-            self.dataset,
-            "sealed-1",
-            {"value": 17},
-            "candidate_skill",
-            "skill-1",
-            now_ms=2_100,
-        )
-        failed = self.ledger.evaluate_case(
-            self.identity,
-            self.dataset,
-            "sealed-1",
-            {"value": 999},
-            "candidate_skill",
-            "skill-2",
-            now_ms=2_200,
-        )
-        self.assertTrue(passed["verdict"])
-        self.assertFalse(failed["verdict"])
-        self.assertFalse(passed["expected_output_exposed"])
-        self.assertFalse(passed["seal_nonce_exposed"])
-        self.assertNotIn("expected_output", passed)
-        self.assertNotIn("expected_output_sha256", passed)
-        self.assertNotIn("seal_nonce", passed)
+        with self.assertRaisesRegex(
+            PermissionError,
+            "sealed_test_case_evaluation_forbidden",
+        ):
+            self.ledger.evaluate_case(
+                self.identity,
+                self.dataset,
+                "sealed-1",
+                {"value": 17},
+                "candidate_skill",
+                "skill-1",
+                now_ms=2_100,
+            )
 
-    def test_exact_json_verifier_is_canonical_not_key_order_sensitive(self) -> None:
+    def test_exact_json_validation_verifier_is_canonical(self) -> None:
         self.ledger.add_case(
             self.identity,
             self.dataset,
@@ -174,12 +218,143 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         )
         self.assertTrue(result["verdict"])
 
+    def test_final_exam_requires_sealed_dataset(self) -> None:
+        self.add_three_partitions()
+        skill = self.developer_sum_skill("a" * 64)
+        with self.assertRaisesRegex(
+            PermissionError,
+            "sealed_test_must_be_committed_before_final_exam",
+        ):
+            self.ledger.run_sealed_skill_exam(
+                self.identity,
+                self.dataset,
+                skill,
+                now_ms=1_500,
+            )
+
+    def test_final_exam_requires_exact_sealed_commitment(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        skill = self.developer_sum_skill("b" * 64)
+        self.assertNotEqual("b" * 64, manifest["sealed_set_sha256"])
+        with self.assertRaisesRegex(ValueError, "skill_sealed_set_mismatch"):
+            self.ledger.run_sealed_skill_exam(
+                self.identity,
+                self.dataset,
+                skill,
+                now_ms=2_100,
+            )
+        self.assertFalse(
+            self.ledger.sealed_manifest(self.identity, self.dataset)[
+                "sealed_exam_consumed"
+            ]
+        )
+
+    def test_final_exam_returns_only_aggregate_verdict(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        skill = self.developer_sum_skill(manifest["sealed_set_sha256"])
+        result = self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            skill,
+            now_ms=2_100,
+        )
+
+        self.assertTrue(result["verdict"])
+        self.assertTrue(result["dataset_consumed"])
+        self.assertFalse(result["replayed"])
+        self.assertFalse(result["feedback_detail_exposed"])
+        self.assertFalse(result["per_case_verdicts_exposed"])
+        self.assertFalse(result["expected_outputs_exposed"])
+        self.assertFalse(result["seal_nonce_exposed"])
+        for forbidden in (
+            "passed_count",
+            "failed_count",
+            "pass_rate",
+            "case_id",
+            "case_results",
+            "expected_output",
+            "expected_output_sha256",
+            "seal_nonce",
+        ):
+            self.assertNotIn(forbidden, result)
+
+    def test_same_frozen_candidate_replay_is_idempotent(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        skill = self.developer_sum_skill(manifest["sealed_set_sha256"])
+        first = self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            skill,
+            now_ms=2_100,
+        )
+        second = self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            skill,
+            now_ms=9_999,
+        )
+        self.assertEqual(first["exam_id"], second["exam_id"])
+        self.assertEqual(first["verdict"], second["verdict"])
+        self.assertTrue(second["replayed"])
+
+    def test_different_candidate_cannot_reuse_consumed_sealed_dataset(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        first = self.developer_sum_skill(manifest["sealed_set_sha256"])
+        second = self.developer_sum_skill(
+            manifest["sealed_set_sha256"],
+            bias=1,
+        )
+        self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            first,
+            now_ms=2_100,
+        )
+        with self.assertRaisesRegex(
+            PermissionError,
+            "sealed_dataset_exam_already_consumed",
+        ):
+            self.ledger.run_sealed_skill_exam(
+                self.identity,
+                self.dataset,
+                second,
+                now_ms=2_200,
+            )
+
+    def test_failed_candidate_also_consumes_sealed_dataset(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        wrong = self.developer_sum_skill(
+            manifest["sealed_set_sha256"],
+            bias=1,
+        )
+        result = self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            wrong,
+            now_ms=2_100,
+        )
+        self.assertFalse(result["verdict"])
+        self.assertTrue(result["dataset_consumed"])
+        status = self.ledger.status()
+        self.assertEqual(1, status["sealed_exam_consumed_count"])
+
     def test_identity_binding_rejects_another_jade(self) -> None:
-        with self.assertRaisesRegex(ValueError, "verifiable_task_ledger_identity_mismatch"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "verifiable_task_ledger_identity_mismatch",
+        ):
             self.ledger.learning_view("other-jade", self.dataset)
 
     def test_conversation_memory_fields_are_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "task_ledger_not_conversation_memory"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "task_ledger_not_conversation_memory",
+        ):
             self.ledger.add_case(
                 self.identity,
                 self.dataset,
@@ -193,15 +368,6 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
     def test_backup_recovers_from_corrupt_primary(self) -> None:
         self.add_three_partitions()
         self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
-        self.ledger.evaluate_case(
-            self.identity,
-            self.dataset,
-            "sealed-1",
-            {"value": 17},
-            "candidate_skill",
-            "skill-1",
-            now_ms=2_100,
-        )
         self.assertTrue(self.ledger.backup_path.exists())
         self.path.write_text("{not-json", encoding="utf-8")
         status = VerifiableTaskLedger(self.path).status()
@@ -210,6 +376,12 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         self.assertFalse(status["sealed_test_inputs_exposed"])
         self.assertFalse(status["sealed_test_answers_exposed"])
         self.assertFalse(status["seal_nonce_exposed"])
+        self.assertFalse(status["sealed_case_evaluation_allowed"])
+        self.assertTrue(status["sealed_final_exam_single_use"])
+        self.assertEqual(
+            "aggregate_pass_fail_only",
+            status["sealed_final_exam_feedback"],
+        )
         self.assertFalse(status["learned_code_execution"])
 
 

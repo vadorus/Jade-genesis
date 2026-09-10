@@ -324,6 +324,7 @@ class SharedGenesisStateStore:
             "vps_night_cycle_report",
             "vps_maintenance_snapshot",
             "vps_learning_snapshot",
+            "vps_strategy_registry_snapshot",
         }:
             raise ValueError("unsupported_replica_event_kind")
         clean_identity = _clean_text(identity_id, "identity_id")

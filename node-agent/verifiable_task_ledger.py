@@ -1,13 +1,12 @@
 """Machine-verifiable task ledger for Jade Genesis 0.1.19.
 
-This module creates the measurement substrate required before Jade can claim
-that it learned a skill. It stores bounded deterministic task cases, keeps
-TRAIN/VALIDATION examples separate from a hidden SEALED_TEST partition, seals
-that hidden partition with SHA-256, and evaluates outputs internally.
+The ledger is the measurement substrate required before Jade can claim that it
+learned a skill. It stores bounded deterministic task cases, separates visible
+TRAIN/VALIDATION evidence from a hidden SEALED_TEST partition, commits the
+hidden set before evaluation, and scores exact JSON outputs internally.
 
-The sealed evaluator never returns expected answers. This module executes no
-learned code, calls no LLM, performs no network access, and is not conversation
-memory.
+It executes no learned code, calls no LLM, performs no network access and is not
+conversation memory.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -42,10 +42,7 @@ FORBIDDEN_TASK_KEYS = {
 }
 
 CONFIG_DIR = Path(
-    os.environ.get(
-        "JADE_GENESIS_CONFIG_DIR",
-        str(Path.home() / ".jade-genesis"),
-    )
+    os.environ.get("JADE_GENESIS_CONFIG_DIR", str(Path.home() / ".jade-genesis"))
 )
 TASK_LEDGER_PATH = CONFIG_DIR / "verifiable-task-ledger.json"
 
@@ -81,7 +78,7 @@ def _normalize_json(value: Any, depth: int = 0) -> Any:
     if isinstance(value, dict):
         if len(value) > MAX_COLLECTION_ITEMS:
             raise ValueError("task_json_collection_too_large")
-        normalized: dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 raise ValueError("task_json_key_must_be_string")
@@ -90,8 +87,8 @@ def _normalize_json(value: Any, depth: int = 0) -> Any:
                 raise ValueError("task_json_empty_key")
             if clean_key.lower() in FORBIDDEN_TASK_KEYS:
                 raise ValueError("task_ledger_not_conversation_memory")
-            normalized[clean_key] = _normalize_json(item, depth + 1)
-        return normalized
+            result[clean_key] = _normalize_json(item, depth + 1)
+        return result
     raise ValueError("task_json_unsupported_type")
 
 
@@ -136,9 +133,7 @@ class VerifiableTaskLedger:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
-        if not isinstance(raw, dict):
-            return None
-        if raw.get("schema_version") != SCHEMA_VERSION:
+        if not isinstance(raw, dict) or raw.get("schema_version") != SCHEMA_VERSION:
             return None
         if not isinstance(raw.get("datasets", {}), dict):
             return None
@@ -179,15 +174,13 @@ class VerifiableTaskLedger:
         temp.replace(self.path)
 
     @staticmethod
-    def _bind_identity(state: dict[str, Any], identity_id: str) -> bool:
+    def _bind_identity(state: dict[str, Any], identity_id: str) -> None:
         requested = _clean_id(identity_id, "identity_id")
         bound = str(state.get("identity_id", "")).strip()[:MAX_ID_CHARS]
         if bound and bound != requested:
             raise ValueError("verifiable_task_ledger_identity_mismatch")
         if not bound:
             state["identity_id"] = requested
-            return True
-        return False
 
     def create_dataset(
         self,
@@ -196,32 +189,30 @@ class VerifiableTaskLedger:
         task_family: str,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
-        clean_family = _clean_id(task_family, "task_family")
+        dataset_id = _clean_id(dataset_id, "dataset_id")
+        task_family = _clean_id(task_family, "task_family")
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
         with self.lock:
             state = self._load()
-            changed = self._bind_identity(state, identity_id)
-            datasets = state.get("datasets", {})
-            if clean_dataset_id in datasets:
+            self._bind_identity(state, identity_id)
+            datasets = state["datasets"]
+            if dataset_id in datasets:
                 raise ValueError("dataset_already_exists")
             if len(datasets) >= MAX_DATASETS:
                 raise ValueError("dataset_limit_reached")
             dataset = {
-                "dataset_id": clean_dataset_id,
-                "task_family": clean_family,
+                "dataset_id": dataset_id,
+                "task_family": task_family,
                 "verifier_kind": VERIFIER_KIND,
                 "sealed": False,
                 "sealed_set_sha256": "",
+                "seal_nonce": "",
                 "created_at": now,
                 "sealed_at": 0,
                 "cases": {},
             }
-            datasets[clean_dataset_id] = dataset
-            state["datasets"] = datasets
-            state["revision"] = max(0, int(state.get("revision", 0))) + 1
-            state["updated_at"] = now
-            self._save(state)
+            datasets[dataset_id] = dataset
+            self._touch_and_save(state, now)
             return self._dataset_summary(dataset)
 
     def add_case(
@@ -235,47 +226,47 @@ class VerifiableTaskLedger:
         source: str = "synthetic_or_curated",
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
-        clean_case_id = _clean_id(case_id, "case_id")
-        clean_partition = str(partition or "").strip().upper()
-        if clean_partition not in PARTITIONS:
+        dataset_id = _clean_id(dataset_id, "dataset_id")
+        case_id = _clean_id(case_id, "case_id")
+        partition = str(partition or "").strip().upper()
+        if partition not in PARTITIONS:
             raise ValueError("invalid_task_partition")
         normalized_input = json.loads(_canonical_json(input_value))
         normalized_expected = json.loads(_canonical_json(expected_output))
-        clean_source = _clean_id(source, "source")
+        source = _clean_id(source, "source")
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
 
         with self.lock:
             state = self._load()
             self._bind_identity(state, identity_id)
-            dataset = state.get("datasets", {}).get(clean_dataset_id)
+            dataset = state["datasets"].get(dataset_id)
             if not isinstance(dataset, dict):
                 raise ValueError("dataset_not_found")
-            if bool(dataset.get("sealed", False)):
+            if dataset.get("sealed") is True:
                 raise PermissionError("sealed_dataset_is_immutable")
-            cases = dataset.get("cases", {})
-            if clean_case_id in cases:
+            cases = dataset["cases"]
+            if case_id in cases:
                 raise ValueError("task_case_already_exists")
             if len(cases) >= MAX_CASES_PER_DATASET:
                 raise ValueError("task_case_limit_reached")
-            cases[clean_case_id] = {
-                "case_id": clean_case_id,
-                "partition": clean_partition,
+            cases[case_id] = {
+                "case_id": case_id,
+                "partition": partition,
                 "input": normalized_input,
                 "expected_output": normalized_expected,
-                "source": clean_source,
+                "source": source,
                 "created_at": now,
             }
-            dataset["cases"] = cases
-            state["revision"] = max(0, int(state.get("revision", 0))) + 1
-            state["updated_at"] = now
-            self._save(state)
-            return {
-                "case_id": clean_case_id,
-                "partition": clean_partition,
-                "input_sha256": _sha256_json(normalized_input),
-                "expected_output_sha256": _sha256_json(normalized_expected),
+            self._touch_and_save(state, now)
+            response = {
+                "case_id": case_id,
+                "partition": partition,
+                "hidden": partition == "SEALED_TEST",
             }
+            if partition != "SEALED_TEST":
+                response["input_sha256"] = _sha256_json(normalized_input)
+                response["expected_output_sha256"] = _sha256_json(normalized_expected)
+            return response
 
     def seal_dataset(
         self,
@@ -283,85 +274,85 @@ class VerifiableTaskLedger:
         dataset_id: str,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
+        dataset_id = _clean_id(dataset_id, "dataset_id")
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
         with self.lock:
             state = self._load()
             self._bind_identity(state, identity_id)
-            dataset = state.get("datasets", {}).get(clean_dataset_id)
+            dataset = state["datasets"].get(dataset_id)
             if not isinstance(dataset, dict):
                 raise ValueError("dataset_not_found")
-            if bool(dataset.get("sealed", False)):
+            if dataset.get("sealed") is True:
                 return self._sealed_manifest(dataset)
             hidden = [
-                case for case in dataset.get("cases", {}).values()
+                case for case in dataset["cases"].values()
                 if isinstance(case, dict) and case.get("partition") == "SEALED_TEST"
             ]
             if not hidden:
                 raise ValueError("sealed_test_partition_required")
             hidden.sort(key=lambda item: str(item.get("case_id", "")))
-            commitment_payload = {
+            nonce = secrets.token_hex(32)
+            commitment = {
                 "schema_version": SCHEMA_VERSION,
-                "dataset_id": clean_dataset_id,
+                "nonce": nonce,
+                "dataset_id": dataset_id,
                 "task_family": dataset.get("task_family", ""),
-                "verifier_kind": dataset.get("verifier_kind", VERIFIER_KIND),
+                "verifier_kind": VERIFIER_KIND,
                 "sealed_cases": [
                     {
-                        "case_id": case.get("case_id", ""),
-                        "input": case.get("input"),
-                        "expected_output": case.get("expected_output"),
+                        "case_id": case["case_id"],
+                        "input": case["input"],
+                        "expected_output": case["expected_output"],
                     }
                     for case in hidden
                 ],
             }
-            dataset["sealed_set_sha256"] = _sha256_json(commitment_payload)
+            dataset["seal_nonce"] = nonce
+            dataset["sealed_set_sha256"] = _sha256_json(commitment)
             dataset["sealed"] = True
             dataset["sealed_at"] = now
-            state["revision"] = max(0, int(state.get("revision", 0))) + 1
-            state["updated_at"] = now
-            self._save(state)
+            self._touch_and_save(state, now)
             return self._sealed_manifest(dataset)
 
     def learning_view(self, identity_id: str, dataset_id: str) -> dict[str, Any]:
-        """Return teachable examples while never exposing SEALED_TEST answers."""
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
+        """Expose teachable examples but never SEALED_TEST cases or the nonce."""
+        dataset_id = _clean_id(dataset_id, "dataset_id")
         with self.lock:
             state = self._load()
             self._bind_identity(state, identity_id)
-            dataset = state.get("datasets", {}).get(clean_dataset_id)
+            dataset = state["datasets"].get(dataset_id)
             if not isinstance(dataset, dict):
                 raise ValueError("dataset_not_found")
             visible = [
                 {
-                    "case_id": case.get("case_id", ""),
-                    "partition": case.get("partition", ""),
-                    "input": case.get("input"),
-                    "expected_output": case.get("expected_output"),
+                    "case_id": case["case_id"],
+                    "partition": case["partition"],
+                    "input": case["input"],
+                    "expected_output": case["expected_output"],
                 }
-                for case in dataset.get("cases", {}).values()
+                for case in dataset["cases"].values()
                 if isinstance(case, dict)
                 and case.get("partition") in {"TRAIN", "VALIDATION"}
             ]
             visible.sort(key=lambda item: (item["partition"], item["case_id"]))
             return {
-                "dataset_id": clean_dataset_id,
+                "dataset_id": dataset_id,
                 "task_family": dataset.get("task_family", ""),
-                "verifier_kind": dataset.get("verifier_kind", VERIFIER_KIND),
+                "verifier_kind": VERIFIER_KIND,
                 "cases": visible,
-                "sealed_test_answers_exposed": False,
-                "sealed_test_count": sum(
-                    1 for case in dataset.get("cases", {}).values()
-                    if isinstance(case, dict) and case.get("partition") == "SEALED_TEST"
-                ),
+                "sealed_test_count": self._partition_count(dataset, "SEALED_TEST"),
                 "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
+                "sealed_test_inputs_exposed": False,
+                "sealed_test_answers_exposed": False,
+                "seal_nonce_exposed": False,
             }
 
     def sealed_manifest(self, identity_id: str, dataset_id: str) -> dict[str, Any]:
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
+        dataset_id = _clean_id(dataset_id, "dataset_id")
         with self.lock:
             state = self._load()
             self._bind_identity(state, identity_id)
-            dataset = state.get("datasets", {}).get(clean_dataset_id)
+            dataset = state["datasets"].get(dataset_id)
             if not isinstance(dataset, dict):
                 raise ValueError("dataset_not_found")
             return self._sealed_manifest(dataset)
@@ -376,109 +367,118 @@ class VerifiableTaskLedger:
         producer_id: str,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        clean_dataset_id = _clean_id(dataset_id, "dataset_id")
-        clean_case_id = _clean_id(case_id, "case_id")
-        clean_producer_kind = _clean_id(producer_kind, "producer_kind")
-        clean_producer_id = _clean_id(producer_id, "producer_id")
-        normalized_actual = json.loads(_canonical_json(actual_output))
+        dataset_id = _clean_id(dataset_id, "dataset_id")
+        case_id = _clean_id(case_id, "case_id")
+        producer_kind = _clean_id(producer_kind, "producer_kind")
+        producer_id = _clean_id(producer_id, "producer_id")
+        actual = json.loads(_canonical_json(actual_output))
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
-
         with self.lock:
             state = self._load()
             self._bind_identity(state, identity_id)
-            dataset = state.get("datasets", {}).get(clean_dataset_id)
+            dataset = state["datasets"].get(dataset_id)
             if not isinstance(dataset, dict):
                 raise ValueError("dataset_not_found")
-            case = dataset.get("cases", {}).get(clean_case_id)
+            case = dataset["cases"].get(case_id)
             if not isinstance(case, dict):
                 raise ValueError("task_case_not_found")
-            if case.get("partition") == "SEALED_TEST" and not bool(dataset.get("sealed", False)):
+            if case.get("partition") == "SEALED_TEST" and dataset.get("sealed") is not True:
                 raise PermissionError("sealed_test_must_be_committed_before_evaluation")
             if dataset.get("verifier_kind") != VERIFIER_KIND:
                 raise ValueError("unsupported_verifier_kind")
 
-            verdict = _canonical_json(normalized_actual) == _canonical_json(case.get("expected_output"))
-            actual_sha = _sha256_json(normalized_actual)
+            verdict = _canonical_json(actual) == _canonical_json(case["expected_output"])
+            actual_sha = _sha256_json(actual)
             attempt_id = hashlib.sha256(
-                f"{clean_dataset_id}|{clean_case_id}|{clean_producer_kind}|{clean_producer_id}|{now}|{actual_sha}".encode("utf-8")
+                f"{dataset_id}|{case_id}|{producer_kind}|{producer_id}|{now}|{actual_sha}".encode("utf-8")
             ).hexdigest()[:24]
-            attempts = [item for item in state.get("attempts", []) if isinstance(item, dict)]
+            attempts = [item for item in state["attempts"] if isinstance(item, dict)]
             attempts.append({
                 "attempt_id": attempt_id,
-                "dataset_id": clean_dataset_id,
-                "case_id": clean_case_id,
+                "dataset_id": dataset_id,
+                "case_id": case_id,
                 "partition": case.get("partition", ""),
-                "producer_kind": clean_producer_kind,
-                "producer_id": clean_producer_id,
+                "producer_kind": producer_kind,
+                "producer_id": producer_id,
                 "actual_output_sha256": actual_sha,
                 "verdict": bool(verdict),
                 "evaluated_at": now,
             })
             state["attempts"] = attempts[-MAX_ATTEMPTS:]
-            state["revision"] = max(0, int(state.get("revision", 0))) + 1
-            state["updated_at"] = now
-            self._save(state)
+            self._touch_and_save(state, now)
             return {
                 "attempt_id": attempt_id,
-                "dataset_id": clean_dataset_id,
-                "case_id": clean_case_id,
+                "dataset_id": dataset_id,
+                "case_id": case_id,
                 "partition": case.get("partition", ""),
                 "verifier_kind": VERIFIER_KIND,
                 "verdict": bool(verdict),
                 "actual_output_sha256": actual_sha,
                 "expected_output_exposed": False,
+                "seal_nonce_exposed": False,
             }
 
-    @staticmethod
-    def _dataset_summary(dataset: dict[str, Any]) -> dict[str, Any]:
-        cases = [case for case in dataset.get("cases", {}).values() if isinstance(case, dict)]
-        return {
-            "dataset_id": dataset.get("dataset_id", ""),
-            "task_family": dataset.get("task_family", ""),
-            "verifier_kind": dataset.get("verifier_kind", VERIFIER_KIND),
-            "sealed": bool(dataset.get("sealed", False)),
-            "case_count": len(cases),
-            "train_count": sum(1 for case in cases if case.get("partition") == "TRAIN"),
-            "validation_count": sum(1 for case in cases if case.get("partition") == "VALIDATION"),
-            "sealed_test_count": sum(1 for case in cases if case.get("partition") == "SEALED_TEST"),
-            "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
-            "sealed_test_answers_exposed": False,
-        }
+    def _touch_and_save(self, state: dict[str, Any], now: int) -> None:
+        state["revision"] = max(0, int(state.get("revision", 0))) + 1
+        state["updated_at"] = now
+        self._save(state)
 
     @staticmethod
-    def _sealed_manifest(dataset: dict[str, Any]) -> dict[str, Any]:
-        hidden_count = sum(
+    def _partition_count(dataset: dict[str, Any], partition: str) -> int:
+        return sum(
             1 for case in dataset.get("cases", {}).values()
-            if isinstance(case, dict) and case.get("partition") == "SEALED_TEST"
+            if isinstance(case, dict) and case.get("partition") == partition
         )
+
+    @classmethod
+    def _dataset_summary(cls, dataset: dict[str, Any]) -> dict[str, Any]:
         return {
             "dataset_id": dataset.get("dataset_id", ""),
             "task_family": dataset.get("task_family", ""),
-            "verifier_kind": dataset.get("verifier_kind", VERIFIER_KIND),
+            "verifier_kind": VERIFIER_KIND,
             "sealed": bool(dataset.get("sealed", False)),
-            "sealed_at": max(0, int(dataset.get("sealed_at", 0))),
-            "sealed_test_count": hidden_count,
+            "case_count": len(dataset.get("cases", {})),
+            "train_count": cls._partition_count(dataset, "TRAIN"),
+            "validation_count": cls._partition_count(dataset, "VALIDATION"),
+            "sealed_test_count": cls._partition_count(dataset, "SEALED_TEST"),
             "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
             "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
+            "seal_nonce_exposed": False,
+        }
+
+    @classmethod
+    def _sealed_manifest(cls, dataset: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "dataset_id": dataset.get("dataset_id", ""),
+            "task_family": dataset.get("task_family", ""),
+            "verifier_kind": VERIFIER_KIND,
+            "sealed": bool(dataset.get("sealed", False)),
+            "sealed_at": max(0, int(dataset.get("sealed_at", 0))),
+            "sealed_test_count": cls._partition_count(dataset, "SEALED_TEST"),
+            "sealed_set_sha256": dataset.get("sealed_set_sha256", ""),
+            "sealed_test_inputs_exposed": False,
+            "sealed_test_answers_exposed": False,
+            "seal_nonce_exposed": False,
         }
 
     def status(self) -> dict[str, Any]:
         with self.lock:
             state = self._load()
-            datasets = [item for item in state.get("datasets", {}).values() if isinstance(item, dict)]
-            case_count = sum(len(item.get("cases", {})) for item in datasets)
-            sealed_count = sum(1 for item in datasets if bool(item.get("sealed", False)))
+            datasets = [item for item in state["datasets"].values() if isinstance(item, dict)]
             return {
                 "schema_version": SCHEMA_VERSION,
                 "identity_bound": bool(str(state.get("identity_id", "")).strip()),
                 "revision": max(0, int(state.get("revision", 0))),
                 "dataset_count": len(datasets),
-                "sealed_dataset_count": sealed_count,
-                "case_count": case_count,
-                "attempt_count": len([item for item in state.get("attempts", []) if isinstance(item, dict)]),
+                "sealed_dataset_count": sum(1 for item in datasets if item.get("sealed") is True),
+                "case_count": sum(len(item.get("cases", {})) for item in datasets),
+                "attempt_count": len([item for item in state["attempts"] if isinstance(item, dict)]),
                 "verifier_kind": VERIFIER_KIND,
+                "sealed_commitment_salted": True,
+                "sealed_test_inputs_exposed": False,
                 "sealed_test_answers_exposed": False,
+                "seal_nonce_exposed": False,
                 "learned_code_execution": False,
                 "llm_judge_used": False,
                 "network_access": False,
@@ -498,7 +498,10 @@ def verifiable_task_ledger_status() -> dict[str, Any]:
             "schema_version": SCHEMA_VERSION,
             "healthy": False,
             "error": "verifiable_task_ledger_corrupt",
+            "sealed_commitment_salted": True,
+            "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
+            "seal_nonce_exposed": False,
             "learned_code_execution": False,
             "llm_judge_used": False,
             "network_access": False,

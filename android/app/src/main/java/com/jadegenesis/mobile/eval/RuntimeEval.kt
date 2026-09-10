@@ -20,6 +20,7 @@ data class RuntimeEvalObservation(
     val nodeName: String,
     val nodeKind: NodeKind,
     val model: String = "",
+    val brainProfile: String = "",
     val success: Boolean,
     val durationMs: Long,
     val outputChars: Int = 0,
@@ -34,6 +35,7 @@ data class RuntimeEvalStats(
     val nodeName: String,
     val taskKind: String,
     val model: String,
+    val brainProfile: String,
     val samples: Int,
     val successes: Int,
     val failures: Int,
@@ -60,17 +62,30 @@ data class RuntimeEvalReport(
 object RuntimeEvalEngine {
     const val SCHEMA_VERSION = 1
 
+    private data class GroupKey(
+        val nodeId: String,
+        val taskKind: String,
+        val model: String,
+        val brainProfile: String
+    )
+
     fun aggregate(
         observations: List<RuntimeEvalObservation>,
         nodeId: String,
         taskKind: String,
-        model: String? = null
+        model: String? = null,
+        brainProfile: String? = null
     ): RuntimeEvalStats? {
         val cleanModel = model?.trim().orEmpty()
+        val cleanProfile = brainProfile?.trim()?.lowercase().orEmpty()
         val relevant = observations.filter { observation ->
             observation.nodeId == nodeId &&
                 observation.taskKind == taskKind &&
-                (cleanModel.isBlank() || observation.model == cleanModel)
+                (cleanModel.isBlank() || observation.model == cleanModel) &&
+                (
+                    cleanProfile.isBlank() ||
+                        observation.brainProfile.trim().lowercase() == cleanProfile
+                    )
         }
         if (relevant.isEmpty()) return null
         return aggregateGroup(relevant)
@@ -83,7 +98,14 @@ object RuntimeEvalEngine {
     ): RuntimeEvalReport {
         val ordered = observations.sortedByDescending { it.createdAt }
         val groups = ordered
-            .groupBy { Triple(it.nodeId, it.taskKind, it.model) }
+            .groupBy {
+                GroupKey(
+                    nodeId = it.nodeId,
+                    taskKind = it.taskKind,
+                    model = it.model,
+                    brainProfile = it.brainProfile.trim().lowercase()
+                )
+            }
             .values
             .map(::aggregateGroup)
             .sortedWith(
@@ -91,6 +113,7 @@ object RuntimeEvalEngine {
                     .thenByDescending { it.lastObservedAt }
                     .thenBy { it.nodeName.lowercase() }
                     .thenBy { it.taskKind }
+                    .thenBy { it.brainProfile }
             )
 
         val successes = ordered.count { it.success }
@@ -211,6 +234,7 @@ object RuntimeEvalEngine {
             nodeName = last.nodeName,
             taskKind = last.taskKind,
             model = last.model,
+            brainProfile = last.brainProfile.trim().lowercase(),
             samples = ordered.size,
             successes = successes,
             failures = ordered.size - successes,

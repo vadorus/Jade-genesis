@@ -57,6 +57,7 @@ jobs:
             node-agent/verifiable_task_ledger.py \
             node-agent/skill_spec.py \
             node-agent/procedure_runtime.py \
+            node-agent/skill_registry.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
@@ -64,7 +65,8 @@ jobs:
             node-agent/test_adaptive_vps_night_cycle.py \
             node-agent/test_verifiable_task_ledger.py \
             node-agent/test_skill_spec.py \
-            node-agent/test_procedure_runtime.py
+            node-agent/test_procedure_runtime.py \
+            node-agent/test_skill_registry.py
 
       - name: Test bounded runtime, learning substrate and brain profiles
         shell: bash
@@ -101,6 +103,7 @@ jobs:
           assert "shared_state_sync" in module.ALLOWED_TASKS
           assert "night_learning_lab" not in module.ALLOWED_TASKS
           assert "procedure_execute" not in module.ALLOWED_TASKS
+          assert "skill_registry_mutate" not in module.ALLOWED_TASKS
           assert all("shell" not in task for task in module.ALLOWED_TASKS)
 
           cpu = module.cpu_load_percent(sample_seconds=0.02)
@@ -212,6 +215,7 @@ jobs:
           assert "verifiable_task_ledger_v1" in health["capabilities"]
           assert "skill_spec_v1" in health["capabilities"]
           assert "procedure_runtime_v1" in health["capabilities"]
+          assert "skill_registry_v1" in health["capabilities"]
           assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab+adaptive_strategy_registry"
           assert health["night_cycle_supervisor"]["experiment_automatic"] is False
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
@@ -240,6 +244,7 @@ jobs:
           assert skill["execution_enabled"] is False
           assert skill["interpreter_present_in_contract"] is False
           assert skill["dependencies_allowed"] is False
+          assert skill["max_dependencies"] == 0
           assert skill["network_allowed"] is False
           assert skill["filesystem_allowed"] is False
           assert skill["shell_allowed"] is False
@@ -266,7 +271,20 @@ jobs:
           assert procedure["os_process_isolation"] is False
           assert procedure["untrusted_generated_execution"] is False
 
-          print("Node Runtime 0.1.7 + restricted Procedure Runtime v1 validated.")
+          registry = health["skill_registry"]
+          assert registry["developer_authored_only"] is True
+          assert registry["activation_requires_explicit_approval"] is True
+          assert registry["activation_automatic"] is False
+          assert registry["generated_skill_registration"] is False
+          assert registry["generated_skill_execution"] is False
+          assert registry["external_teacher_execution"] is False
+          assert registry["exact_family_selection"] is True
+          assert registry["fuzzy_recall"] is False
+          assert registry["dependencies_allowed"] is False
+          assert registry["llm_used_for_selection"] is False
+          assert registry["network_access"] is False
+
+          print("Node Runtime 0.1.7 + Procedure Runtime + restricted Skill Registry validated.")
           PY
 
       - name: Prove validation did not rewrite sources

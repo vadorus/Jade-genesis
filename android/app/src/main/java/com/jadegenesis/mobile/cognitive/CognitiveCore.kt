@@ -27,25 +27,44 @@ class CognitiveCore(
         val executionId = "cog-${UUID.randomUUID()}"
         val startedAt = System.currentTimeMillis()
         val conversationLearning = ConversationLearningRuntime.currentOrNull()
-        val learningUpdate = if (context.operation == "answer") {
-            conversationLearning?.beginUserMessage(context.userInput)
+        val learningUpdate = if (context.operation == "answer" && conversationLearning != null) {
+            runCatching {
+                conversationLearning.beginUserMessage(context.userInput)
+            }.onFailure { error ->
+                logger.log(
+                    DiagnosticLevel.WARN,
+                    "conversation_learning_unavailable",
+                    "Conversation Learning ignoré pour ce tour afin de préserver un état illisible ou incompatible.",
+                    mapOf("error" to (error.message ?: error::class.java.simpleName))
+                )
+            }.getOrNull()
         } else {
             null
         }
+
         val conversationMemories = if (learningUpdate != null) {
-            conversationLearning
-                ?.contextMemories(SafetyPolicy.MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS)
-                .orEmpty()
+            runCatching {
+                conversationLearning
+                    ?.contextMemories(SafetyPolicy.MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS)
+                    .orEmpty()
+            }.onFailure { error ->
+                logger.log(
+                    DiagnosticLevel.WARN,
+                    "conversation_learning_context_failed",
+                    "Le contexte conversationnel local n'a pas été injecté ; les mémoires principales restent intactes.",
+                    mapOf("error" to (error.message ?: error::class.java.simpleName))
+                )
+            }.getOrDefault(emptyList())
         } else {
             emptyList()
         }
+
         val workingContext = if (conversationMemories.isEmpty()) {
             context
         } else {
             context.copy(
-                memories = (conversationMemories + context.memories)
+                memories = (context.memories + conversationMemories)
                     .distinctBy { it.id }
-                    .take(14)
             )
         }
 
@@ -55,7 +74,7 @@ class CognitiveCore(
             buildString {
                 append("Contexte observé : ${workingContext.selfModel.knownNodes.size} nœud(s), mode ${workingContext.selfModel.resourceBudget.mode}.")
                 if (conversationMemories.isNotEmpty()) {
-                    append(" ${conversationMemories.size} élément(s) d'expérience conversationnelle locale injecté(s).")
+                    append(" ${conversationMemories.size} élément(s) d'expérience conversationnelle locale ajouté(s) sans évincer la mémoire principale.")
                 }
             }
         )
@@ -88,7 +107,9 @@ class CognitiveCore(
                 )
             )
         } catch (error: Exception) {
-            conversationLearning?.cancelPending()
+            if (learningUpdate != null) {
+                conversationLearning?.cancelPending()
+            }
             throw error
         }
         val executionDuration = elapsedMs(executionStarted)
@@ -109,6 +130,7 @@ class CognitiveCore(
             recordConversationLearning(executionId, learningUpdate)
             completeConversationLearning(
                 store = conversationLearning,
+                update = learningUpdate,
                 input = context.userInput,
                 profile = answerPlan.profile.name,
                 result = first
@@ -140,6 +162,7 @@ class CognitiveCore(
             recordConversationLearning(executionId, learningUpdate)
             completeConversationLearning(
                 store = conversationLearning,
+                update = learningUpdate,
                 input = context.userInput,
                 profile = answerPlan.profile.name,
                 result = first
@@ -204,6 +227,7 @@ class CognitiveCore(
         recordConversationLearning(executionId, learningUpdate)
         completeConversationLearning(
             store = conversationLearning,
+            update = learningUpdate,
             input = context.userInput,
             profile = answerPlan.profile.name,
             result = finalResult
@@ -214,19 +238,29 @@ class CognitiveCore(
 
     private fun completeConversationLearning(
         store: ConversationLearningStore?,
+        update: ConversationLearningUpdate?,
         input: String,
         profile: String,
         result: BrainResult
     ) {
-        if (store == null) return
-        store.completeTurn(
-            userInput = input,
-            answer = result.text,
-            profile = profile,
-            backendId = result.backendId,
-            model = result.model,
-            fallbackUsed = result.fallbackUsed
-        )
+        if (store == null || update == null) return
+        runCatching {
+            store.completeTurn(
+                userInput = input,
+                answer = result.text,
+                profile = profile,
+                backendId = result.backendId,
+                model = result.model,
+                fallbackUsed = result.fallbackUsed
+            )
+        }.onFailure { error ->
+            logger.log(
+                DiagnosticLevel.WARN,
+                "conversation_learning_complete_failed",
+                "Le tour conversationnel n'a pas été persisté ; aucune donnée existante n'a été remplacée par un état vide.",
+                mapOf("error" to (error.message ?: error::class.java.simpleName))
+            )
+        }
     }
 
     private fun recordConversationLearning(
@@ -247,6 +281,9 @@ class CognitiveCore(
                         "Conversation Learning a enregistré un retour ${feedback.name} " +
                             "(confiance ${"%.2f".format(update.feedbackConfidence)})."
                     )
+                    if (update.feedbackOnly) {
+                        append(" Ce message a été traité comme feedback du tour précédent et n'a pas créé un nouveau sujet conversationnel.")
+                    }
                 }
                 if (milestones.isNotEmpty()) {
                     if (isNotEmpty()) append(" ")

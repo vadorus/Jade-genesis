@@ -96,6 +96,64 @@ class MemoryArchitectureTest {
     }
 
     @Test
+    fun exactDuplicateSupersessionActivatesOnlyAfterExplicitLifecycleCall() = runBlocking {
+        val old = memory(
+            id = "old",
+            createdAt = 10L,
+            content = "Même observation utile"
+        )
+        val newest = memory(
+            id = "new",
+            createdAt = 20L,
+            content = "  même   observation UTILE  "
+        )
+        val unrelated = memory(
+            id = "other",
+            createdAt = 30L,
+            content = "Autre observation"
+        )
+        val dao = FakeMemoryDao().apply {
+            activeByIdItems = listOf(old, newest, unrelated)
+        }
+        val store = MemoryStore(dao)
+
+        val count = store.supersedeExactDuplicates(listOf("old", "new", "other"))
+
+        assertEquals(1, count)
+        assertEquals(listOf("old" to "new"), dao.supersededPairs)
+    }
+
+    @Test
+    fun userFactIsNeverAutoSupersededByDuplicateCleanup() = runBlocking {
+        val user = memory(
+            id = "user",
+            createdAt = 10L,
+            source = "USER",
+            type = "FACT",
+            confidence = 1.0,
+            content = "Jade est mon assistant personnel"
+        )
+        val duplicate = memory(
+            id = "copy",
+            createdAt = 20L,
+            source = "TEST",
+            type = "FACT",
+            confidence = 0.8,
+            content = "jade est mon assistant personnel"
+        )
+        val dao = FakeMemoryDao().apply {
+            activeByIdItems = listOf(user, duplicate)
+        }
+        val store = MemoryStore(dao)
+
+        val count = store.supersedeExactDuplicates(listOf("user", "copy"))
+
+        assertEquals(1, count)
+        assertEquals(listOf("copy" to "user"), dao.supersededPairs)
+        assertTrue(dao.supersededPairs.none { it.first == "user" })
+    }
+
+    @Test
     fun retentionCannotBecomeMoreAggressiveThanSafetyPolicy() = runBlocking {
         val dao = FakeMemoryDao().apply {
             supersededCandidateIds = listOf("old-superseded")
@@ -150,11 +208,12 @@ class MemoryArchitectureTest {
         createdAt: Long,
         source: String = "TEST",
         type: String = "OBSERVATION",
-        confidence: Double = 0.4
+        confidence: Double = 0.4,
+        content: String = "mémoire $id"
     ): MemoryEntity = MemoryEntity(
         id = id,
         type = type,
-        content = "mémoire $id",
+        content = content,
         source = source,
         confidence = confidence,
         originNode = "test-node",
@@ -165,6 +224,7 @@ class MemoryArchitectureTest {
         var latestItems: List<MemoryEntity> = emptyList()
         var latestConsolidatedItems: List<MemoryEntity> = emptyList()
         var latestUserItems: List<MemoryEntity> = emptyList()
+        var activeByIdItems: List<MemoryEntity> = emptyList()
         var searchItems: List<MemoryEntity> = emptyList()
         var consolidationItems: List<MemoryEntity> = emptyList()
         var supersededCandidateIds: List<String> = emptyList()
@@ -182,6 +242,7 @@ class MemoryArchitectureTest {
         var lastMaxTransientVisionConfidence: Double = -1.0
         var lastSupersededLimit: Int = -1
         var lastEphemeralLimit: Int = -1
+        val supersededPairs = mutableListOf<Pair<String, String>>()
 
         private val inserted = mutableMapOf<String, MemoryEntity>()
 
@@ -198,6 +259,9 @@ class MemoryArchitectureTest {
         override suspend fun latestUserFacts(limit: Int): List<MemoryEntity> =
             latestUserItems.take(limit)
 
+        override suspend fun activeByIds(ids: List<String>): List<MemoryEntity> =
+            activeByIdItems.filter { it.id in ids }
+
         override suspend fun search(query: String, limit: Int): List<MemoryEntity> =
             searchItems.take(limit)
 
@@ -208,7 +272,9 @@ class MemoryArchitectureTest {
 
         override suspend fun markVerified(id: String, verifiedAt: Long) = Unit
 
-        override suspend fun markSuperseded(id: String, replacementId: String) = Unit
+        override suspend fun markSuperseded(id: String, replacementId: String) {
+            supersededPairs += id to replacementId
+        }
 
         override suspend fun consolidationCandidates(
             afterCreatedAt: Long,
@@ -223,7 +289,7 @@ class MemoryArchitectureTest {
 
         override suspend fun newestByIds(ids: List<String>): MemoryEntity? =
             (latestItems + latestConsolidatedItems + latestUserItems +
-                consolidationItems + inserted.values)
+                activeByIdItems + consolidationItems + inserted.values)
                 .filter { it.id in ids }
                 .maxWithOrNull(
                     compareBy<MemoryEntity> { it.createdAt }

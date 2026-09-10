@@ -62,11 +62,14 @@ private class UnsupportedConversationSchemaException(version: Int) :
 private class CorruptConversationStateException :
     IllegalStateException("Conversation Learning illisible ; état conservé sans écrasement.")
 
-class ConversationLearningStore(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences(
-        PREFS_NAME,
-        Context.MODE_PRIVATE
+class ConversationLearningStore internal constructor(
+    private val storage: ConversationLearningStorage,
+    private val nowMs: () -> Long = { System.currentTimeMillis() }
+) {
+    constructor(context: Context) : this(
+        storage = SharedPreferencesConversationLearningStorage(context.applicationContext)
     )
+
     private val lock = Any()
 
     @Volatile
@@ -85,7 +88,7 @@ class ConversationLearningStore(context: Context) {
             return@synchronized ConversationLearningUpdate(emptyList())
         }
 
-        val now = System.currentTimeMillis()
+        val now = nowMs()
         val state = loadUnsafe()
         val lastTurn = state.turns.firstOrNull()
             ?.takeIf { now - it.createdAt <= MAX_FEEDBACK_WINDOW_MS }
@@ -240,7 +243,7 @@ class ConversationLearningStore(context: Context) {
             backendId = backendId.trim().take(120),
             model = model.trim().take(160),
             fallbackUsed = fallbackUsed,
-            createdAt = System.currentTimeMillis()
+            createdAt = nowMs()
         )
         saveUnsafe(
             state.copy(
@@ -263,7 +266,7 @@ class ConversationLearningStore(context: Context) {
         if (currentTopics.isEmpty()) return@synchronized emptyList()
 
         val safeLimit = limit.coerceIn(1, SafetyPolicy.MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS)
-        val now = System.currentTimeMillis()
+        val now = nowMs()
         val state = loadUnsafe()
         val output = mutableListOf<MemorySnapshot>()
 
@@ -365,21 +368,23 @@ class ConversationLearningStore(context: Context) {
             .take(MAX_FEEDBACK_EXCERPT_CHARS)
 
     private fun loadUnsafe(): ConversationLearningState {
-        val primary = prefs.getString(KEY_STATE, null)
+        val primary = storage.getString(KEY_STATE)
         if (!primary.isNullOrBlank()) {
             try {
                 return decode(primary)
             } catch (unsupported: UnsupportedConversationSchemaException) {
                 throw unsupported
             } catch (_: Exception) {
-                val backup = prefs.getString(KEY_STATE_BACKUP, null)
+                val backup = storage.getString(KEY_STATE_BACKUP)
                 if (!backup.isNullOrBlank()) {
                     try {
                         val recovered = decode(backup)
-                        prefs.edit()
-                            .putString(KEY_STATE_QUARANTINE, primary)
-                            .putString(KEY_STATE, encode(recovered))
-                            .apply()
+                        storage.putStrings(
+                            mapOf(
+                                KEY_STATE_QUARANTINE to primary,
+                                KEY_STATE to encode(recovered)
+                            )
+                        )
                         return recovered
                     } catch (unsupported: UnsupportedConversationSchemaException) {
                         throw unsupported
@@ -387,21 +392,21 @@ class ConversationLearningStore(context: Context) {
                         // Le primaire reste intact ; il n'est jamais remplacé par un état vide.
                     }
                 }
-                prefs.edit().putString(KEY_STATE_QUARANTINE, primary).apply()
+                storage.putStrings(mapOf(KEY_STATE_QUARANTINE to primary))
                 throw CorruptConversationStateException()
             }
         }
 
-        val backup = prefs.getString(KEY_STATE_BACKUP, null)
+        val backup = storage.getString(KEY_STATE_BACKUP)
         if (!backup.isNullOrBlank()) {
             try {
                 val recovered = decode(backup)
-                prefs.edit().putString(KEY_STATE, encode(recovered)).apply()
+                storage.putStrings(mapOf(KEY_STATE to encode(recovered)))
                 return recovered
             } catch (unsupported: UnsupportedConversationSchemaException) {
                 throw unsupported
             } catch (_: Exception) {
-                prefs.edit().putString(KEY_STATE_QUARANTINE, backup).apply()
+                storage.putStrings(mapOf(KEY_STATE_QUARANTINE to backup))
                 throw CorruptConversationStateException()
             }
         }
@@ -411,12 +416,13 @@ class ConversationLearningStore(context: Context) {
 
     private fun saveUnsafe(state: ConversationLearningState) {
         val encoded = encode(state)
-        val previous = prefs.getString(KEY_STATE, null)
-        val editor = prefs.edit()
+        val previous = storage.getString(KEY_STATE)
+        val values = linkedMapOf<String, String>()
         if (!previous.isNullOrBlank()) {
-            editor.putString(KEY_STATE_BACKUP, previous)
+            values[KEY_STATE_BACKUP] = previous
         }
-        editor.putString(KEY_STATE, encoded).apply()
+        values[KEY_STATE] = encoded
+        storage.putStrings(values)
     }
 
     private fun encode(state: ConversationLearningState): String = JSONObject().apply {
@@ -567,7 +573,6 @@ class ConversationLearningStore(context: Context) {
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
     companion object {
-        private const val PREFS_NAME = "jade_conversation_learning"
         private const val KEY_STATE = "state_v1"
         private const val KEY_STATE_BACKUP = "state_v1_backup"
         private const val KEY_STATE_QUARANTINE = "state_quarantine"

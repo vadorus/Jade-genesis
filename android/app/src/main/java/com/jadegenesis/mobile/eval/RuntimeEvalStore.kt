@@ -15,6 +15,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
+private class UnsupportedRuntimeOutcomeSchemaException(version: Int) :
+    IllegalStateException("Runtime Outcome schema non pris en charge : $version")
+
+private class CorruptRuntimeOutcomeStateException :
+    IllegalStateException("Runtime Outcome illisible ; état conservé sans écrasement.")
+
 class RuntimeEvalStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(
         PREFS_NAME,
@@ -174,6 +180,55 @@ class RuntimeEvalStore(context: Context) {
         record(observation)
     }
 
+    /**
+     * Associe un retour utilisateur à l'observation exacte de la réponse qui
+     * l'a provoqué. Une réponse ne porte qu'un seul outcome actif : un retour
+     * ultérieur remplace le précédent au lieu de compter plusieurs votes.
+     */
+    fun recordOutcomeFeedback(
+        feedbackId: String,
+        targetObservationId: String,
+        kind: RuntimeOutcomeKind,
+        confidence: Double,
+        createdAt: Long = System.currentTimeMillis()
+    ): RuntimeOutcomeFeedback? = synchronized(lock) {
+        val cleanFeedbackId = feedbackId.trim().take(160)
+        val cleanTargetId = targetObservationId.trim().take(180)
+        if (cleanFeedbackId.isBlank() || cleanTargetId.isBlank()) {
+            return@synchronized null
+        }
+
+        val target = loadUnsafe().firstOrNull { it.observationId == cleanTargetId }
+            ?: return@synchronized null
+        if (target.taskKind != "brain_chat" || !target.success) {
+            return@synchronized null
+        }
+
+        val feedback = RuntimeOutcomeFeedback(
+            feedbackId = cleanFeedbackId,
+            targetObservationId = target.observationId,
+            nodeId = target.nodeId,
+            taskKind = target.taskKind,
+            model = target.model,
+            brainProfile = target.brainProfile.trim().lowercase(),
+            kind = kind,
+            confidence = confidence.coerceIn(0.0, 1.0),
+            createdAt = createdAt.coerceAtLeast(0L)
+        )
+        validateOutcome(feedback)
+
+        val current = loadOutcomeUnsafe().toMutableList()
+        current.removeAll { existing ->
+            existing.targetObservationId == feedback.targetObservationId ||
+                existing.feedbackId == feedback.feedbackId
+        }
+        current.add(0, feedback)
+        saveOutcomeUnsafe(
+            current.take(SafetyPolicy.MAX_RUNTIME_EVAL_OUTCOME_FEEDBACK)
+        )
+        feedback
+    }
+
     fun record(observation: RuntimeEvalObservation) = synchronized(lock) {
         validate(observation)
         val current = loadUnsafe().toMutableList()
@@ -188,6 +243,14 @@ class RuntimeEvalStore(context: Context) {
         loadUnsafe().take(safeLimit)
     }
 
+    fun recentOutcomeFeedback(limit: Int = 100): List<RuntimeOutcomeFeedback> =
+        synchronized(lock) {
+            val safeLimit = limit.coerceIn(0, SafetyPolicy.MAX_RUNTIME_EVAL_OUTCOME_FEEDBACK)
+            if (safeLimit == 0) return@synchronized emptyList()
+            runCatching { loadOutcomeUnsafe().take(safeLimit) }
+                .getOrDefault(emptyList())
+        }
+
     fun stats(
         nodeId: String,
         taskKind: String,
@@ -199,7 +262,9 @@ class RuntimeEvalStore(context: Context) {
             nodeId = nodeId,
             taskKind = taskKind,
             model = model,
-            brainProfile = brainProfile
+            brainProfile = brainProfile,
+            outcomeFeedback = runCatching { loadOutcomeUnsafe() }
+                .getOrDefault(emptyList())
         )
     }
 
@@ -207,11 +272,17 @@ class RuntimeEvalStore(context: Context) {
         val config = JadeConfigRuntime.current().validated()
         RuntimeEvalEngine.report(
             observations = loadUnsafe().take(reportWindow()),
-            routing = config.routing
+            routing = config.routing,
+            outcomeFeedback = runCatching { loadOutcomeUnsafe() }
+                .getOrDefault(emptyList())
         )
     }
 
     fun count(): Int = synchronized(lock) { loadUnsafe().size }
+
+    fun outcomeFeedbackCount(): Int = synchronized(lock) {
+        runCatching { loadOutcomeUnsafe().size }.getOrDefault(0)
+    }
 
     private fun workloadFor(taskKind: String): TaskWorkload = when (taskKind) {
         "genesis_probe" -> TaskWorkload.MEDIUM
@@ -341,6 +412,119 @@ class RuntimeEvalStore(context: Context) {
             }
         }.getOrNull()
 
+    private fun loadOutcomeUnsafe(): List<RuntimeOutcomeFeedback> {
+        val primary = prefs.getString(KEY_OUTCOMES, null)
+        if (!primary.isNullOrBlank()) {
+            try {
+                return decodeOutcomes(primary)
+            } catch (unsupported: UnsupportedRuntimeOutcomeSchemaException) {
+                throw unsupported
+            } catch (_: Exception) {
+                val backup = prefs.getString(KEY_OUTCOMES_BACKUP, null)
+                if (!backup.isNullOrBlank()) {
+                    try {
+                        val recovered = decodeOutcomes(backup)
+                        prefs.edit()
+                            .putString(KEY_OUTCOMES_QUARANTINE, primary)
+                            .putString(KEY_OUTCOMES, encodeOutcomes(recovered))
+                            .apply()
+                        return recovered
+                    } catch (unsupported: UnsupportedRuntimeOutcomeSchemaException) {
+                        throw unsupported
+                    } catch (_: Exception) {
+                        // Ne jamais remplacer une source illisible par une liste vide.
+                    }
+                }
+                prefs.edit().putString(KEY_OUTCOMES_QUARANTINE, primary).apply()
+                throw CorruptRuntimeOutcomeStateException()
+            }
+        }
+
+        val backup = prefs.getString(KEY_OUTCOMES_BACKUP, null)
+        if (!backup.isNullOrBlank()) {
+            try {
+                val recovered = decodeOutcomes(backup)
+                prefs.edit().putString(KEY_OUTCOMES, encodeOutcomes(recovered)).apply()
+                return recovered
+            } catch (unsupported: UnsupportedRuntimeOutcomeSchemaException) {
+                throw unsupported
+            } catch (_: Exception) {
+                prefs.edit().putString(KEY_OUTCOMES_QUARANTINE, backup).apply()
+                throw CorruptRuntimeOutcomeStateException()
+            }
+        }
+        return emptyList()
+    }
+
+    private fun saveOutcomeUnsafe(feedback: List<RuntimeOutcomeFeedback>) {
+        val encoded = encodeOutcomes(feedback)
+        val previous = prefs.getString(KEY_OUTCOMES, null)
+        val editor = prefs.edit()
+        if (!previous.isNullOrBlank()) {
+            editor.putString(KEY_OUTCOMES_BACKUP, previous)
+        }
+        editor.putString(KEY_OUTCOMES, encoded).apply()
+    }
+
+    private fun encodeOutcomes(feedback: List<RuntimeOutcomeFeedback>): String =
+        JSONObject().apply {
+            put("schema_version", OUTCOME_SCHEMA_VERSION)
+            put(
+                "feedback",
+                JSONArray().apply {
+                    feedback.forEach { item ->
+                        put(
+                            JSONObject().apply {
+                                put("feedback_id", item.feedbackId)
+                                put("target_observation_id", item.targetObservationId)
+                                put("node_id", item.nodeId)
+                                put("task_kind", item.taskKind)
+                                put("model", item.model)
+                                put("brain_profile", item.brainProfile)
+                                put("kind", item.kind.name)
+                                put("confidence", item.confidence)
+                                put("created_at", item.createdAt)
+                            }
+                        )
+                    }
+                }
+            )
+        }.toString()
+
+    private fun decodeOutcomes(raw: String): List<RuntimeOutcomeFeedback> {
+        val root = JSONObject(raw)
+        val schemaVersion = root.optInt("schema_version", -1)
+        if (schemaVersion != OUTCOME_SCHEMA_VERSION) {
+            throw UnsupportedRuntimeOutcomeSchemaException(schemaVersion)
+        }
+        val array = root.optJSONArray("feedback") ?: JSONArray()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val json = array.optJSONObject(index) ?: continue
+                val kind = runCatching {
+                    RuntimeOutcomeKind.valueOf(json.optString("kind").uppercase())
+                }.getOrNull() ?: continue
+                val item = RuntimeOutcomeFeedback(
+                    feedbackId = json.optString("feedback_id").trim().take(160),
+                    targetObservationId = json.optString("target_observation_id")
+                        .trim()
+                        .take(180),
+                    nodeId = json.optString("node_id").trim(),
+                    taskKind = json.optString("task_kind").trim(),
+                    model = json.optString("model").trim(),
+                    brainProfile = json.optString("brain_profile")
+                        .trim()
+                        .lowercase(),
+                    kind = kind,
+                    confidence = json.optDouble("confidence", 0.0).coerceIn(0.0, 1.0),
+                    createdAt = json.optLong("created_at", 0L).coerceAtLeast(0L)
+                )
+                runCatching { validateOutcome(item) }
+                    .onSuccess { add(item) }
+            }
+        }.take(SafetyPolicy.MAX_RUNTIME_EVAL_OUTCOME_FEEDBACK)
+    }
+
     private fun validate(observation: RuntimeEvalObservation) {
         require(observation.observationId.isNotBlank())
         require(observation.taskId.isNotBlank())
@@ -355,6 +539,16 @@ class RuntimeEvalStore(context: Context) {
                 observation.tokensPerSecond >= 0.0
         )
         require(observation.createdAt >= 0L)
+    }
+
+    private fun validateOutcome(feedback: RuntimeOutcomeFeedback) {
+        require(feedback.feedbackId.isNotBlank())
+        require(feedback.targetObservationId.isNotBlank())
+        require(feedback.nodeId.isNotBlank())
+        require(feedback.taskKind == "brain_chat")
+        require(feedback.brainProfile.length <= 32)
+        require(feedback.confidence.isFinite() && feedback.confidence in 0.0..1.0)
+        require(feedback.createdAt >= 0L)
     }
 
     private fun parseWorkload(value: String): TaskWorkload =
@@ -379,6 +573,10 @@ class RuntimeEvalStore(context: Context) {
         private const val PREFS_NAME = "jade_runtime_eval"
         private const val KEY_OBSERVATIONS = "observations_v1"
         private const val KEY_OBSERVATIONS_BACKUP = "observations_v1_backup"
+        private const val KEY_OUTCOMES = "outcome_feedback_v1"
+        private const val KEY_OUTCOMES_BACKUP = "outcome_feedback_v1_backup"
+        private const val KEY_OUTCOMES_QUARANTINE = "outcome_feedback_quarantine"
+        private const val OUTCOME_SCHEMA_VERSION = 1
     }
 }
 

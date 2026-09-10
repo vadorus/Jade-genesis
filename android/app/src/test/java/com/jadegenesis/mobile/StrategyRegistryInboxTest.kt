@@ -92,6 +92,27 @@ class StrategyRegistryInboxTest {
     }
 
     @Test
+    fun missingRequiredSafetyGuardsAreRejected() {
+        val missingTopLevel = JSONObject(validPayload())
+        missingTopLevel.remove("automatic_runtime_application")
+        assertNull(
+            StrategyRegistryInbox.parseLatest(
+                listOf(event(missingTopLevel.toString(), 20L))
+            )
+        )
+
+        val missingEntryGuard = JSONObject(validPayload())
+        missingEntryGuard.getJSONArray("entries")
+            .getJSONObject(0)
+            .remove("sandbox_required")
+        assertNull(
+            StrategyRegistryInbox.parseLatest(
+                listOf(event(missingEntryGuard.toString(), 20L))
+            )
+        )
+    }
+
+    @Test
     fun entryWithRuntimeApplicationEnabledIsRejected() {
         val json = JSONObject(validPayload())
         json.getJSONArray("entries")

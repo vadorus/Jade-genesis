@@ -53,7 +53,7 @@ class SkillSpecTest(unittest.TestCase):
             },
         }
 
-    def test_valid_skill_has_stable_payload_but_execution_is_disabled(self) -> None:
+    def test_valid_skill_has_stable_payload_but_contract_does_not_enable_execution(self) -> None:
         first = normalize_skill_spec(self.valid_spec())
         second = normalize_skill_spec(self.valid_spec())
         self.assertEqual(first["body_sha256"], second["body_sha256"])
@@ -94,11 +94,14 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "skill_forbidden_capability"):
             normalize_skill_spec(spec)
 
-    def test_dependencies_are_bounded_and_deduplicated(self) -> None:
+    def test_dependencies_are_rejected_in_0_1_20(self) -> None:
         spec = self.valid_spec()
-        spec["dependencies"] = ["skill-a", "skill-a", "skill-b"]
-        normalized = normalize_skill_spec(spec)
-        self.assertEqual(["skill-a", "skill-b"], normalized["dependencies"])
+        spec["dependencies"] = ["skill-a"]
+        with self.assertRaisesRegex(
+            PermissionError,
+            "skill_dependencies_disabled_in_0_1_20",
+        ):
+            normalize_skill_spec(spec)
 
     def test_contract_rejects_unknown_fields(self) -> None:
         spec = self.valid_spec()
@@ -106,12 +109,14 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_input_contract_field"):
             normalize_skill_spec(spec)
 
-    def test_status_makes_non_execution_boundary_explicit(self) -> None:
+    def test_status_keeps_execution_boundary_explicit(self) -> None:
         status = skill_spec_status()
         self.assertEqual(BODY_KIND, status["body_kind"])
         self.assertFalse(status["execution_enabled"])
         self.assertFalse(status["interpreter_present"])
         self.assertFalse(status["generated_skill_execution"])
+        self.assertFalse(status["dependencies_allowed"])
+        self.assertEqual(0, status["max_dependencies"])
         self.assertFalse(status["network_allowed"])
         self.assertFalse(status["shell_allowed"])
 

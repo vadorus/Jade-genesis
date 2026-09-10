@@ -52,6 +52,7 @@ object SafetyPolicy {
     const val MAX_RUNTIME_EVAL_REPORT_WINDOW = 300
     const val MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES = 4
     const val STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES = 12
+    const val MAX_ADAPTIVE_BRAIN_ROUTING_ADJUSTMENT = 40.0
 
     // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.
     // Les essais doivent rester petits, appariés et suffisamment mesurés avant

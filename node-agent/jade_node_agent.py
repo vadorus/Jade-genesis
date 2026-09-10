@@ -3,12 +3,14 @@
 
 The stable runtime core stays separate while this wrapper layers Shared Genesis
 State, bounded VPS Night Learning, Adaptive Strategy Registry, Verifiable Task
-Ledger, SkillSpec and the restricted 0.1.20 Procedure Runtime on top.
+Ledger, SkillSpec, the restricted 0.1.20 Procedure Runtime and the developer
+Skill Registry on top.
 
 The wire protocol remains jade-genesis-node/0.0.6 for already paired Android
-clients. The Procedure Runtime is deliberately not exposed as an arbitrary
-remote task in 0.1.20: only developer-authored pure SkillSpecs can execute
-through the local restricted interpreter.
+clients. Procedure execution and Skill Registry mutation are deliberately not
+exposed as arbitrary remote tasks in 0.1.20: only developer-authored pure
+SkillSpecs can execute through the local restricted interpreter, and activation
+requires an explicit local approval path.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervis
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
 from procedure_runtime import procedure_runtime_status
 from shared_genesis_state import run_shared_state_sync, shared_state_status
+from skill_registry import skill_registry_status
 from skill_spec import skill_spec_status
 from verifiable_task_ledger import verifiable_task_ledger_status
 
@@ -65,6 +68,7 @@ def _health_payload(config: dict, store=None) -> dict:
             "verifiable_task_ledger_v1",
             "skill_spec_v1",
             "procedure_runtime_v1",
+            "skill_registry_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
@@ -75,6 +79,7 @@ def _health_payload(config: dict, store=None) -> dict:
         result["verifiable_task_ledger"] = verifiable_task_ledger_status()
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
+        result["skill_registry"] = skill_registry_status()
     result["agent_version"] = VERSION
     return result
 
@@ -90,6 +95,7 @@ def _runtime_payload(config: dict) -> dict:
         result["verifiable_task_ledger"] = verifiable_task_ledger_status()
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
+        result["skill_registry"] = skill_registry_status()
     return result
 
 

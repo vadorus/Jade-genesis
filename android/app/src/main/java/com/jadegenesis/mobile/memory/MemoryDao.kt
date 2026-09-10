@@ -25,6 +25,28 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source LIKE 'JADE_CONSOLIDATION_%'
+        ORDER BY createdAt DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun latestConsolidated(limit: Int): List<MemoryEntity>
+
+    @Query(
+        """
+        SELECT * FROM memory_events
+        WHERE supersededBy IS NULL
+          AND source = 'USER'
+        ORDER BY createdAt DESC, id DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun latestUserFacts(limit: Int): List<MemoryEntity>
+
+    @Query(
+        """
+        SELECT * FROM memory_events
+        WHERE supersededBy IS NULL
           AND content LIKE '%' || :query || '%'
         ORDER BY createdAt DESC, id DESC
         LIMIT :limit
@@ -99,7 +121,14 @@ interface MemoryDao {
           AND source != 'USER'
           AND verifiedAt IS NULL
           AND recallCount < :recallProtectionCount
-          AND confidence < :maxConfidence
+          AND (
+                confidence < :maxConfidence
+                OR (
+                    type = 'OBSERVATION'
+                    AND source LIKE 'VISION_%'
+                    AND confidence <= :maxTransientVisionConfidence
+                )
+              )
           AND type IN ('OBSERVATION', 'HYPOTHESIS', 'FAILURE')
         ORDER BY createdAt ASC, id ASC
         LIMIT :limit
@@ -110,6 +139,7 @@ interface MemoryDao {
         cutoffCreatedAt: Long,
         recallProtectionCount: Int,
         maxConfidence: Double,
+        maxTransientVisionConfidence: Double,
         limit: Int
     ): List<String>
 

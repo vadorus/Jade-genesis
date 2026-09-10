@@ -1,5 +1,7 @@
 package com.jadegenesis.mobile
 
+import com.jadegenesis.mobile.brain.AdaptiveBrainRouting
+import com.jadegenesis.mobile.brain.CognitiveBrainProfile
 import com.jadegenesis.mobile.config.RoutingTuning
 import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.eval.RuntimeEvalEngine
@@ -56,6 +58,48 @@ class RuntimeEvalTest {
         assertEquals(200L, stats.p90DurationMs)
         assertEquals(1.0 / 3.0, stats.fallbackRate, 0.0001)
         assertEquals(50.0, stats.averageTokensPerSecond, 0.0001)
+    }
+
+    @Test
+    fun aggregateKeepsCognitiveProfilesSeparated() {
+        val observations = listOf(
+            observation(
+                id = "fast-1",
+                success = true,
+                durationMs = 40,
+                tokensPerSecond = 90.0,
+                brainProfile = "fast",
+                createdAt = 1
+            ),
+            observation(
+                id = "reasoning-1",
+                success = false,
+                durationMs = 4_000,
+                tokensPerSecond = 3.0,
+                brainProfile = "reasoning",
+                createdAt = 2
+            )
+        )
+
+        val fast = RuntimeEvalEngine.aggregate(
+            observations = observations,
+            nodeId = "node-a",
+            taskKind = "brain_chat",
+            brainProfile = "FAST"
+        ) ?: error("Stats FAST absentes")
+        val reasoning = RuntimeEvalEngine.aggregate(
+            observations = observations,
+            nodeId = "node-a",
+            taskKind = "brain_chat",
+            brainProfile = "reasoning"
+        ) ?: error("Stats REASONING absentes")
+
+        assertEquals(1, fast.samples)
+        assertEquals(1.0, fast.successRate, 0.0001)
+        assertEquals("fast", fast.brainProfile)
+        assertEquals(1, reasoning.samples)
+        assertEquals(0.0, reasoning.successRate, 0.0001)
+        assertEquals("reasoning", reasoning.brainProfile)
     }
 
     @Test
@@ -132,6 +176,42 @@ class RuntimeEvalTest {
     }
 
     @Test
+    fun adaptiveBrainEvidenceUsesOnlyStrongProfileEvidenceAndStaysBounded() {
+        val observations = (1..SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES)
+            .map { index ->
+                observation(
+                    id = "reasoning-$index",
+                    success = true,
+                    durationMs = 35,
+                    tokensPerSecond = 120.0,
+                    brainProfile = "reasoning",
+                    createdAt = index.toLong()
+                )
+            }
+        val stats = RuntimeEvalEngine.aggregate(
+            observations = observations,
+            nodeId = "node-a",
+            taskKind = "brain_chat",
+            brainProfile = "reasoning"
+        )
+        val evidence = AdaptiveBrainRouting.evidenceFromStats(
+            nodeId = "node-a",
+            profile = CognitiveBrainProfile.REASONING,
+            routing = RoutingTuning(),
+            stats = stats
+        )
+
+        assertTrue(evidence.active)
+        assertEquals(1.0, evidence.confidence, 0.0001)
+        assertEquals("reasoning", stats?.brainProfile)
+        assertTrue(evidence.adjustment > 0.0)
+        assertTrue(
+            evidence.adjustment <=
+                SafetyPolicy.MAX_ADAPTIVE_BRAIN_ROUTING_ADJUSTMENT
+        )
+    }
+
+    @Test
     fun reportScoresHealthyWindowAboveFailingWindow() {
         val tuning = RoutingTuning()
         val healthy = (1..12).map { index ->
@@ -171,6 +251,7 @@ class RuntimeEvalTest {
         durationMs: Long,
         tokensPerSecond: Double,
         fallback: Boolean = false,
+        brainProfile: String = "general",
         createdAt: Long
     ): RuntimeEvalObservation = RuntimeEvalObservation(
         observationId = id,
@@ -181,6 +262,7 @@ class RuntimeEvalTest {
         nodeName = nodeId,
         nodeKind = NodeKind.PC,
         model = "jade-model",
+        brainProfile = brainProfile,
         success = success,
         durationMs = durationMs,
         outputChars = if (success) 100 else 0,

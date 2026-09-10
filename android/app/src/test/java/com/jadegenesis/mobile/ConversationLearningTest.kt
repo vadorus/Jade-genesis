@@ -29,33 +29,53 @@ class ConversationLearningTest {
     }
 
     @Test
-    fun explicitSuccessIsPositiveOutcome() {
-        val signal = ConversationLearningPolicy.classifyFeedback(
-            "Parfait, ça marche maintenant."
-        ) ?: error("Signal attendu")
-
-        assertEquals(ConversationFeedbackKind.POSITIVE, signal.kind)
+    fun explicitSuccessAcceptsCommonFrenchFormsAndPunctuation() {
+        listOf(
+            "Parfait, ça marche maintenant.",
+            "Ça marche.",
+            "ça a marché !",
+            "c'est résolu"
+        ).forEach { text ->
+            val signal = ConversationLearningPolicy.classifyFeedback(text)
+                ?: error("Signal positif attendu pour: $text")
+            assertEquals(ConversationFeedbackKind.POSITIVE, signal.kind)
+        }
     }
 
     @Test
-    fun weakOrAmbiguousPhrasesDoNotPretendToValidateAnswer() {
-        assertNull(ConversationLearningPolicy.classifyFeedback("ok"))
-        assertNull(ConversationLearningPolicy.classifyFeedback("d'accord"))
-        assertNull(
-            ConversationLearningPolicy.classifyFeedback(
-                "Quelle est la valeur exacte de ce paramètre ?"
-            )
-        )
-        assertNull(
-            ConversationLearningPolicy.classifyFeedback(
-                "Pourquoi ce n'est pas disponible sur Android ?"
-            )
-        )
-        assertNull(
-            ConversationLearningPolicy.classifyFeedback(
-                "Comment ça marche Vulkan sur Android ?"
-            )
-        )
+    fun questionsContainingFeedbackWordsAreNeverClassified() {
+        listOf(
+            "est-ce que ça marche pas sur Android 12 ?",
+            "si ça marche pas, qu'est-ce que je dois regarder ?",
+            "Comment ça marche Vulkan sur Android ?",
+            "Pourquoi ce n'est pas disponible sur Android ?"
+        ).forEach { text ->
+            assertNull(text, ConversationLearningPolicy.classifyFeedback(text))
+        }
+    }
+
+    @Test
+    fun embeddedOrAmbiguousPhrasesDoNotPretendToBeFeedback() {
+        listOf(
+            "ok",
+            "d'accord",
+            "je ne connais pas du tout ce framework",
+            "ça ne me dérange pas du tout",
+            "en fait, j'ai une autre question sur Godot",
+            "il fallait que je te demande un truc",
+            "explique-moi pourquoi tu te trompes parfois",
+            "Quelle est la valeur exacte de ce paramètre ?"
+        ).forEach { text ->
+            assertNull(text, ConversationLearningPolicy.classifyFeedback(text))
+        }
+    }
+
+    @Test
+    fun feedbackWordsDoNotBecomeRecurringTopics() {
+        assertTrue(ConversationLearningPolicy.extractTopics("ça marche pas").isEmpty())
+        assertTrue(ConversationLearningPolicy.extractTopics("c'est faux").isEmpty())
+        assertTrue(ConversationLearningPolicy.extractTopics("tu te trompes").isEmpty())
+        assertTrue(ConversationLearningPolicy.extractTopics("toujours pas").isEmpty())
     }
 
     @Test

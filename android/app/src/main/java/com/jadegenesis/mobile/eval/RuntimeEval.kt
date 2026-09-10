@@ -130,8 +130,10 @@ object RuntimeEvalEngine {
         }
         if (relevant.isEmpty()) return null
 
+        val relevantIds = relevant.mapTo(hashSetOf()) { it.observationId }
         val relevantOutcomes = outcomeFeedback.filter { feedback ->
-            feedback.nodeId == nodeId &&
+            feedback.targetObservationId in relevantIds &&
+                feedback.nodeId == nodeId &&
                 feedback.taskKind == taskKind &&
                 (cleanModel.isBlank() || feedback.model == cleanModel) &&
                 (
@@ -149,6 +151,10 @@ object RuntimeEvalEngine {
         outcomeFeedback: List<RuntimeOutcomeFeedback> = emptyList()
     ): RuntimeEvalReport {
         val ordered = observations.sortedByDescending { it.createdAt }
+        val retainedIds = ordered.mapTo(hashSetOf()) { it.observationId }
+        val retainedOutcomes = outcomeFeedback.filter {
+            it.targetObservationId in retainedIds
+        }
         val groups = ordered
             .groupBy {
                 GroupKey(
@@ -159,8 +165,10 @@ object RuntimeEvalEngine {
                 )
             }
             .map { (key, items) ->
-                val matchingOutcomes = outcomeFeedback.filter { feedback ->
-                    feedback.nodeId == key.nodeId &&
+                val groupIds = items.mapTo(hashSetOf()) { it.observationId }
+                val matchingOutcomes = retainedOutcomes.filter { feedback ->
+                    feedback.targetObservationId in groupIds &&
+                        feedback.nodeId == key.nodeId &&
                         feedback.taskKind == key.taskKind &&
                         feedback.model == key.model &&
                         feedback.brainProfile.trim().lowercase() == key.brainProfile
@@ -193,7 +201,7 @@ object RuntimeEvalEngine {
             ordered.size.toDouble() /
                 SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES.toDouble()
             ).coerceIn(0.0, 1.0)
-        val overallOutcome = summarizeOutcomes(outcomeFeedback)
+        val overallOutcome = summarizeOutcomes(retainedOutcomes)
 
         return RuntimeEvalReport(
             schemaVersion = SCHEMA_VERSION,
@@ -339,7 +347,10 @@ object RuntimeEvalEngine {
     private fun summarizeOutcomes(
         items: List<RuntimeOutcomeFeedback>
     ): OutcomeSummary {
-        if (items.isEmpty()) {
+        val activeItems = items
+            .sortedByDescending { it.createdAt }
+            .distinctBy { it.targetObservationId }
+        if (activeItems.isEmpty()) {
             return OutcomeSummary(0, 0, 0, 0, 0.0, 0.0)
         }
 
@@ -348,7 +359,7 @@ object RuntimeEvalEngine {
         var positives = 0
         var negatives = 0
         var corrections = 0
-        items.forEach { feedback ->
+        activeItems.forEach { feedback ->
             val confidence = feedback.confidence.coerceIn(0.0, 1.0)
             val value = when (feedback.kind) {
                 RuntimeOutcomeKind.POSITIVE -> {
@@ -369,12 +380,12 @@ object RuntimeEvalEngine {
         }
         val quality = if (weight > 0.0) weighted / weight else 0.0
         return OutcomeSummary(
-            samples = items.size,
+            samples = activeItems.size,
             positives = positives,
             negatives = negatives,
             corrections = corrections,
             quality = quality.coerceIn(-1.0, 1.0),
-            confidence = outcomePosteriorConfidence(items.size)
+            confidence = outcomePosteriorConfidence(activeItems.size)
         )
     }
 

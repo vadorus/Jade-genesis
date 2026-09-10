@@ -45,7 +45,7 @@ object ConversationLearningPolicy {
         "il fallait"
     )
 
-    private val positiveMarkers = listOf(
+    private val positivePrefixes = listOf(
         "ca marche",
         "ca fonctionne",
         "c'est bon",
@@ -87,7 +87,7 @@ object ConversationLearningPolicy {
                 confidence = 0.90
             )
         }
-        if (positiveMarkers.any { normalize(it) in normalized }) {
+        if (isExplicitPositive(normalized, input)) {
             return ConversationFeedbackSignal(
                 kind = ConversationFeedbackKind.POSITIVE,
                 confidence = 0.88
@@ -143,4 +143,16 @@ object ConversationLearningPolicy {
             .replace('’', '\'')
             .replace(Regex("\\s+"), " ")
             .trim()
+
+    private fun isExplicitPositive(normalized: String, original: String): Boolean {
+        if (original.trim().endsWith('?')) return false
+        val candidates = positivePrefixes.map(::normalize)
+        return candidates.any { marker ->
+            normalized == marker ||
+                normalized.startsWith("$marker ") ||
+                normalized.startsWith("$marker,") ||
+                normalized.startsWith("oui $marker") ||
+                normalized.startsWith("merci $marker")
+        }
+    }
 }

@@ -16,7 +16,9 @@ private data class ConversationTurn(
     val topics: List<String>,
     val profile: String,
     val backendId: String,
+    val nodeId: String,
     val model: String,
+    val runtimeEvalObservationId: String,
     val fallbackUsed: Boolean,
     val createdAt: Long
 )
@@ -29,7 +31,9 @@ private data class ConversationOutcome(
     val feedbackExcerpt: String,
     val topics: List<String>,
     val profile: String,
+    val nodeId: String,
     val model: String,
+    val runtimeEvalObservationId: String,
     val createdAt: Long
 )
 
@@ -53,7 +57,12 @@ data class ConversationLearningUpdate(
     val feedbackKind: ConversationFeedbackKind? = null,
     val feedbackConfidence: Double = 0.0,
     val crossedTopicMilestones: Map<String, Int> = emptyMap(),
-    val feedbackOnly: Boolean = false
+    val feedbackOnly: Boolean = false,
+    val feedbackOutcomeId: String = "",
+    val feedbackTargetObservationId: String = "",
+    val feedbackTargetNodeId: String = "",
+    val feedbackTargetProfile: String = "",
+    val feedbackTargetModel: String = ""
 )
 
 private class UnsupportedConversationSchemaException(version: Int) :
@@ -92,10 +101,22 @@ class ConversationLearningStore internal constructor(
         val state = loadUnsafe()
         val lastTurn = state.turns.firstOrNull()
             ?.takeIf { now - it.createdAt <= MAX_FEEDBACK_WINDOW_MS }
-        val feedback = lastTurn?.let {
-            ConversationLearningPolicy.classifyFeedback(clean)
+        val classifiedFeedback = ConversationLearningPolicy.classifyFeedback(clean)
+
+        // Un feedback explicite sans tour récent ne doit pas devenir un faux
+        // nouveau sujet. Jade peut répondre au message, mais cette couche ne
+        // l'enregistre pas comme expérience autonome.
+        if (lastTurn == null && classifiedFeedback != null) {
+            pendingInput = clean
+            pendingTopics = emptyList()
+            pendingFeedbackOnly = true
+            return@synchronized ConversationLearningUpdate(
+                topics = emptyList(),
+                feedbackOnly = true
+            )
         }
 
+        val feedback = lastTurn?.let { classifiedFeedback }
         if (lastTurn != null && feedback != null) {
             val feedbackTopics = lastTurn.topics
                 .take(SafetyPolicy.MAX_CONVERSATION_LEARNING_TOPICS_PER_TURN)
@@ -131,6 +152,10 @@ class ConversationLearningStore internal constructor(
                     confidence = maxOf(duplicate.confidence, feedback.confidence),
                     feedbackExcerpt = clean,
                     topics = feedbackTopics,
+                    profile = lastTurn.profile,
+                    nodeId = lastTurn.nodeId,
+                    model = lastTurn.model,
+                    runtimeEvalObservationId = lastTurn.runtimeEvalObservationId,
                     createdAt = now
                 )
             } else {
@@ -142,7 +167,9 @@ class ConversationLearningStore internal constructor(
                     feedbackExcerpt = clean,
                     topics = feedbackTopics,
                     profile = lastTurn.profile,
+                    nodeId = lastTurn.nodeId,
                     model = lastTurn.model,
+                    runtimeEvalObservationId = lastTurn.runtimeEvalObservationId,
                     createdAt = now
                 )
             }
@@ -164,7 +191,12 @@ class ConversationLearningStore internal constructor(
                 topics = feedbackTopics,
                 feedbackKind = feedback.kind,
                 feedbackConfidence = feedback.confidence,
-                feedbackOnly = true
+                feedbackOnly = true,
+                feedbackOutcomeId = outcome.id,
+                feedbackTargetObservationId = outcome.runtimeEvalObservationId,
+                feedbackTargetNodeId = outcome.nodeId,
+                feedbackTargetProfile = outcome.profile,
+                feedbackTargetModel = outcome.model
             )
         }
 
@@ -207,7 +239,9 @@ class ConversationLearningStore internal constructor(
         answer: String,
         profile: String,
         backendId: String = "",
+        nodeId: String = "",
         model: String = "",
+        runtimeEvalObservationId: String = "",
         fallbackUsed: Boolean = false
     ) = synchronized(lock) {
         val cleanUser = userInput.trim().take(SafetyPolicy.MAX_CONVERSATION_LEARNING_TEXT_CHARS)
@@ -241,7 +275,9 @@ class ConversationLearningStore internal constructor(
             topics = topics,
             profile = profile.trim().take(40),
             backendId = backendId.trim().take(120),
+            nodeId = nodeId.trim().take(160),
             model = model.trim().take(160),
+            runtimeEvalObservationId = runtimeEvalObservationId.trim().take(180),
             fallbackUsed = fallbackUsed,
             createdAt = nowMs()
         )
@@ -436,7 +472,9 @@ class ConversationLearningStore internal constructor(
                     put("topics", JSONArray(turn.topics))
                     put("profile", turn.profile)
                     put("backend_id", turn.backendId)
+                    put("node_id", turn.nodeId)
                     put("model", turn.model)
+                    put("runtime_eval_observation_id", turn.runtimeEvalObservationId)
                     put("fallback_used", turn.fallbackUsed)
                     put("created_at", turn.createdAt)
                 })
@@ -452,7 +490,9 @@ class ConversationLearningStore internal constructor(
                     put("feedback_excerpt", outcome.feedbackExcerpt)
                     put("topics", JSONArray(outcome.topics))
                     put("profile", outcome.profile)
+                    put("node_id", outcome.nodeId)
                     put("model", outcome.model)
+                    put("runtime_eval_observation_id", outcome.runtimeEvalObservationId)
                     put("created_at", outcome.createdAt)
                 })
             }
@@ -494,7 +534,10 @@ class ConversationLearningStore internal constructor(
                         topics = readTopics(item.optJSONArray("topics")),
                         profile = item.optString("profile").take(40),
                         backendId = item.optString("backend_id").take(120),
+                        nodeId = item.optString("node_id").take(160),
                         model = item.optString("model").take(160),
+                        runtimeEvalObservationId = item.optString("runtime_eval_observation_id")
+                            .take(180),
                         fallbackUsed = item.optBoolean("fallback_used", false),
                         createdAt = item.optLong("created_at", 0L).coerceAtLeast(0L)
                     )
@@ -522,7 +565,10 @@ class ConversationLearningStore internal constructor(
                             .take(SafetyPolicy.MAX_CONVERSATION_LEARNING_TEXT_CHARS),
                         topics = readTopics(item.optJSONArray("topics")),
                         profile = item.optString("profile").take(40),
+                        nodeId = item.optString("node_id").take(160),
                         model = item.optString("model").take(160),
+                        runtimeEvalObservationId = item.optString("runtime_eval_observation_id")
+                            .take(180),
                         createdAt = item.optLong("created_at", 0L).coerceAtLeast(0L)
                     )
                 )

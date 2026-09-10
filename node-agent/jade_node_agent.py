@@ -3,8 +3,9 @@
 
 The 0.1.2 runtime core is kept as a stable module while this wrapper layers the
 Shared Genesis State replica, bounded VPS Night Cycle supervisor, Night
-Learning Lab, Adaptive Strategy Registry and role-aware Cognitive Brain profiles
-on top. The wire protocol remains compatible with already paired Android clients.
+Learning Lab, Adaptive Strategy Registry, Verifiable Task Ledger, SkillSpec
+contract and role-aware Cognitive Brain profiles on top. The wire protocol
+remains compatible with already paired Android clients.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
 from shared_genesis_state import run_shared_state_sync, shared_state_status
+from skill_spec import skill_spec_status
+from verifiable_task_ledger import verifiable_task_ledger_status
 
 VERSION = "0.1.6"
 PROTOCOL = core.PROTOCOL
@@ -55,6 +58,8 @@ def _health_payload(config: dict, store=None) -> dict:
             "vps_night_cycle_supervisor_v1",
             "night_learning_lab_v1",
             "adaptive_strategy_registry_v1",
+            "verifiable_task_ledger_v1",
+            "skill_spec_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
@@ -62,6 +67,8 @@ def _health_payload(config: dict, store=None) -> dict:
         result["shared_state"] = shared_state_status()
         result["night_cycle_supervisor"] = supervisor_status(config)
         result["adaptive_strategy_registry"] = adaptive_strategy_registry_status()
+        result["verifiable_task_ledger"] = verifiable_task_ledger_status()
+        result["skill_spec"] = skill_spec_status()
     result["agent_version"] = VERSION
     return result
 
@@ -74,6 +81,8 @@ def _runtime_payload(config: dict) -> dict:
         result["shared_state"] = shared_state_status()
         result["night_cycle_supervisor"] = supervisor_status(config)
         result["adaptive_strategy_registry"] = adaptive_strategy_registry_status()
+        result["verifiable_task_ledger"] = verifiable_task_ledger_status()
+        result["skill_spec"] = skill_spec_status()
     return result
 
 

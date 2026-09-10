@@ -2,9 +2,11 @@
 
 The supervisor works only from the durable Shared Genesis State replica. It
 reviews synchronized memory, Runtime Eval and Evolution summaries, runs the
-bounded Night Learning Lab, then writes review artifacts back to the same event
-stream. It cannot promote a candidate, change SafetyPolicy, execute a shell
-command, rewrite production code or reach into the Pixel.
+bounded Night Learning Lab, persists safe STRATEGY_HINT candidates in Jade's
+identity-bound Strategy Registry, then writes review artifacts back to the same
+event stream. It cannot automatically promote or apply a strategy, change
+SafetyPolicy, execute a shell command, rewrite production code or reach into the
+Pixel.
 """
 
 from __future__ import annotations
@@ -18,12 +20,14 @@ from typing import Any, Callable
 
 from night_learning_lab import NightLearningLab
 from shared_genesis_state import CONFIG_DIR, SharedGenesisStateStore, _GLOBAL_STORE
+from strategy_registry import StrategyRegistry
 
 SCHEMA_VERSION = 1
 MAX_RUNS = 30
 MAX_STEPS = 12
 MAX_STEP_SUMMARY_CHARS = 500
 MAX_REVIEW_ITEMS = 40
+MAX_SHARED_STRATEGY_ENTRIES = 8
 MIN_CYCLE_INTERVAL_MS = 20 * 60 * 60 * 1_000
 PIXEL_INACTIVE_AFTER_MS = 2 * 60 * 60 * 1_000
 CHECK_INTERVAL_SECONDS = 15 * 60
@@ -200,12 +204,14 @@ class VpsNightCycleSupervisor:
         journal: NightCycleJournal | None = None,
         logger: LogFunction | None = None,
         learning_lab: NightLearningLab | None = None,
+        strategy_registry: StrategyRegistry | None = None,
     ):
         self.config = dict(config)
         self.state_store = state_store
         self.journal = journal or NightCycleJournal()
         self.logger = logger
         self.learning_lab = learning_lab or NightLearningLab()
+        self.strategy_registry = strategy_registry or StrategyRegistry()
         self._run_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -255,9 +261,14 @@ class VpsNightCycleSupervisor:
                 latest.get("improvement_candidate_count"),
                 0,
             ),
+            "strategy_registry_candidates": _safe_int(
+                latest.get("strategy_registry_candidate_count"),
+                0,
+            ),
             "external_research_bounded": True,
             "experiment_automatic": False,
             "promotion_automatic": False,
+            "strategy_runtime_application_automatic": False,
             "arbitrary_shell": False,
         }
 
@@ -387,6 +398,38 @@ class VpsNightCycleSupervisor:
             f"{len(improvement_candidates)} candidat(s) d'amélioration créé(s) en statut CANDIDATE; activation et promotion automatiques interdites.",
         ))
 
+        learning_for_registry = dict(learning)
+        learning_for_registry.update({
+            "run_id": run_id,
+            "reviewed_at": started_at,
+            "automatic_experiment_execution": False,
+            "automatic_promotion": False,
+            "production_code_rewrite": False,
+            "shell_execution": False,
+        })
+        registry_result = runCatchingStrategyRegistry(
+            registry=self.strategy_registry,
+            identity_id=str(view.get("identity_id", "")),
+            learning_snapshot=learning_for_registry,
+            now_ms=started_at,
+        )
+        registry_ok = registry_result["ok"]
+        registry_snapshot = registry_result["snapshot"]
+        strategy_persisted_count = _safe_int(registry_result.get("persisted_count"), 0)
+        strategy_entry_count = _safe_int(registry_snapshot.get("entry_count"), 0)
+        strategy_candidate_count = _safe_int(registry_snapshot.get("candidate_count"), 0)
+        steps.append(self._step(
+            "STRATEGY_REGISTRY",
+            registry_ok,
+            (
+                f"Strategy Registry: {strategy_persisted_count} nouvelle(s) stratégie(s) persistée(s), "
+                f"{strategy_entry_count} entrée(s) durable(s), {strategy_candidate_count} candidate(s). "
+                "Promotion et application runtime automatiques interdites."
+                if registry_ok else
+                f"Strategy Registry indisponible: {registry_result['error']}."
+            ),
+        ))
+
         insights: list[str] = []
         if runtime_ok and runtime_confidence < 0.75:
             insights.append("collect_more_runtime_evidence")
@@ -394,13 +437,15 @@ class VpsNightCycleSupervisor:
             insights.append("await_explicit_user_approval")
         if improvement_candidates:
             insights.append("review_night_learning_candidates")
+        if strategy_persisted_count > 0:
+            insights.append("review_strategy_registry_candidates")
         if not memory_ok:
             insights.append("await_memory_cursor_sync")
         if not insights:
             insights.append("continue_bounded_observation")
         steps.append(self._step(
             "MAINTENANCE_LEARNING",
-            learning_ok,
+            learning_ok and registry_ok,
             "Recommandations bornées enregistrées: " + ", ".join(insights) + ".",
         ))
 
@@ -423,9 +468,17 @@ class VpsNightCycleSupervisor:
             "hypothesis_count": len(hypotheses),
             "experiment_count": len(experiments),
             "improvement_candidate_count": len(improvement_candidates),
+            "strategy_registry_revision": _safe_int(
+                registry_snapshot.get("registry_revision"),
+                0,
+            ),
+            "strategy_registry_entry_count": strategy_entry_count,
+            "strategy_registry_candidate_count": strategy_candidate_count,
+            "strategy_registry_persisted_count": strategy_persisted_count,
             "insights": insights,
             "automatic_experiment_execution": False,
             "promotion_performed": False,
+            "strategy_runtime_application_performed": False,
             "production_code_rewrite_performed": False,
             "shell_execution_performed": False,
             "steps": steps[:MAX_STEPS],
@@ -454,6 +507,38 @@ class VpsNightCycleSupervisor:
                 created_at=completed_at,
             )
 
+            shared_registry_snapshot = dict(registry_snapshot)
+            entries = shared_registry_snapshot.get("entries", [])
+            if not isinstance(entries, list):
+                entries = []
+            shared_registry_snapshot["entries"] = [
+                item for item in entries if isinstance(item, dict)
+            ][:MAX_SHARED_STRATEGY_ENTRIES]
+            shared_registry_snapshot.update({
+                "run_id": run_id,
+                "source_revision": report["source_revision"],
+                "reviewed_at": completed_at,
+                "automatic_promotion": False,
+                "automatic_runtime_application": False,
+                "runtime_application_performed": False,
+                "production_code_rewrite": False,
+                "shell_execution": False,
+                "raw_conversation_text_used": False,
+                "user_feedback_promoted_to_external_fact": False,
+            })
+            self.state_store.append_replica_event(
+                identity_id=str(view["identity_id"]),
+                replica_id=str(self.config.get("node_id", "vps-supervisor")),
+                kind="vps_strategy_registry_snapshot",
+                entity_id="current",
+                payload=json.dumps(
+                    shared_registry_snapshot,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                created_at=completed_at,
+            )
+
             maintenance_snapshot = {
                 "schema_version": SCHEMA_VERSION,
                 "run_id": run_id,
@@ -469,9 +554,14 @@ class VpsNightCycleSupervisor:
                 "hypothesis_count": len(hypotheses),
                 "experiment_count": len(experiments),
                 "improvement_candidate_count": len(improvement_candidates),
+                "strategy_registry_revision": report["strategy_registry_revision"],
+                "strategy_registry_entry_count": strategy_entry_count,
+                "strategy_registry_candidate_count": strategy_candidate_count,
+                "strategy_registry_persisted_count": strategy_persisted_count,
                 "insights": insights,
                 "automatic_experiment_execution": False,
                 "promotion_performed": False,
+                "strategy_runtime_application_performed": False,
                 "production_code_rewrite_performed": False,
                 "shell_execution_performed": False,
             }
@@ -498,7 +588,7 @@ class VpsNightCycleSupervisor:
             steps.append(self._step(
                 "SHARED_STATE_AFTER",
                 True,
-                "Learning Lab, maintenance et rapport du cycle VPS ajoutés à Shared Genesis State pour la prochaine synchronisation du Pixel.",
+                "Learning Lab, Strategy Registry, maintenance et rapport du cycle VPS ajoutés à Shared Genesis State pour la prochaine synchronisation du Pixel.",
             ))
         except Exception as exc:
             status = "PARTIAL"
@@ -520,7 +610,9 @@ class VpsNightCycleSupervisor:
             run_id=run_id,
             source_revision=report["source_revision"],
             improvement_candidates=len(improvement_candidates),
+            strategy_registry_persisted=strategy_persisted_count,
             promotion_performed=False,
+            strategy_runtime_application_performed=False,
             shell_execution_performed=False,
         )
         return report
@@ -535,6 +627,7 @@ class VpsNightCycleSupervisor:
             "completed_at": now,
             "automatic_experiment_execution": False,
             "promotion_performed": False,
+            "strategy_runtime_application_performed": False,
             "production_code_rewrite_performed": False,
             "shell_execution_performed": False,
             "steps": [],
@@ -601,9 +694,65 @@ def runCatchingLearning(
                 "automatic_promotion": False,
                 "production_code_rewrite": False,
                 "shell_execution": False,
+                "raw_conversation_text_used": False,
+                "user_feedback_promoted_to_external_fact": False,
             },
             "error": type(exc).__name__,
         }
+
+
+def runCatchingStrategyRegistry(
+    registry: StrategyRegistry,
+    identity_id: str,
+    learning_snapshot: dict[str, Any],
+    now_ms: int,
+) -> dict[str, Any]:
+    try:
+        result = registry.ingest_night_learning(
+            identity_id=identity_id,
+            snapshot=learning_snapshot,
+            now_ms=now_ms,
+        )
+        snapshot = result.get("registry", {})
+        if not isinstance(snapshot, dict):
+            raise ValueError("invalid_strategy_registry_snapshot")
+        return {
+            "ok": True,
+            "persisted_count": max(0, _safe_int(result.get("persisted_count"), 0)),
+            "snapshot": snapshot,
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "persisted_count": 0,
+            "snapshot": {
+                "schema_version": SCHEMA_VERSION,
+                "identity_id": _clean_identity(identity_id),
+                "registry_revision": 0,
+                "generated_at": now_ms,
+                "updated_at": 0,
+                "entry_count": 0,
+                "candidate_count": 0,
+                "validated_count": 0,
+                "active_count": 0,
+                "rejected_count": 0,
+                "entries": [],
+                "automatic_candidate_persistence": False,
+                "automatic_promotion": False,
+                "automatic_runtime_application": False,
+                "runtime_application_performed": False,
+                "production_code_rewrite": False,
+                "shell_execution": False,
+                "raw_conversation_text_used": False,
+                "user_feedback_promoted_to_external_fact": False,
+            },
+            "error": type(exc).__name__,
+        }
+
+
+def _clean_identity(value: Any) -> str:
+    return " ".join(str(value or "").replace("\x00", " ").split())[:160]
 
 
 _SUPERVISOR_LOCK = threading.Lock()
@@ -639,5 +788,6 @@ def supervisor_status(config: dict[str, Any]) -> dict[str, Any]:
         "external_research_bounded": True,
         "experiment_automatic": False,
         "promotion_automatic": False,
+        "strategy_runtime_application_automatic": False,
         "arbitrary_shell": False,
     }

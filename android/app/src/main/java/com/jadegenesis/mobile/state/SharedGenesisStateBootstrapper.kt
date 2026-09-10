@@ -99,6 +99,10 @@ class SharedGenesisStateBootstrapper(context: Context) {
                     "last_retention_deleted",
                     memoryLifecycle.lastRetentionDeletedCount()
                 )
+                put(
+                    "last_exact_duplicates_superseded",
+                    memoryLifecycle.lastExactDuplicatesSupersededCount()
+                )
                 put("storage_total_bytes", storage.totalBytes)
                 put("core_database_bytes", storage.coreDatabaseBytes)
                 put("conversation_learning_bytes", storage.conversationLearningBytes)
@@ -155,6 +159,7 @@ class SharedGenesisStateBootstrapper(context: Context) {
                 put("successful_observations", runtimeReport.successfulObservations)
                 put("overall_success_rate", runtimeReport.overallSuccessRate)
                 put("score", runtimeReport.score)
+                put("raw_score", runtimeReport.rawScore)
                 put("confidence", runtimeReport.confidence)
                 put("outcome_feedback_count", runtimeReport.outcomeFeedbackCount)
                 put("overall_outcome_quality", runtimeReport.overallOutcomeQuality)

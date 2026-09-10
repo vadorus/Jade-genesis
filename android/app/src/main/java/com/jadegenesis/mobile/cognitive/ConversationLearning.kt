@@ -14,7 +14,7 @@ data class ConversationFeedbackSignal(
 )
 
 object ConversationLearningPolicy {
-    private val negativeMarkers = listOf(
+    private val negativePrefixes = listOf(
         "ca marche pas",
         "ca ne marche pas",
         "ca fonctionne pas",
@@ -24,7 +24,6 @@ object ConversationLearningPolicy {
         "tu te trompes",
         "tu t'es trompe",
         "tu t es trompe",
-        "pas du tout",
         "c'est une erreur",
         "c est une erreur",
         "toujours pas",
@@ -32,33 +31,36 @@ object ConversationLearningPolicy {
         "mauvaise réponse"
     )
 
-    private val correctionMarkers = listOf(
+    private val correctionPrefixes = listOf(
         "non, c'est",
         "non c'est",
         "non, c est",
         "non c est",
-        "en fait,",
         "correction :",
+        "correction:",
         "corrige :",
+        "corrige:",
         "la bonne reponse",
-        "la bonne réponse",
-        "il fallait"
+        "la bonne réponse"
     )
 
     private val positivePrefixes = listOf(
         "ca marche",
         "ca fonctionne",
+        "ca a marche",
         "c'est bon",
         "c est bon",
         "c'est ca",
         "c est ca",
+        "c'est resolu",
+        "c est resolu",
         "parfait",
         "resolu",
-        "résolu",
         "probleme resolu",
-        "problème résolu",
         "merci ca marche",
-        "merci ça marche"
+        "merci ca fonctionne",
+        "nickel",
+        "super"
     )
 
     private val stopWords = setOf(
@@ -67,27 +69,31 @@ object ConversationLearningPolicy {
         "mais", "meme", "mieux", "notre", "nous", "peux", "peut", "plus", "pour",
         "pourquoi", "quand", "quelle", "quelles", "quel", "quels", "quoi", "sans", "sera",
         "sont", "tout", "toute", "toutes", "tous", "truc", "veux", "votre", "vous",
-        "aussi", "bien", "besoin", "question", "reponse", "réponse", "jade", "genesis",
-        "aller", "allez", "vais", "devrait", "pourrait", "possible", "actuellement", "maintenant"
+        "aussi", "bien", "besoin", "question", "reponse", "jade", "genesis",
+        "aller", "allez", "vais", "devrait", "pourrait", "possible", "actuellement", "maintenant",
+        "erreur", "probleme", "fichier", "version", "marche", "faux", "trompes", "toujours"
     )
 
     fun classifyFeedback(input: String): ConversationFeedbackSignal? {
         val normalized = normalize(input)
-        if (normalized.isBlank()) return null
+        if (normalized.isBlank() || isInterrogative(input, normalized)) return null
 
-        if (negativeMarkers.any { normalize(it) in normalized }) {
+        val statement = stripTerminalPunctuation(normalized)
+        val negativeCandidate = stripNegativeLeadIn(statement)
+
+        if (matchesAnchored(negativeCandidate, negativePrefixes)) {
             return ConversationFeedbackSignal(
                 kind = ConversationFeedbackKind.NEGATIVE,
                 confidence = 0.94
             )
         }
-        if (correctionMarkers.any { normalize(it) in normalized }) {
+        if (matchesAnchored(statement, correctionPrefixes)) {
             return ConversationFeedbackSignal(
                 kind = ConversationFeedbackKind.CORRECTION,
                 confidence = 0.90
             )
         }
-        if (isExplicitPositive(normalized, input)) {
+        if (isExplicitPositive(statement)) {
             return ConversationFeedbackSignal(
                 kind = ConversationFeedbackKind.POSITIVE,
                 confidence = 0.88
@@ -144,15 +150,42 @@ object ConversationLearningPolicy {
             .replace(Regex("\\s+"), " ")
             .trim()
 
-    private fun isExplicitPositive(normalized: String, original: String): Boolean {
-        if (original.trim().endsWith('?')) return false
-        val candidates = positivePrefixes.map(::normalize)
-        return candidates.any { marker ->
-            normalized == marker ||
-                normalized.startsWith("$marker ") ||
-                normalized.startsWith("$marker,") ||
-                normalized.startsWith("oui $marker") ||
-                normalized.startsWith("merci $marker")
+    private fun isInterrogative(original: String, normalized: String): Boolean {
+        val trimmed = original.trim()
+        if (trimmed.endsWith('?')) return true
+        val questionStarts = listOf(
+            "est-ce que ",
+            "est ce que ",
+            "pourquoi ",
+            "comment ",
+            "qu'est-ce que ",
+            "qu est ce que ",
+            "est-ce qu'",
+            "est ce qu'"
+        )
+        return questionStarts.any { normalized.startsWith(it) }
+    }
+
+    private fun stripTerminalPunctuation(value: String): String =
+        value.replace(Regex("[\\s.!…]+$"), "").trim()
+
+    private fun stripNegativeLeadIn(value: String): String = when {
+        value.startsWith("non, ") -> value.removePrefix("non, ")
+        value.startsWith("non ") -> value.removePrefix("non ")
+        else -> value
+    }
+
+    private fun matchesAnchored(value: String, prefixes: List<String>): Boolean =
+        prefixes.map(::normalize).any { marker ->
+            value == marker ||
+                value.startsWith("$marker ") ||
+                value.startsWith("$marker,") ||
+                value.startsWith("$marker:") ||
+                value.startsWith("$marker;")
         }
+
+    private fun isExplicitPositive(statement: String): Boolean {
+        val candidates = listOf(statement, statement.removePrefix("oui, "), statement.removePrefix("oui "))
+        return candidates.any { candidate -> matchesAnchored(candidate, positivePrefixes) }
     }
 }

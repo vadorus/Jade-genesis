@@ -31,6 +31,52 @@ MAX_SHARED_STRATEGIES = 20
 LogFunction = Callable[..., None]
 
 
+def _enrich_candidate_scope(candidate: dict[str, Any], learning: dict[str, Any]) -> dict[str, Any]:
+    """Attach structured task/profile/model provenance without parsing prose."""
+    enriched = dict(candidate)
+    existing_scope = enriched.get("scope")
+    if isinstance(existing_scope, dict) and any(str(value or "").strip() for value in existing_scope.values()):
+        return enriched
+
+    experiments = {
+        str(item.get("experiment_id", "")): item
+        for item in learning.get("experiments", [])
+        if isinstance(item, dict) and str(item.get("experiment_id", ""))
+    }
+    hypotheses = {
+        str(item.get("hypothesis_id", "")): item
+        for item in learning.get("hypotheses", [])
+        if isinstance(item, dict) and str(item.get("hypothesis_id", ""))
+    }
+    experiment = experiments.get(str(enriched.get("experiment_id", "")), {})
+    hypothesis = hypotheses.get(str(experiment.get("hypothesis_id", "")), {})
+    signal_kind = str(hypothesis.get("signal_kind", ""))
+    matching_signal = next(
+        (
+            item for item in learning.get("signals", [])
+            if isinstance(item, dict) and str(item.get("kind", "")) == signal_kind
+        ),
+        {},
+    )
+    model = (
+        matching_signal.get("preferred_model")
+        or matching_signal.get("model")
+        or ""
+    )
+    node_id = (
+        matching_signal.get("preferred_node_id")
+        or matching_signal.get("node_id")
+        or ""
+    )
+    enriched["scope"] = {
+        "task_kind": str(matching_signal.get("task_kind") or "brain_chat"),
+        "brain_profile": str(matching_signal.get("brain_profile") or ""),
+        "model": str(model),
+        "node_id": str(node_id),
+    }
+    return enriched
+
+
 class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
     """Preserve base Night Cycle behavior and persist bounded strategy evidence."""
 
@@ -131,6 +177,11 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
         candidates = learning.get("improvement_candidates", [])
         if not isinstance(candidates, list):
             candidates = []
+        safe_candidates = [
+            _enrich_candidate_scope(item, learning)
+            for item in candidates
+            if isinstance(item, dict)
+        ]
         source_revision = max(
             0,
             _safe_int(learning.get("source_revision"), _safe_int(view.get("revision"), 0)),
@@ -139,7 +190,7 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
 
         registry_result = self.strategy_registry.ingest_candidates(
             identity_id=identity_id,
-            candidates=[item for item in candidates if isinstance(item, dict)],
+            candidates=safe_candidates,
             source_revision=source_revision,
             now_ms=completed_at,
         )

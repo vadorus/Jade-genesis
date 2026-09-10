@@ -30,6 +30,41 @@ class MemoryArchitectureTest {
     }
 
     @Test
+    fun cognitiveContextReservesDurableKnowledgeAgainstRecentNoise() = runBlocking {
+        val recentNoise = (1..24).map { index ->
+            memory("noise-$index", createdAt = 1_000L + index)
+        }
+        val user = memory(
+            id = "user-fact",
+            createdAt = 100L,
+            source = "USER",
+            type = "FACT",
+            confidence = 1.0
+        )
+        val knowledge = memory(
+            id = "knowledge-1",
+            createdAt = 90L,
+            source = "JADE_CONSOLIDATION_NIGHT",
+            type = "KNOWLEDGE",
+            confidence = 0.95
+        )
+        val dao = FakeMemoryDao().apply {
+            latestItems = recentNoise
+            latestUserItems = listOf(user)
+            latestConsolidatedItems = listOf(knowledge)
+        }
+        val store = MemoryStore(dao)
+
+        val result = store.latestForContext(8)
+
+        assertEquals(8, result.size)
+        assertTrue(result.any { it.id == "user-fact" })
+        assertTrue(result.any { it.id == "knowledge-1" })
+        assertTrue(dao.lastRecalledIds.contains("user-fact"))
+        assertTrue(dao.lastRecalledIds.contains("knowledge-1"))
+    }
+
+    @Test
     fun administrativeReadDoesNotInflateRecallCounters() = runBlocking {
         val dao = FakeMemoryDao().apply {
             latestItems = listOf(memory("m1", createdAt = 10L))
@@ -100,23 +135,36 @@ class MemoryArchitectureTest {
             dao.lastMaxConfidence,
             0.0001
         )
+        assertEquals(
+            SafetyPolicy.MAX_TRANSIENT_VISION_RETENTION_CONFIDENCE,
+            dao.lastMaxTransientVisionConfidence,
+            0.0001
+        )
         assertTrue(dao.lastSupersededLimit <= SafetyPolicy.MAX_MEMORY_PURGE_BATCH_SIZE)
         assertTrue(dao.lastEphemeralLimit <= SafetyPolicy.MAX_MEMORY_PURGE_BATCH_SIZE)
         assertEquals(2, result.totalDeleted)
     }
 
-    private fun memory(id: String, createdAt: Long): MemoryEntity = MemoryEntity(
+    private fun memory(
+        id: String,
+        createdAt: Long,
+        source: String = "TEST",
+        type: String = "OBSERVATION",
+        confidence: Double = 0.4
+    ): MemoryEntity = MemoryEntity(
         id = id,
-        type = "OBSERVATION",
+        type = type,
         content = "mémoire $id",
-        source = "TEST",
-        confidence = 0.4,
+        source = source,
+        confidence = confidence,
         originNode = "test-node",
         createdAt = createdAt
     )
 
     private class FakeMemoryDao : MemoryDao {
         var latestItems: List<MemoryEntity> = emptyList()
+        var latestConsolidatedItems: List<MemoryEntity> = emptyList()
+        var latestUserItems: List<MemoryEntity> = emptyList()
         var searchItems: List<MemoryEntity> = emptyList()
         var consolidationItems: List<MemoryEntity> = emptyList()
         var supersededCandidateIds: List<String> = emptyList()
@@ -131,6 +179,7 @@ class MemoryArchitectureTest {
         var lastEphemeralCutoff: Long = -1L
         var lastRecallProtectionCount: Int = -1
         var lastMaxConfidence: Double = -1.0
+        var lastMaxTransientVisionConfidence: Double = -1.0
         var lastSupersededLimit: Int = -1
         var lastEphemeralLimit: Int = -1
 
@@ -142,6 +191,12 @@ class MemoryArchitectureTest {
 
         override suspend fun latest(limit: Int): List<MemoryEntity> =
             latestItems.take(limit)
+
+        override suspend fun latestConsolidated(limit: Int): List<MemoryEntity> =
+            latestConsolidatedItems.take(limit)
+
+        override suspend fun latestUserFacts(limit: Int): List<MemoryEntity> =
+            latestUserItems.take(limit)
 
         override suspend fun search(query: String, limit: Int): List<MemoryEntity> =
             searchItems.take(limit)
@@ -167,7 +222,8 @@ class MemoryArchitectureTest {
         }
 
         override suspend fun newestByIds(ids: List<String>): MemoryEntity? =
-            (latestItems + consolidationItems + inserted.values)
+            (latestItems + latestConsolidatedItems + latestUserItems +
+                consolidationItems + inserted.values)
                 .filter { it.id in ids }
                 .maxWithOrNull(
                     compareBy<MemoryEntity> { it.createdAt }
@@ -179,11 +235,13 @@ class MemoryArchitectureTest {
             cutoffCreatedAt: Long,
             recallProtectionCount: Int,
             maxConfidence: Double,
+            maxTransientVisionConfidence: Double,
             limit: Int
         ): List<String> {
             lastEphemeralCutoff = cutoffCreatedAt
             lastRecallProtectionCount = recallProtectionCount
             lastMaxConfidence = maxConfidence
+            lastMaxTransientVisionConfidence = maxTransientVisionConfidence
             lastEphemeralLimit = limit
             return ephemeralCandidateIds.take(limit)
         }

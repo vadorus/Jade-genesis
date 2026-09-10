@@ -1,12 +1,14 @@
-"""Strict non-executable SkillSpec contract for Jade Genesis 0.1.19.
+"""Strict SkillSpec contract for Jade Genesis 0.1.20.
 
-0.1.19 defines what a future Jade-owned procedural skill must look like, but it
-deliberately ships no interpreter. A SkillSpec may carry a bounded declarative
-AST so its payload can be hashed, persisted and evaluated later, while
-`execution_enabled` remains false until the dedicated procedure runtime exists.
+0.1.20 introduces a restricted deterministic interpreter, but only for
+explicitly developer-authored procedures. Generated/external-teacher skills
+remain non-executable until the 0.1.21 synthesis and verifier isolation boundary
+exists.
 
-The AST has no shell, filesystem, network, import, process, eval or arbitrary
-Python capability.
+Skill-to-skill dependencies are intentionally disabled in 0.1.20. A procedure
+must be a closed, pure AST over bounded JSON values. The AST has no shell,
+filesystem, network, import, process, environment, clock, randomness, eval or
+arbitrary Python capability.
 """
 
 from __future__ import annotations
@@ -25,10 +27,24 @@ MAX_DESCRIPTION_CHARS = 500
 MAX_BODY_NODES = 256
 MAX_BODY_DEPTH = 16
 MAX_ARGS_PER_NODE = 32
-MAX_DEPENDENCIES = 24
+MAX_DEPENDENCIES = 0
 MAX_LITERAL_BYTES = 8_192
-ALLOWED_CONTRACT_TYPES = {"any", "object", "array", "string", "number", "integer", "boolean", "null"}
-ALLOWED_SOURCE_KINDS = {"DEVELOPER", "EXTERNAL_TEACHER", "FUTURE_SYNTHESIS", "MIGRATED"}
+ALLOWED_CONTRACT_TYPES = {
+    "any",
+    "object",
+    "array",
+    "string",
+    "number",
+    "integer",
+    "boolean",
+    "null",
+}
+ALLOWED_SOURCE_KINDS = {
+    "DEVELOPER",
+    "EXTERNAL_TEACHER",
+    "FUTURE_SYNTHESIS",
+    "MIGRATED",
+}
 ALLOWED_OPS = {
     "input",
     "literal",
@@ -57,7 +73,6 @@ ALLOWED_OPS = {
     "and",
     "or",
     "if",
-    "pipeline",
 }
 FORBIDDEN_CAPABILITY_WORDS = {
     "shell",
@@ -74,6 +89,12 @@ FORBIDDEN_CAPABILITY_WORDS = {
     "file_read",
     "import",
     "privilege",
+    "environment",
+    "env",
+    "clock",
+    "time",
+    "random",
+    "randomness",
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -211,7 +232,12 @@ def _validate_provenance(raw: Any) -> dict[str, Any]:
 def _validate_evaluation_policy(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("invalid_skill_evaluation_policy")
-    allowed = {"verifier_kind", "sealed_set_sha256", "min_pass_rate", "max_protected_failures"}
+    allowed = {
+        "verifier_kind",
+        "sealed_set_sha256",
+        "min_pass_rate",
+        "max_protected_failures",
+    }
     if any(key not in allowed for key in raw):
         raise ValueError("unsupported_skill_evaluation_policy_field")
     verifier = str(raw.get("verifier_kind", VERIFIER_KIND)).strip()
@@ -241,7 +267,7 @@ def _validate_evaluation_policy(raw: Any) -> dict[str, Any]:
 
 
 def normalize_skill_spec(raw: Any) -> dict[str, Any]:
-    """Validate and canonicalize a SkillSpec without enabling execution."""
+    """Validate and canonicalize one closed SkillSpec payload."""
     if not isinstance(raw, dict):
         raise ValueError("skill_spec_must_be_object")
     allowed_fields = {
@@ -278,13 +304,11 @@ def normalize_skill_spec(raw: Any) -> dict[str, Any]:
     body = _validate_node(raw.get("body"), 0, counter)
 
     dependencies_raw = raw.get("dependencies", [])
-    if not isinstance(dependencies_raw, list) or len(dependencies_raw) > MAX_DEPENDENCIES:
+    if not isinstance(dependencies_raw, list):
         raise ValueError("invalid_skill_dependencies")
+    if dependencies_raw:
+        raise PermissionError("skill_dependencies_disabled_in_0_1_20")
     dependencies: list[str] = []
-    for item in dependencies_raw:
-        dependency = _clean_id(item, "dependency_skill_id")
-        if dependency not in dependencies:
-            dependencies.append(dependency)
 
     spec = {
         "schema_version": SCHEMA_VERSION,
@@ -293,8 +317,14 @@ def normalize_skill_spec(raw: Any) -> dict[str, Any]:
         "task_family": _clean_id(raw.get("task_family"), "task_family"),
         "domain": _clean_id(raw.get("domain", "verifiable_procedure"), "domain"),
         "description": _clean_description(raw.get("description", "")),
-        "input_contract": _validate_contract(raw.get("input_contract", {"type": "any"}), "input"),
-        "output_contract": _validate_contract(raw.get("output_contract", {"type": "any"}), "output"),
+        "input_contract": _validate_contract(
+            raw.get("input_contract", {"type": "any"}),
+            "input",
+        ),
+        "output_contract": _validate_contract(
+            raw.get("output_contract", {"type": "any"}),
+            "output",
+        ),
         "body_kind": BODY_KIND,
         "body": body,
         "dependencies": dependencies,
@@ -320,10 +350,16 @@ def skill_spec_status() -> dict[str, Any]:
         "verifier_kind": VERIFIER_KIND,
         "allowed_op_count": len(ALLOWED_OPS),
         "execution_enabled": False,
-        "interpreter_present": False,
+        "interpreter_present_in_contract": False,
+        "dependencies_allowed": False,
+        "max_dependencies": MAX_DEPENDENCIES,
         "network_allowed": False,
         "filesystem_allowed": False,
         "shell_allowed": False,
+        "process_allowed": False,
+        "environment_allowed": False,
+        "clock_allowed": False,
+        "randomness_allowed": False,
         "arbitrary_code_allowed": False,
         "model_weight_mutation": False,
         "generated_skill_execution": False,

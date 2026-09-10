@@ -20,8 +20,8 @@ class SkillSpecTest(unittest.TestCase):
                 "required_fields": ["first", "last"],
             },
             "output_contract": {
-                "type": "object",
-                "required_fields": ["value"],
+                "type": "string",
+                "required_fields": [],
             },
             "body_kind": BODY_KIND,
             "body": {
@@ -53,7 +53,7 @@ class SkillSpecTest(unittest.TestCase):
             },
         }
 
-    def test_valid_skill_has_stable_payload_but_execution_is_disabled(self) -> None:
+    def test_valid_skill_has_stable_payload_but_contract_does_not_enable_execution(self) -> None:
         first = normalize_skill_spec(self.valid_spec())
         second = normalize_skill_spec(self.valid_spec())
         self.assertEqual(first["body_sha256"], second["body_sha256"])
@@ -70,6 +70,15 @@ class SkillSpecTest(unittest.TestCase):
     def test_unknown_or_dangerous_operation_is_rejected(self) -> None:
         spec = self.valid_spec()
         spec["body"] = {"op": "shell", "args": []}
+        with self.assertRaisesRegex(ValueError, "skill_body_op_not_allowed"):
+            normalize_skill_spec(spec)
+
+    def test_pipeline_is_not_part_of_0_1_20_semantics(self) -> None:
+        spec = self.valid_spec()
+        spec["body"] = {
+            "op": "pipeline",
+            "args": [{"op": "input", "args": []}],
+        }
         with self.assertRaisesRegex(ValueError, "skill_body_op_not_allowed"):
             normalize_skill_spec(spec)
 
@@ -94,11 +103,14 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "skill_forbidden_capability"):
             normalize_skill_spec(spec)
 
-    def test_dependencies_are_bounded_and_deduplicated(self) -> None:
+    def test_dependencies_are_rejected_in_0_1_20(self) -> None:
         spec = self.valid_spec()
-        spec["dependencies"] = ["skill-a", "skill-a", "skill-b"]
-        normalized = normalize_skill_spec(spec)
-        self.assertEqual(["skill-a", "skill-b"], normalized["dependencies"])
+        spec["dependencies"] = ["skill-a"]
+        with self.assertRaisesRegex(
+            PermissionError,
+            "skill_dependencies_disabled_in_0_1_20",
+        ):
+            normalize_skill_spec(spec)
 
     def test_contract_rejects_unknown_fields(self) -> None:
         spec = self.valid_spec()
@@ -106,14 +118,22 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_input_contract_field"):
             normalize_skill_spec(spec)
 
-    def test_status_makes_non_execution_boundary_explicit(self) -> None:
+    def test_status_keeps_contract_and_runtime_distinct(self) -> None:
         status = skill_spec_status()
         self.assertEqual(BODY_KIND, status["body_kind"])
         self.assertFalse(status["execution_enabled"])
-        self.assertFalse(status["interpreter_present"])
+        self.assertFalse(status["interpreter_present_in_contract"])
+        self.assertNotIn("interpreter_present", status)
         self.assertFalse(status["generated_skill_execution"])
+        self.assertFalse(status["dependencies_allowed"])
+        self.assertEqual(0, status["max_dependencies"])
         self.assertFalse(status["network_allowed"])
+        self.assertFalse(status["filesystem_allowed"])
         self.assertFalse(status["shell_allowed"])
+        self.assertFalse(status["process_allowed"])
+        self.assertFalse(status["environment_allowed"])
+        self.assertFalse(status["clock_allowed"])
+        self.assertFalse(status["randomness_allowed"])
 
 
 if __name__ == "__main__":

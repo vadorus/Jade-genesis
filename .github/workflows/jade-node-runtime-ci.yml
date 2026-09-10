@@ -51,9 +51,11 @@ jobs:
             node-agent/brain_profiles.py \
             node-agent/shared_genesis_state.py \
             node-agent/night_learning_lab.py \
+            node-agent/strategy_registry.py \
             node-agent/vps_night_cycle.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
+            node-agent/test_strategy_registry.py \
             node-agent/test_vps_night_cycle.py
 
       - name: Test bounded runtime, Night Learning and brain profiles
@@ -108,8 +110,10 @@ jobs:
           assert task_store.stats() == {"active": 0, "queued": 0, "running": 0}
 
           from shared_genesis_state import SharedGenesisStateStore
+          from strategy_registry import StrategyRegistry
           with tempfile.TemporaryDirectory(prefix="jade-state-") as temp_dir:
-              state_store = SharedGenesisStateStore(Path(temp_dir) / "state.json")
+              root = Path(temp_dir)
+              state_store = SharedGenesisStateStore(root / "state.json")
               request = {
                   "schema_version": 1,
                   "identity_id": "jade-test",
@@ -181,6 +185,15 @@ jobs:
               assert len(tail["events"]) == 5
               assert tail["has_more"] is False
 
+              registry = StrategyRegistry(root / "strategy-registry.json")
+              registry_snapshot = registry.snapshot("jade-test", now_ms=2_000)
+              assert registry_snapshot["identity_id"] == "jade-test"
+              assert registry_snapshot["entry_count"] == 0
+              assert registry_snapshot["automatic_promotion"] is False
+              assert registry_snapshot["automatic_runtime_application"] is False
+              assert registry_snapshot["production_code_rewrite"] is False
+              assert registry_snapshot["shell_execution"] is False
+
           health = module.health_payload({
               "node_id": "vps-test",
               "node_kind": "VPS",
@@ -200,9 +213,10 @@ jobs:
           assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab"
           assert health["night_cycle_supervisor"]["experiment_automatic"] is False
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
+          assert health["night_cycle_supervisor"]["strategy_runtime_application_automatic"] is False
           assert health["night_cycle_supervisor"]["arbitrary_shell"] is False
 
-          print("Node Runtime 0.1.6 + Cognitive Brain Profiles v1 validated.")
+          print("Node Runtime 0.1.6 + Cognitive Brain Profiles v1 + Strategy Registry v1 validated.")
           PY
 
       - name: Prove validation did not rewrite sources

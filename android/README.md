@@ -1,12 +1,12 @@
-# Jade Genesis Android — current 0.1.20
+# Jade Genesis Android — current 0.1.20.1
 
 Native Android / Pixel application for Jade Genesis.
 
 Current package/version:
 
 - application ID: `com.jadegenesis.mobile`
-- versionName: `0.1.20`
-- versionCode: `37`
+- versionName: `0.1.20.1`
+- versionCode: `38`
 - minSdk: `31`
 - compileSdk / targetSdk: `37`
 
@@ -29,9 +29,24 @@ Current responsibilities include:
 
 ## Conversation status
 
-The Android UI is already a persistent Jade interface, but 0.1.20 should not be presented as a finished standalone conversational assistant. When no suitable PC/VPS/model backend is available, the app may expose only the minimal local prototype/fallback behavior.
+The Android UI is already a persistent Jade interface, but 0.1.20.1 should not be presented as a finished standalone conversational assistant. When no suitable PC/VPS/model backend is available, the app may expose only the minimal local prototype/fallback behavior.
 
-The distributed `brain_chat` path and cognitive profiles exist in the Node Runtime, but a later Android integration milestone still needs to make everyday routing, backend availability, chosen brain and fallback behavior clearer to the user.
+The distributed `brain_chat` path and cognitive profiles exist in the Node Runtime. A later Android integration milestone still needs to make everyday routing, backend availability, chosen brain and fallback behavior clearer to the user.
+
+## Cognitive plumbing hardening — 0.1.20.1
+
+This maintenance milestone fixes several Android producer-to-consumer paths found during a code audit:
+
+- `MemoryStore.latestForContext()` reserves bounded space for USER facts and `JADE_CONSOLIDATION_*` knowledge before recent memory fills the rest;
+- `LocalPCBrain` no longer sorts consolidated knowledge behind volatile memories before its final truncation;
+- exact textual duplicates from a successfully consolidated batch can be marked superseded, while USER facts and heuristic contradictions remain protected;
+- stale transient `VISION_*` observations have a dedicated compiled retention ceiling compatible with the normal `0.68` visual confidence;
+- the Shared Genesis State phone cache semantically coalesces repeated operational snapshots by `(originNode, kind, entityId)`, preserving rarer durable learning/night-cycle events from snapshot churn;
+- Evolution evidence uses an independent 12→24 sample confidence curve and an unsaturated `rawScore`, so its confidence and score-improvement gates remain meaningful if the engine is wired later.
+
+The Evolution Engine remains intentionally unconnected to autonomous proposal/testing/promotion in this version.
+
+See [`../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md).
 
 ## Stack
 
@@ -78,11 +93,11 @@ Android communicates with the Node Runtime through authenticated node traffic. A
 
 The VPS is not the owner of Jade's identity. If it is unavailable, the phone retains local state and retries bounded synchronization later.
 
-## Learning status — 0.1.20
+## Learning status
 
-Android participates in the evidence/governance side of Jade's learning architecture, while the new deterministic Procedure Runtime currently lives on the Python Node Runtime side.
+Android participates in the evidence/governance side of Jade's learning architecture. The deterministic Procedure Runtime and developer-only Skill Registry live on the Python Node Runtime side.
 
-0.1.20 adds these server/runtime foundations:
+Current foundations include:
 
 - restricted `JADE_PROCEDURE_DSL_V1` execution;
 - developer-only Skill Registry;
@@ -93,11 +108,12 @@ Android participates in the evidence/governance side of Jade's learning architec
 
 Important limits:
 
-- Android does not autonomously synthesize skills;
+- Android does not autonomously synthesize Skills;
 - generated/external-teacher Skills remain non-executable;
 - Skill-to-Skill dependencies are disabled;
-- there is no automatic promotion into production behavior;
-- 0.1.20 is not yet proof of autonomous skill acquisition.
+- there is no automatic Skill promotion into production behavior;
+- the Android Evolution Engine is still dormant from autonomous use;
+- 0.1.20.1 is not proof of autonomous skill acquisition.
 
 The planned 0.1.21 milestone will attempt the first falsifiable synthesis/restart/reuse proof.
 
@@ -108,5 +124,6 @@ The planned 0.1.21 milestone will attempt the first falsifiable synthesis/restar
 - [`../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md`](../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md)
 - [`../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md`](../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md)
 - [`../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`](../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md)
+- [`../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md)
 
 When documentation and source disagree, the exact repository commit and its CI result are authoritative.

@@ -38,9 +38,19 @@ class ConversationLearningTest {
     }
 
     @Test
-    fun weakAcknowledgementDoesNotPretendToValidateAnswer() {
+    fun weakOrAmbiguousPhrasesDoNotPretendToValidateAnswer() {
         assertNull(ConversationLearningPolicy.classifyFeedback("ok"))
         assertNull(ConversationLearningPolicy.classifyFeedback("d'accord"))
+        assertNull(
+            ConversationLearningPolicy.classifyFeedback(
+                "Quelle est la valeur exacte de ce paramètre ?"
+            )
+        )
+        assertNull(
+            ConversationLearningPolicy.classifyFeedback(
+                "Pourquoi ce n'est pas disponible sur Android ?"
+            )
+        )
     }
 
     @Test

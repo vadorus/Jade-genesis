@@ -17,11 +17,26 @@ class FakeLearningLab:
             "schema_version": 1,
             "generated_at": now_ms or 0,
             "source_revision": 5,
+            "signals": [{
+                "kind": "outcome_quality_advantage",
+                "task_kind": "brain_chat",
+                "brain_profile": "balanced",
+                "preferred_model": "model-a",
+                "preferred_node_id": "vps-a",
+                "comparison_model": "model-b",
+                "comparison_node_id": "vps-b",
+            }],
             "research_questions": [],
             "research_evidence": [],
             "research_errors": [],
-            "hypotheses": [{"hypothesis_id": "hyp-1"}],
-            "experiments": [{"experiment_id": "exp-1"}],
+            "hypotheses": [{
+                "hypothesis_id": "hyp-1",
+                "signal_kind": "outcome_quality_advantage",
+            }],
+            "experiments": [{
+                "experiment_id": "exp-fixed",
+                "hypothesis_id": "hyp-1",
+            }],
             "improvement_candidates": [{
                 "candidate_id": "nlc-fixed",
                 "kind": "STRATEGY_HINT",
@@ -30,12 +45,6 @@ class FakeLearningLab:
                 "rationale": "Tester une préférence de profil en sandbox avant toute activation.",
                 "experiment_id": "exp-fixed",
                 "target": "routing.profile_model_preference",
-                "scope": {
-                    "task_kind": "brain_chat",
-                    "brain_profile": "balanced",
-                    "model": "model-a",
-                    "node_id": "vps-a",
-                },
                 "sandbox_required": True,
                 "automatic_activation": False,
                 "automatic_promotion": False,
@@ -155,6 +164,11 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual(0, snapshot["active_strategy_count"])
         self.assertFalse(snapshot["automatic_activation"])
         self.assertFalse(snapshot["automatic_promotion"])
+        entry = snapshot["entries"][0]
+        self.assertEqual("brain_chat", entry["scope"]["task_kind"])
+        self.assertEqual("balanced", entry["scope"]["brain_profile"])
+        self.assertEqual("model-a", entry["scope"]["model"])
+        self.assertEqual("vps-a", entry["scope"]["node_id"])
 
         shared = [
             item for item in self.state.supervision_view()["entities"]
@@ -166,6 +180,7 @@ class AdaptiveVpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual("adaptive_strategy_registry", payload["snapshot_kind"])
         self.assertEqual(1, payload["strategy_count"])
         self.assertEqual(0, payload["active_strategy_count"])
+        self.assertEqual("balanced", payload["entries"][0]["scope"]["brain_profile"])
         self.assertFalse(payload["raw_conversation_text_stored"])
         self.assertFalse(payload["automatic_activation"])
         self.assertFalse(payload["automatic_promotion"])

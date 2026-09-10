@@ -34,7 +34,10 @@ class ConversationLearningTest {
             "Parfait, ça marche maintenant.",
             "Ça marche.",
             "ça a marché !",
-            "c'est résolu"
+            "c'est résolu",
+            "ça marche :)",
+            "nickel",
+            "super"
         ).forEach { text ->
             val signal = ConversationLearningPolicy.classifyFeedback(text)
                 ?: error("Signal positif attendu pour: $text")
@@ -48,7 +51,8 @@ class ConversationLearningTest {
             "est-ce que ça marche pas sur Android 12 ?",
             "si ça marche pas, qu'est-ce que je dois regarder ?",
             "Comment ça marche Vulkan sur Android ?",
-            "Pourquoi ce n'est pas disponible sur Android ?"
+            "Pourquoi ce n'est pas disponible sur Android ?",
+            "résolu ? pas vraiment"
         ).forEach { text ->
             assertNull(text, ConversationLearningPolicy.classifyFeedback(text))
         }
@@ -64,9 +68,25 @@ class ConversationLearningTest {
             "en fait, j'ai une autre question sur Godot",
             "il fallait que je te demande un truc",
             "explique-moi pourquoi tu te trompes parfois",
-            "Quelle est la valeur exacte de ce paramètre ?"
+            "Quelle est la valeur exacte de ce paramètre ?",
+            "parfait, sauf que le build casse",
+            "super bizarre ce comportement",
+            "nickel chrome ton truc",
+            "super Mario Bros"
         ).forEach { text ->
             assertNull(text, ConversationLearningPolicy.classifyFeedback(text))
+        }
+    }
+
+    @Test
+    fun explicitNegativeTailOverridesPositiveLeadIn() {
+        listOf(
+            "super, mais ça marche pas",
+            "c'est bon à savoir mais je crois que c'est faux"
+        ).forEach { text ->
+            val signal = ConversationLearningPolicy.classifyFeedback(text)
+                ?: error("Signal négatif attendu pour: $text")
+            assertEquals(ConversationFeedbackKind.NEGATIVE, signal.kind)
         }
     }
 

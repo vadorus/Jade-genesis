@@ -38,14 +38,11 @@ object ConversationLearningPolicy {
         "non, c est",
         "non c est",
         "en fait,",
-        "en fait ",
         "correction :",
         "corrige :",
         "la bonne reponse",
         "la bonne réponse",
-        "il fallait",
-        "ce n'est pas",
-        "ce n est pas"
+        "il fallait"
     )
 
     private val positiveMarkers = listOf(
@@ -56,7 +53,6 @@ object ConversationLearningPolicy {
         "c'est ca",
         "c est ca",
         "parfait",
-        "exact",
         "resolu",
         "résolu",
         "probleme resolu",

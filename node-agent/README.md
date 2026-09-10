@@ -1,8 +1,8 @@
-# Jade Genesis — Distributed Node Runtime 0.1.6
+# Jade Genesis — Distributed Node Runtime 0.1.7
 
-Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. The runtime stays dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
+The Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. It remains dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
 
-The Node Runtime internal version is intentionally independent from the Android product version. Current Android product version is 0.1.19.
+The Node Runtime version is independent from the Android product version. Current Android product version on this branch is **0.1.20** (`versionCode 37`).
 
 ## Start
 
@@ -22,8 +22,6 @@ The node ID, pairing token, port, node kind and runtime configuration are persis
 
 ## Authenticated API
 
-All Jade requests use the existing authenticated Node Runtime transport. Android requires an authorized route for authenticated node traffic.
-
 Endpoints include:
 
 - `GET /health`
@@ -33,77 +31,148 @@ Endpoints include:
 - `POST /task`
 - `POST /tasks`
 
-Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS replicas, `shared_state_sync`. The Night Learning Lab is intentionally **not** a remotely invokable task. No arbitrary remote shell/system command is exposed.
+Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS replicas, `shared_state_sync`.
 
-## Cognitive Brain Profiles v1
+The following are deliberately **not** exposed as arbitrary remote tasks in 0.1.20:
 
-Runtime 0.1.6 introduces role-aware brains. Jade remains the persistent identity and the model remains an interchangeable cognitive resource. A request is assigned one bounded profile before local inference:
+- Night Learning execution;
+- Procedure Runtime execution;
+- Skill Registry registration/activation;
+- arbitrary shell/system commands.
 
-- `FAST` — short, low-cost replies;
-- `GENERAL` — normal conversation and balanced reasoning;
-- `REASONING` — architecture, diagnosis, planning and difficult revisions;
-- `CODE` — programming and Tool Lab work;
-- `CRITIC` — verification passes with low temperature.
+## Cognitive Brain Profiles
 
-The Android Cognitive Core requests the profile. The Node Runtime then scores the Ollama models that are already installed against the requested role, model size/parameter count and currently available GPU VRAM. Small 3B/4B-class models can still serve `FAST` or act as a degraded fallback, but they are deliberately penalized for `GENERAL`, `REASONING`, `CODE` and `CRITIC` when a stronger installed model is available. Jade therefore does not treat a tiny model as its central identity or mandatory brain.
+Jade remains the persistent identity while local/external models are interchangeable cognitive resources. Requests can use bounded roles such as `FAST`, `GENERAL`, `REASONING`, `CODE` and `CRITIC`.
 
-Optional local overrides can be placed in `node-agent.json` with `brain_model_fast`, `brain_model_general`, `brain_model_reasoning`, `brain_model_code` and `brain_model_critic`. The legacy `ollama_model` setting remains a GENERAL-profile override for compatibility.
+The runtime can score already-installed Ollama models against role, size and available GPU VRAM. Small models remain usable as bounded fallback resources but are not treated as Jade's identity.
 
-The runtime advertises `cognitive_brain_profiles_v1` plus a `brain_profiles` snapshot in `/health` and `/runtime`. Profile selection never downloads a model automatically, mutates model weights, grants privileges or exposes shell execution.
+Profile selection does not automatically download models, mutate model weights, grant privileges or expose shell execution.
 
-## Shared Genesis State v1
+## Shared Genesis State
 
-Runtime 0.1.6 keeps the durable operational-state replica on nodes configured as `VPS`. It advertises Shared Genesis State capabilities through `/health` and `/runtime`.
+On VPS nodes, the runtime maintains a durable operational-state replica in `~/.jade-genesis/genesis-state.json` plus a backup. Sync is identity-bound and idempotent by event ID.
 
-The replica stores a bounded, versioned event stream and a compact latest-entity snapshot in `~/.jade-genesis/genesis-state.json`, with a backup copy. Sync is idempotent by event ID and bound to one Jade identity. A VPS replica does **not** become the sole owner of Jade's identity.
+The Pixel keeps its own local cache/outbox. A VPS replica is not the owner of Jade's identity, and temporary VPS loss does not erase local Android state.
 
-The Pixel side keeps its own local cache and outbox. If the VPS is temporarily unavailable, unsynced operational snapshots remain on the phone and are retried later.
+## Night Cycle / Night Learning
 
-## VPS-supervised Night Cycle + Night Learning
+A VPS can run the bounded Night Cycle supervisor. It reviews durable state, Runtime Evaluation summaries and bounded evolution signals.
 
-On a node configured as `VPS`, Runtime 0.1.6 starts a bounded local supervisor. It waits for the protected inactivity/night-cycle conditions before reviewing the durable Shared Genesis State replica, recent Runtime Evaluation summaries and bounded evolution signals.
-
-Night Learning turns measured runtime evidence into a bounded review pipeline: targeted research questions, public evidence when available, falsifiable hypotheses, experiment proposals and improvement candidates.
-
-Experiments are plans only. Improvement artifacts cannot activate themselves, rewrite production code, change compiled SafetyPolicy, mutate Pixel memory, mutate model weights or execute shell commands.
-
-The VPS writes bounded learning/maintenance/night-cycle snapshots back into Shared Genesis State so Android can receive them through normal synchronization. Dangerous learning flags are rejected fail-closed by the current integration.
+Night Learning can produce research questions, hypotheses, experiment proposals and strategy hints. Those artifacts cannot automatically rewrite production code, mutate model weights or execute arbitrary commands.
 
 ## Adaptive Strategy Registry — 0.1.18 substrate
 
-The Node Runtime now exposes `adaptive_strategy_registry_v1`.
+`adaptive_strategy_registry_v1` persists bounded strategy evidence and lifecycle metadata. It remains governance/adaptation infrastructure rather than proof of general learned behavior.
 
-The registry persists identity-bound `STRATEGY_HINT` evidence across restarts with lifecycle metadata, provenance, sandbox-evaluation metadata, explicit promotion gates and rollback support.
-
-Important limitation: this is governance/persistence infrastructure. It does not mean Jade already owns a general executable learned skill. Automatic activation, automatic promotion, production-code rewrite and model-weight mutation remain disabled.
+Automatic activation, automatic promotion, code rewrite and model-weight mutation remain disabled.
 
 See `../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md`.
 
-## Verifiable Task Ledger + SkillSpec — 0.1.19 substrate
+## Verifiable Task Ledger — hardened in 0.1.20
 
-The Node Runtime now also exposes:
+`verifiable_task_ledger_v1` stores deterministic task cases in:
 
-- `verifiable_task_ledger_v1`
-- `skill_spec_v1`
+- `TRAIN`
+- `VALIDATION`
+- hidden `SEALED_TEST`
 
-The Verifiable Task Ledger stores bounded deterministic task cases in `TRAIN`, `VALIDATION` and hidden `SEALED_TEST` partitions. Sealed datasets are immutable and use a salted commitment whose private nonce is not part of learning-visible data.
+The hidden set is committed with a private random nonce. In 0.1.20, `SEALED_TEST` can no longer be queried through the interactive per-case evaluator.
 
-`SkillSpec v1` defines a Jade-owned declarative skill payload with:
+A final sealed exam:
 
-- stable identity/version;
+- requires the exact frozen SkillSpec commitment;
+- evaluates the whole hidden set internally;
+- exposes only aggregate `PASS/FAIL`;
+- consumes the sealed dataset for the first candidate;
+- rejects a different candidate after consumption;
+- returns an idempotent stored result for the exact same candidate without rerunning hidden cases.
+
+This blocks the obvious repeated-feedback oracle. It is not yet an OS-level secret enclave: the hidden data still physically exists in the verifier-owned local ledger file, so future synthesis must isolate generator access from that state.
+
+## SkillSpec v1 — 0.1.20 contract
+
+`SkillSpec` describes one closed declarative procedure with:
+
+- skill identity/version;
+- task family/domain;
 - input/output contracts;
-- a `JADE_PROCEDURE_DSL_V1` AST body;
-- dependencies and provenance;
+- `JADE_PROCEDURE_DSL_V1` AST body;
+- provenance;
 - evaluation policy;
 - stable body/spec hashes.
 
-0.1.19 deliberately has no interpreter. Runtime telemetry reports the non-executable boundary and generated SkillSpecs cannot run yet.
+Skill-to-Skill dependencies are deliberately disabled in 0.1.20 (`max_dependencies = 0`).
 
-See `../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md`.
+The contract itself does not grant execution permission. Runtime policy decides which provenance kinds may execute.
+
+## Restricted Procedure Runtime — 0.1.20
+
+`procedure_runtime.py` is the first real executable SkillSpec substrate.
+
+Only `DEVELOPER`-authored SkillSpecs are executable in 0.1.20. `EXTERNAL_TEACHER` and future generated candidates remain blocked until the 0.1.21 synthesis/promotion boundary exists.
+
+The interpreter is deterministic and exposes no primitive for:
+
+- filesystem;
+- network;
+- shell/process;
+- imports/eval/exec;
+- environment variables;
+- clock/time;
+- randomness;
+- arbitrary Python/native code.
+
+Supported operations are intentionally small: bounded JSON input/literals, object/array construction, field/index lookup, string operations, arithmetic, comparison, boolean operators and `if`.
+
+Execution is bounded by:
+
+- AST validation limits;
+- logical step budget;
+- logical cost budget that grows with processed value size;
+- JSON depth/collection/string/output-size limits;
+- input/output contract checks;
+- fail-closed arithmetic/type errors.
+
+This is a restricted in-process interpreter, not an OS/container sandbox for hostile native code.
+
+## Developer Skill Registry — 0.1.20
+
+`skill_registry_v1` proves the first persistent causal execution path:
+
+```text
+DEVELOPER SkillSpec
+-> register
+-> explicit approved activation
+-> exact task-family selection
+-> restricted execution
+-> deterministic result
+-> persisted selection across restart
+```
+
+Properties:
+
+- only developer-authored SkillSpecs can be registered/activated;
+- activation requires explicit approval;
+- no automatic promotion;
+- no generated-skill registration/execution;
+- no fuzzy recall yet;
+- no LLM used for selection;
+- no Skill-to-Skill dependencies;
+- no network access by the registry.
+
+This registry is separate from the Adaptive Strategy Registry because an executable skill is a capability payload, not merely tuning metadata.
+
+## What 0.1.20 does NOT prove
+
+0.1.20 proves that Jade's runtime can persist, select and execute an approved deterministic procedure safely within the DSL boundary.
+
+It does **not** prove that Jade can autonomously acquire a new skill. The developer still authors/approves the executable SkillSpec. Autonomous gap detection, teacher proposal, candidate iteration, promotion and restart recall belong to 0.1.21+.
+
+See `../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`.
 
 ## Resource and model telemetry
 
-Runtime 0.1.6 preserves resource intelligence for CPU load, task count, RAM, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
+Runtime 0.1.7 preserves CPU/task/RAM telemetry, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
 
 ## Useful local commands
 
@@ -113,8 +182,8 @@ py jade_node_agent.py --probe-ollama
 py jade_node_agent.py --show-token
 ```
 
-Use `--reset-token` only when intentionally rotating the pairing token; existing paired Android clients will then need the new token.
+Use `--reset-token` only when intentionally rotating the pairing token; paired Android clients will then need the new token.
 
 ## Safety / source-control note
 
-Do not commit pairing tokens, private keys, signing material or local runtime-state files. Historical CI logs should stay in GitHub Actions artifacts rather than being copied into the repository.
+Do not commit pairing tokens, private keys, signing material, hidden task-ledger state or local runtime-state files. CI logs and generated release artifacts belong in GitHub Actions/artifacts rather than in the canonical source tree.

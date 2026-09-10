@@ -4,6 +4,8 @@ import com.jadegenesis.mobile.brain.BrainRouter
 import com.jadegenesis.mobile.brain.CognitiveBrainPolicy
 import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
+import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
+import com.jadegenesis.mobile.eval.RuntimeOutcomeKind
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainResult
 import com.jadegenesis.mobile.model.CognitivePhase
@@ -41,6 +43,8 @@ class CognitiveCore(
         } else {
             null
         }
+
+        recordRuntimeOutcomeQuality(learningUpdate)
 
         val conversationMemories = if (learningUpdate != null) {
             runCatching {
@@ -118,6 +122,7 @@ class CognitiveCore(
             CognitivePhase.EXECUTE,
             "Réponse ${answerPlan.profile.name} produite par ${first.backendDisplayName.ifBlank { first.backendId.ifBlank { "backend inconnu" } }}${first.model.takeIf { it.isNotBlank() }?.let { " · modèle $it" } ?: ""}.",
             backendId = first.backendId.takeIf { it.isNotBlank() },
+            nodeId = first.nodeId.takeIf { it.isNotBlank() },
             durationMs = executionDuration,
             success = first.text.isNotBlank()
         )
@@ -177,6 +182,7 @@ class CognitiveCore(
             CognitivePhase.VERIFY,
             "CRITIC verdict=${review.verdict}, confiance=${"%.2f".format(review.confidence)}. ${review.note.take(180)}",
             backendId = verified.backendId,
+            nodeId = verified.nodeId.takeIf { it.isNotBlank() },
             durationMs = elapsedMs(verificationStarted),
             success = true
         )
@@ -205,6 +211,7 @@ class CognitiveCore(
                     CognitivePhase.REVISE,
                     "Une révision REASONING a été produite après contrôle de la première réponse.",
                     backendId = revised.backendId,
+                    nodeId = revised.nodeId.takeIf { it.isNotBlank() },
                     durationMs = elapsedMs(revisionStarted),
                     success = true
                 )
@@ -236,6 +243,49 @@ class CognitiveCore(
         return finalResult
     }
 
+    private fun recordRuntimeOutcomeQuality(update: ConversationLearningUpdate?) {
+        val feedback = update?.feedbackKind ?: return
+        val feedbackId = update.feedbackOutcomeId.trim()
+        val observationId = update.feedbackTargetObservationId.trim()
+        if (feedbackId.isBlank() || observationId.isBlank()) return
+
+        val runtimeKind = when (feedback) {
+            ConversationFeedbackKind.POSITIVE -> RuntimeOutcomeKind.POSITIVE
+            ConversationFeedbackKind.NEGATIVE -> RuntimeOutcomeKind.NEGATIVE
+            ConversationFeedbackKind.CORRECTION -> RuntimeOutcomeKind.CORRECTION
+        }
+        runCatching {
+            RuntimeEvalRuntime.currentOrNull()?.recordOutcomeFeedback(
+                feedbackId = feedbackId,
+                targetObservationId = observationId,
+                kind = runtimeKind,
+                confidence = update.feedbackConfidence
+            )
+        }.onSuccess { recorded ->
+            if (recorded != null) {
+                logger.log(
+                    DiagnosticLevel.INFO,
+                    "runtime_outcome_recorded",
+                    "Outcome utilisateur rattaché à l'exécution exacte de la réponse précédente.",
+                    mapOf(
+                        "kind" to recorded.kind.name,
+                        "node_id" to recorded.nodeId,
+                        "brain_profile" to recorded.brainProfile,
+                        "model" to recorded.model,
+                        "target_observation_id" to recorded.targetObservationId
+                    )
+                )
+            }
+        }.onFailure { error ->
+            logger.log(
+                DiagnosticLevel.WARN,
+                "runtime_outcome_ignored",
+                "Le retour conversationnel reste mémorisé, mais Runtime Eval n'a pas pu le rattacher sans risque.",
+                mapOf("error" to (error.message ?: error::class.java.simpleName))
+            )
+        }
+    }
+
     private fun completeConversationLearning(
         store: ConversationLearningStore?,
         update: ConversationLearningUpdate?,
@@ -248,9 +298,11 @@ class CognitiveCore(
             store.completeTurn(
                 userInput = input,
                 answer = result.text,
-                profile = profile,
+                profile = result.brainProfile.ifBlank { profile },
                 backendId = result.backendId,
+                nodeId = result.nodeId,
                 model = result.model,
+                runtimeEvalObservationId = result.runtimeEvalObservationId,
                 fallbackUsed = result.fallbackUsed
             )
         }.onFailure { error ->
@@ -283,6 +335,9 @@ class CognitiveCore(
                     )
                     if (update.feedbackOnly) {
                         append(" Ce message a été traité comme feedback du tour précédent et n'a pas créé un nouveau sujet conversationnel.")
+                    }
+                    if (update.feedbackTargetObservationId.isNotBlank()) {
+                        append(" Le signal possède un lien exact vers l'observation Runtime Eval de la réponse ciblée.")
                     }
                 }
                 if (milestones.isNotEmpty()) {
@@ -362,6 +417,7 @@ class CognitiveCore(
             CognitivePhase.COMPLETE,
             "Cycle cognitif terminé en ${duration} ms${if (result.fallbackUsed) " avec fallback" else ""}.",
             backendId = result.backendId.takeIf { it.isNotBlank() },
+            nodeId = result.nodeId.takeIf { it.isNotBlank() },
             durationMs = duration,
             success = result.text.isNotBlank()
         )
@@ -394,6 +450,7 @@ class CognitiveCore(
             metadata = mapOf(
                 "execution_id" to executionId,
                 "backend_id" to backendId,
+                "node_id" to nodeId,
                 "duration_ms" to durationMs
             )
         )

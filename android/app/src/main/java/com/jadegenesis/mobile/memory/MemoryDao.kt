@@ -46,6 +46,16 @@ interface MemoryDao {
     @Query(
         """
         SELECT * FROM memory_events
+        WHERE id IN (:ids)
+          AND supersededBy IS NULL
+        ORDER BY createdAt DESC, id DESC
+        """
+    )
+    suspend fun activeByIds(ids: List<String>): List<MemoryEntity>
+
+    @Query(
+        """
+        SELECT * FROM memory_events
         WHERE supersededBy IS NULL
           AND content LIKE '%' || :query || '%'
         ORDER BY createdAt DESC, id DESC

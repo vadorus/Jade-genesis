@@ -7,7 +7,7 @@ from procedure_runtime import (
     execute_skill,
     procedure_runtime_status,
 )
-from skill_spec import BODY_KIND
+from skill_spec import BODY_KIND, normalize_skill_spec
 
 
 class ProcedureRuntimeTest(unittest.TestCase):
@@ -81,6 +81,21 @@ class ProcedureRuntimeTest(unittest.TestCase):
         self.assertFalse(first["process_used"])
         self.assertFalse(first["randomness_used"])
         self.assertFalse(first["generated_skill_execution"])
+
+    def test_canonical_normalized_skill_can_execute(self) -> None:
+        normalized = normalize_skill_spec(self.skill())
+        result = execute_skill(normalized, {"a": 9, "b": 6})
+        self.assertEqual({"value": 15}, result["result"])
+        self.assertEqual(normalized["spec_sha256"], result["spec_sha256"])
+
+    def test_tampered_normalized_skill_fails_closed(self) -> None:
+        normalized = normalize_skill_spec(self.skill())
+        normalized["network_allowed"] = True
+        with self.assertRaisesRegex(
+            ProcedureRuntimeError,
+            "procedure_normalized_skill_integrity_mismatch",
+        ):
+            execute_skill(normalized, {"a": 1, "b": 2})
 
     def test_external_teacher_skill_is_not_executable_in_0_1_20(self) -> None:
         with self.assertRaisesRegex(

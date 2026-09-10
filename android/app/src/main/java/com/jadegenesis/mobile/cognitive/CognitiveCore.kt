@@ -2,6 +2,7 @@ package com.jadegenesis.mobile.cognitive
 
 import com.jadegenesis.mobile.brain.BrainRouter
 import com.jadegenesis.mobile.brain.CognitiveBrainPolicy
+import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.model.BrainContext
 import com.jadegenesis.mobile.model.BrainResult
@@ -25,17 +26,64 @@ class CognitiveCore(
     suspend fun think(context: BrainContext): BrainResult {
         val executionId = "cog-${UUID.randomUUID()}"
         val startedAt = System.currentTimeMillis()
+        val conversationLearning = ConversationLearningRuntime.currentOrNull()
+        val learningUpdate = if (context.operation == "answer" && conversationLearning != null) {
+            runCatching {
+                conversationLearning.beginUserMessage(context.userInput)
+            }.onFailure { error ->
+                logger.log(
+                    DiagnosticLevel.WARN,
+                    "conversation_learning_unavailable",
+                    "Conversation Learning ignoré pour ce tour afin de préserver un état illisible ou incompatible.",
+                    mapOf("error" to (error.message ?: error::class.java.simpleName))
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+
+        val conversationMemories = if (learningUpdate != null) {
+            runCatching {
+                conversationLearning
+                    ?.contextMemories(SafetyPolicy.MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS)
+                    .orEmpty()
+            }.onFailure { error ->
+                logger.log(
+                    DiagnosticLevel.WARN,
+                    "conversation_learning_context_failed",
+                    "Le contexte conversationnel local n'a pas été injecté ; les mémoires principales restent intactes.",
+                    mapOf("error" to (error.message ?: error::class.java.simpleName))
+                )
+            }.getOrDefault(emptyList())
+        } else {
+            emptyList()
+        }
+
+        val workingContext = if (conversationMemories.isEmpty()) {
+            context
+        } else {
+            context.copy(
+                memories = (context.memories + conversationMemories)
+                    .distinctBy { it.id }
+            )
+        }
+
         record(
             executionId,
             CognitivePhase.OBSERVE,
-            "Contexte observé : ${context.selfModel.knownNodes.size} nœud(s), mode ${context.selfModel.resourceBudget.mode}."
+            buildString {
+                append("Contexte observé : ${workingContext.selfModel.knownNodes.size} nœud(s), mode ${workingContext.selfModel.resourceBudget.mode}.")
+                if (conversationMemories.isNotEmpty()) {
+                    append(" ${conversationMemories.size} élément(s) d'expérience conversationnelle locale ajouté(s) sans évincer la mémoire principale.")
+                }
+            }
         )
 
         val answerPlan = CognitiveBrainPolicy.plan(
             operation = "answer",
-            userInput = context.userInput
+            userInput = workingContext.userInput
         )
-        val verify = shouldVerify(context.userInput)
+        val verify = shouldVerify(workingContext.userInput)
         record(
             executionId,
             CognitivePhase.PLAN,
@@ -50,13 +98,20 @@ class CognitiveCore(
         )
 
         val executionStarted = System.nanoTime()
-        val first = brainRouter.think(
-            context.copy(
-                operation = "answer",
-                draftResponse = null,
-                reviewNote = null
+        val first = try {
+            brainRouter.think(
+                workingContext.copy(
+                    operation = "answer",
+                    draftResponse = null,
+                    reviewNote = null
+                )
             )
-        )
+        } catch (error: Exception) {
+            if (learningUpdate != null) {
+                conversationLearning?.cancelPending()
+            }
+            throw error
+        }
         val executionDuration = elapsedMs(executionStarted)
         record(
             executionId,
@@ -72,6 +127,14 @@ class CognitiveCore(
             !verify ||
             first.backendId.contains("prototype", ignoreCase = true)
         ) {
+            recordConversationLearning(executionId, learningUpdate)
+            completeConversationLearning(
+                store = conversationLearning,
+                update = learningUpdate,
+                input = context.userInput,
+                profile = answerPlan.profile.name,
+                result = first
+            )
             recordComplete(executionId, startedAt, first)
             return first
         }
@@ -79,7 +142,7 @@ class CognitiveCore(
         val verificationStarted = System.nanoTime()
         val verification = runCatching {
             brainRouter.think(
-                context.copy(
+                workingContext.copy(
                     operation = "verify",
                     draftResponse = first.text,
                     reviewNote = null
@@ -95,6 +158,14 @@ class CognitiveCore(
                 "Vérification CRITIC indisponible ; la réponse initiale est conservée.",
                 durationMs = elapsedMs(verificationStarted),
                 success = false
+            )
+            recordConversationLearning(executionId, learningUpdate)
+            completeConversationLearning(
+                store = conversationLearning,
+                update = learningUpdate,
+                input = context.userInput,
+                profile = answerPlan.profile.name,
+                result = first
             )
             recordComplete(executionId, startedAt, first)
             return first
@@ -115,7 +186,7 @@ class CognitiveCore(
             val revisionStarted = System.nanoTime()
             val revised = runCatching {
                 brainRouter.think(
-                    context.copy(
+                    workingContext.copy(
                         operation = "revise",
                         draftResponse = first.text,
                         reviewNote = review.note
@@ -153,8 +224,80 @@ class CognitiveCore(
             CognitivePhase.LEARN,
             "L'issue de l'exécution est enregistrée comme expérience opérationnelle, sans modifier automatiquement le code ni les poids d'un modèle."
         )
+        recordConversationLearning(executionId, learningUpdate)
+        completeConversationLearning(
+            store = conversationLearning,
+            update = learningUpdate,
+            input = context.userInput,
+            profile = answerPlan.profile.name,
+            result = finalResult
+        )
         recordComplete(executionId, startedAt, finalResult)
         return finalResult
+    }
+
+    private fun completeConversationLearning(
+        store: ConversationLearningStore?,
+        update: ConversationLearningUpdate?,
+        input: String,
+        profile: String,
+        result: BrainResult
+    ) {
+        if (store == null || update == null) return
+        runCatching {
+            store.completeTurn(
+                userInput = input,
+                answer = result.text,
+                profile = profile,
+                backendId = result.backendId,
+                model = result.model,
+                fallbackUsed = result.fallbackUsed
+            )
+        }.onFailure { error ->
+            logger.log(
+                DiagnosticLevel.WARN,
+                "conversation_learning_complete_failed",
+                "Le tour conversationnel n'a pas été persisté ; aucune donnée existante n'a été remplacée par un état vide.",
+                mapOf("error" to (error.message ?: error::class.java.simpleName))
+            )
+        }
+    }
+
+    private fun recordConversationLearning(
+        executionId: String,
+        update: ConversationLearningUpdate?
+    ) {
+        if (update == null) return
+        val feedback = update.feedbackKind
+        val milestones = update.crossedTopicMilestones
+        if (feedback == null && milestones.isEmpty()) return
+
+        record(
+            executionId,
+            CognitivePhase.LEARN,
+            buildString {
+                if (feedback != null) {
+                    append(
+                        "Conversation Learning a enregistré un retour ${feedback.name} " +
+                            "(confiance ${"%.2f".format(update.feedbackConfidence)})."
+                    )
+                    if (update.feedbackOnly) {
+                        append(" Ce message a été traité comme feedback du tour précédent et n'a pas créé un nouveau sujet conversationnel.")
+                    }
+                }
+                if (milestones.isNotEmpty()) {
+                    if (isNotEmpty()) append(" ")
+                    append("Sujets devenus récurrents : ")
+                    append(
+                        milestones.entries.joinToString { (topic, count) ->
+                            "$topic ($count)"
+                        }
+                    )
+                    append(".")
+                }
+                append(" Ces signaux restent des expériences utilisateur, pas des faits externes automatiquement vérifiés.")
+            }
+        )
     }
 
     private fun shouldVerify(input: String): Boolean {

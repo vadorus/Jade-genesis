@@ -16,8 +16,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 31
-        versionName = "0.1.14"
+        versionCode = 32
+        versionName = "0.1.15"
     }
 
     buildFeatures {
@@ -48,12 +48,10 @@ android {
         getByName("debug") {
             isDebuggable = true
         }
-
         getByName("release") {
             isDebuggable = false
             isMinifyEnabled = false
             isShrinkResources = false
-
             signingConfigs.findByName("jadeStable")?.let {
                 signingConfig = it
             }

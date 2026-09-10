@@ -28,6 +28,14 @@ from shared_genesis_state import SharedGenesisStateStore, _GLOBAL_STORE
 
 SCHEMA_VERSION = 1
 MAX_SHARED_STRATEGIES = 20
+DANGEROUS_LEARNING_FLAGS = (
+    "automatic_experiment_execution",
+    "automatic_promotion",
+    "production_code_rewrite",
+    "shell_execution",
+    "raw_conversation_text_used",
+    "user_feedback_promoted_to_external_fact",
+)
 LogFunction = Callable[..., None]
 
 
@@ -75,6 +83,17 @@ def _enrich_candidate_scope(candidate: dict[str, Any], learning: dict[str, Any])
         "node_id": str(node_id),
     }
     return enriched
+
+
+def _assert_safe_learning_snapshot(learning: dict[str, Any]) -> None:
+    """Reject the whole learning snapshot when a protected invariant is violated."""
+    violated = [
+        field
+        for field in DANGEROUS_LEARNING_FLAGS
+        if bool(learning.get(field, False))
+    ]
+    if violated:
+        raise ValueError(f"unsafe_night_learning_snapshot:{violated[0]}")
 
 
 class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
@@ -174,6 +193,8 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
 
         learning_event = _latest_entity(view, "vps_learning_snapshot")
         learning = _payload(learning_event)
+        _assert_safe_learning_snapshot(learning)
+
         candidates = learning.get("improvement_candidates", [])
         if not isinstance(candidates, list):
             candidates = []
@@ -228,6 +249,7 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
             "active_strategy_count": snapshot["active_strategy_count"],
             "entries": public_entries,
             "raw_conversation_text_stored": False,
+            "user_feedback_promoted_to_external_fact": False,
             "automatic_activation": False,
             "automatic_promotion": False,
             "production_code_rewrite": False,

@@ -52,9 +52,13 @@ jobs:
             node-agent/shared_genesis_state.py \
             node-agent/night_learning_lab.py \
             node-agent/vps_night_cycle.py \
+            node-agent/adaptive_strategy_registry.py \
+            node-agent/adaptive_vps_night_cycle.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
-            node-agent/test_vps_night_cycle.py
+            node-agent/test_vps_night_cycle.py \
+            node-agent/test_adaptive_strategy_registry.py \
+            node-agent/test_adaptive_vps_night_cycle.py
 
       - name: Test bounded runtime, Night Learning and brain profiles
         shell: bash
@@ -197,12 +201,22 @@ jobs:
           assert "shared_state_sync" in health["capabilities"]
           assert "vps_night_cycle_supervisor_v1" in health["capabilities"]
           assert "night_learning_lab_v1" in health["capabilities"]
-          assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab"
+          assert "adaptive_strategy_registry_v1" in health["capabilities"]
+          assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab+adaptive_strategy_registry"
           assert health["night_cycle_supervisor"]["experiment_automatic"] is False
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
+          assert health["night_cycle_supervisor"]["strategy_persistence_automatic"] is True
+          assert health["night_cycle_supervisor"]["strategy_activation_automatic"] is False
+          assert health["night_cycle_supervisor"]["strategy_promotion_automatic"] is False
+          assert health["night_cycle_supervisor"]["strategy_model_weight_mutation"] is False
           assert health["night_cycle_supervisor"]["arbitrary_shell"] is False
+          assert health["adaptive_strategy_registry"]["automatic_activation"] is False
+          assert health["adaptive_strategy_registry"]["automatic_promotion"] is False
+          assert health["adaptive_strategy_registry"]["production_code_rewrite"] is False
+          assert health["adaptive_strategy_registry"]["model_weight_mutation"] is False
+          assert health["adaptive_strategy_registry"]["shell_execution"] is False
 
-          print("Node Runtime 0.1.6 + Cognitive Brain Profiles v1 validated.")
+          print("Node Runtime 0.1.6 + Adaptive Strategy Registry v1 validated.")
           PY
 
       - name: Prove validation did not rewrite sources

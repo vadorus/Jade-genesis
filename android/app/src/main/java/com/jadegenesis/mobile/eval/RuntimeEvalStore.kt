@@ -30,6 +30,7 @@ class RuntimeEvalStore(context: Context) {
         output: String = "",
         error: String? = null,
         fallbackUsed: Boolean = false,
+        brainProfile: String? = null,
         createdAt: Long = System.currentTimeMillis()
     ): RuntimeEvalObservation? {
         if (!shouldEvaluate(request.taskKind)) return null
@@ -38,6 +39,14 @@ class RuntimeEvalStore(context: Context) {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: node.brainLoadedModel.ifBlank { node.brainModel }
+        val observedProfile = brainProfile
+            ?.trim()
+            ?.lowercase()
+            ?.takeIf { it.isNotBlank() }
+            ?: outputJson?.optString("brain_profile")
+                ?.trim()
+                ?.lowercase()
+                .orEmpty()
         val tokensPerSecond = finiteDouble(
             outputJson,
             "tokens_per_second",
@@ -53,6 +62,7 @@ class RuntimeEvalStore(context: Context) {
             nodeName = node.name,
             nodeKind = node.kind,
             model = model,
+            brainProfile = observedProfile,
             success = success,
             durationMs = durationMs.coerceAtLeast(0L),
             outputChars = output.length.coerceAtLeast(0),
@@ -72,6 +82,10 @@ class RuntimeEvalStore(context: Context) {
         val model = outputJson?.optString("model")
             ?.trim()
             ?.takeIf { it.isNotBlank() }
+            .orEmpty()
+        val brainProfile = outputJson?.optString("brain_profile")
+            ?.trim()
+            ?.lowercase()
             .orEmpty()
         val tokensPerSecond = finiteDouble(
             outputJson,
@@ -94,6 +108,7 @@ class RuntimeEvalStore(context: Context) {
                         nodeName = attempt.nodeName.ifBlank { "Nœud inconnu" },
                         nodeKind = nodeKindFor(attempt.executionLocation),
                         model = if (isExecutedNode) model else "",
+                        brainProfile = if (isExecutedNode) brainProfile else "",
                         success = attempt.success,
                         durationMs = attempt.durationMs.coerceAtLeast(0L),
                         outputChars = if (isExecutedNode) result.output.length else 0,
@@ -120,6 +135,7 @@ class RuntimeEvalStore(context: Context) {
                 nodeName = result.executedNodeName.ifBlank { "Nœud inconnu" },
                 nodeKind = nodeKindFor(result.executionLocation),
                 model = model,
+                brainProfile = brainProfile,
                 success = result.success,
                 durationMs = result.durationMs.coerceAtLeast(0L),
                 outputChars = result.output.length,
@@ -146,6 +162,7 @@ class RuntimeEvalStore(context: Context) {
             nodeName = backend.ifBlank { "Cognitive Core" },
             nodeKind = NodeKind.UNKNOWN,
             model = "",
+            brainProfile = "",
             success = event.success,
             durationMs = event.durationMs.coerceAtLeast(0L),
             outputChars = 0,
@@ -174,13 +191,15 @@ class RuntimeEvalStore(context: Context) {
     fun stats(
         nodeId: String,
         taskKind: String,
-        model: String? = null
+        model: String? = null,
+        brainProfile: String? = null
     ): RuntimeEvalStats? = synchronized(lock) {
         RuntimeEvalEngine.aggregate(
             observations = loadUnsafe().take(reportWindow()),
             nodeId = nodeId,
             taskKind = taskKind,
-            model = model
+            model = model,
+            brainProfile = brainProfile
         )
     }
 
@@ -267,6 +286,7 @@ class RuntimeEvalStore(context: Context) {
                         put("node_name", observation.nodeName)
                         put("node_kind", observation.nodeKind.name)
                         put("model", observation.model)
+                        put("brain_profile", observation.brainProfile)
                         put("success", observation.success)
                         put("duration_ms", observation.durationMs)
                         put("output_chars", observation.outputChars)
@@ -300,6 +320,9 @@ class RuntimeEvalStore(context: Context) {
                         nodeName = json.optString("node_name"),
                         nodeKind = parseNodeKind(json.optString("node_kind")),
                         model = json.optString("model"),
+                        brainProfile = json.optString("brain_profile")
+                            .trim()
+                            .lowercase(),
                         success = json.optBoolean("success", false),
                         durationMs = json.optLong("duration_ms", 0L).coerceAtLeast(0L),
                         outputChars = json.optInt("output_chars", 0).coerceAtLeast(0),
@@ -324,6 +347,7 @@ class RuntimeEvalStore(context: Context) {
         require(observation.taskKind.isNotBlank())
         require(observation.nodeId.isNotBlank())
         require(observation.nodeName.isNotBlank())
+        require(observation.brainProfile.length <= 32)
         require(observation.durationMs >= 0L)
         require(observation.outputChars >= 0)
         require(

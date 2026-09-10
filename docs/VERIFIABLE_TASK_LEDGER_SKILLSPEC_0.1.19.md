@@ -29,7 +29,7 @@ Each dataset has:
 - verifier `exact_json_v1`;
 - bounded task cases;
 - TRAIN, VALIDATION and SEALED_TEST partitions;
-- a SHA-256 commitment for the sealed partition;
+- a salted SHA-256 commitment for the sealed partition;
 - bounded evaluation attempts and verdicts.
 
 ### TRAIN and VALIDATION
@@ -46,12 +46,15 @@ from simply optimizing against the answers used to claim success.
 Before any sealed case can be evaluated:
 
 1. at least one SEALED_TEST case must exist;
-2. `seal_dataset()` canonicalizes the hidden cases;
+2. `seal_dataset()` generates a private random nonce and canonicalizes the hidden cases;
 3. SHA-256 is recorded as `sealed_set_sha256`;
 4. the whole dataset becomes immutable.
 
-The commitment covers dataset identity, task family, verifier, hidden case ids,
-inputs and expected outputs in deterministic order.
+The commitment covers the private nonce, dataset identity, task family, verifier,
+hidden case ids, inputs and expected outputs. The nonce is retained internally
+but is never returned by the learning view, manifest or evaluator. Salting makes
+the public commitment unsuitable for guessing low-entropy hidden answers by
+hashing likely candidates.
 
 After sealing, cases cannot be added or changed. A changed experiment requires a
 new dataset id/version and therefore a new commitment.
@@ -60,12 +63,16 @@ new dataset id/version and therefore a new commitment.
 
 `learning_view()` never returns SEALED_TEST cases.
 
-`sealed_manifest()` exposes only metadata such as count, verifier and SHA-256;
-it does not expose hidden inputs or answers.
+`sealed_manifest()` exposes only metadata such as count, verifier and the public
+commitment; it does not expose hidden inputs, answers or the private nonce.
+
+Adding a SEALED_TEST case also does not return input or expected-output digests.
+This avoids turning low-entropy hidden values into guessable hash oracles before
+the dataset is sealed.
 
 `evaluate_case()` compares an output with the hidden expected output internally.
 For SEALED_TEST it returns the verdict and the submitted output digest, not the
-expected value or its digest.
+expected value, expected digest or private nonce.
 
 The initial verifier is deliberately simple: canonical exact JSON equality.
 There is no LLM judge in the proof loop.
@@ -179,7 +186,7 @@ coverage, detect redundant special cases and keep acquisition provenance.
 
 The later synthesis proof should use a deterministic transformation family whose
 rule is withheld from Jade. Examples are split into TRAIN, VALIDATION and a
-SEALED_TEST set whose SHA-256 commitment is produced before synthesis.
+SEALED_TEST set whose salted SHA-256 commitment is produced before synthesis.
 
 Success must require all of the following:
 

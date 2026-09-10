@@ -17,29 +17,37 @@ Les sujets atteignent des jalons de récurrence à 3, 6, 12 puis 24 occurrences.
 
 ## Effet réel sur les réponses suivantes
 
-Au début d'un nouveau cycle cognitif, Jade réinjecte un petit nombre d'expériences locales pertinentes :
+Au début d'un nouveau cycle cognitif, Jade peut réinjecter un petit nombre d'expériences locales pertinentes :
 
 - retours utilisateur récents concernant les mêmes sujets ;
 - tours précédents liés aux mêmes sujets ;
 - résumé du caractère récurrent d'un sujet et de ses retours positifs/négatifs/corrections.
 
-Ainsi, une correction ou une solution validée peut modifier le contexte utilisé lors d'une conversation ultérieure. L'état survit au redémarrage de l'application.
+L'absence de sujet commun produit désormais zéro injection conversationnelle. Le contexte conversationnel est ajouté après la mémoire principale et ne peut plus l'évincer. Ainsi, une correction ou une solution validée peut modifier le contexte utilisé lors d'une conversation ultérieure sans remplacer les mémoires préparées par JadeCore.
 
 ## Interprétation des retours
 
-0.1.15 ne considère que des formulations suffisamment explicites. Par exemple :
+0.1.15 utilise une politique volontairement conservatrice : les marqueurs doivent être ancrés comme un retour explicite et les questions ne sont pas classées comme feedback.
 
-- « ça marche », « parfait », « c'est bon » → outcome positif ;
-- « ça marche pas », « c'est faux », « tu te trompes » → outcome négatif ;
-- « non c'est… », « en fait… », « correction : … » → correction utilisateur.
+Exemples acceptés :
 
-Un simple « ok » ou « d'accord » n'est volontairement pas traité comme une validation de qualité.
+- « ça marche », « ça marche. », « ça a marché », « c'est résolu », « parfait » → outcome positif ;
+- « ça marche pas », « c'est faux », « tu te trompes », « toujours pas » → outcome négatif ;
+- « non c'est… », « correction : … », « la bonne réponse… » → correction utilisateur.
+
+Un simple « ok », « d'accord », une question contenant « ça marche pas », ou une tournure ambiguë comme « en fait, j'ai une autre question » n'est volontairement pas traité comme une validation/correction.
+
+Quand un message est reconnu comme feedback, il s'attache au dernier tour récent compatible, ne crée pas lui-même un nouveau tour et ses mots ne sont pas comptés comme nouveaux sujets récurrents. Les répétitions identiques sur le même tour sont dédupliquées sur une petite fenêtre.
+
+## Persistance et lecture fail-closed
+
+L'état survit au redémarrage de l'application. Un état JSON corrompu est récupéré depuis la copie de secours lorsque celle-ci est lisible ; l'ancien primaire est conservé en quarantaine. Un schéma incompatible n'est jamais converti silencieusement en état vide : Conversation Learning est ignoré pour ce tour et le reste du Cognitive Core continue de fonctionner.
 
 ## Frontière de vérité
 
 Un retour utilisateur est une expérience importante mais n'est pas automatiquement une preuve externe. Une correction utilisateur n'est donc pas promue silencieusement en connaissance universellement vérifiée.
 
-0.1.15 apprend la continuité, les sujets récurrents et les outcomes explicites. Les futures étapes pourront relier ces outcomes à des évaluations indépendantes, tests vérifiables, succès réels et statistiques par modèle afin d'améliorer davantage le choix des cerveaux.
+0.1.15 apprend la continuité, les sujets récurrents et les outcomes explicites. Le lien entre ces outcomes et Runtime Eval / Night Learning / Evolution reste volontairement une étape ultérieure : tant qu'il n'existe pas, l'outcome modifie le contexte mais ne change pas encore un score mesuré de cerveau.
 
 ## Sécurité et bornes
 
@@ -50,7 +58,8 @@ Les plafonds sont compilés dans `SafetyPolicy` :
 - 80 sujets suivis maximum ;
 - 6 sujets par tour ;
 - 2 tours conversationnels réinjectés ;
-- 6 éléments de contexte conversationnel maximum ;
-- 1 000 caractères maximum par extrait.
+- 3 éléments de contexte conversationnel maximum ;
+- 1 000 caractères maximum par extrait stocké ;
+- extrait de correction réinjecté réduit à 200 caractères.
 
-Aucun téléchargement automatique de modèle, aucune mutation de poids, aucune promotion automatique d'un candidat Evolution et aucune commande shell ne sont introduits par cette version.
+La fenêtre automatique d'attribution d'un feedback au dernier tour est réduite à 30 minutes. Aucun téléchargement automatique de modèle, aucune mutation de poids, aucune promotion automatique d'un candidat Evolution et aucune commande shell ne sont introduits par cette version.

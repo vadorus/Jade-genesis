@@ -106,31 +106,15 @@ class StrategyRegistryInbox(context: Context) {
                 "Schéma Strategy Registry incompatible."
             }
 
-            // 0.1.18 accepte la persistance automatique des candidats, mais
-            // aucune promotion ni application runtime automatique. Le Pixel
-            // rejette entièrement le snapshot dès qu'un de ces garde-fous est
-            // violé au lieu d'essayer de le corriger silencieusement.
-            require(!json.optBoolean("automatic_promotion", false)) {
-                "Strategy Registry demande une promotion automatique interdite."
-            }
-            require(!json.optBoolean("automatic_runtime_application", false)) {
-                "Strategy Registry demande une application runtime automatique interdite."
-            }
-            require(!json.optBoolean("runtime_application_performed", false)) {
-                "Strategy Registry indique une application runtime interdite en 0.1.18."
-            }
-            require(!json.optBoolean("production_code_rewrite", false)) {
-                "Strategy Registry demande une réécriture de production interdite."
-            }
-            require(!json.optBoolean("shell_execution", false)) {
-                "Strategy Registry demande une commande shell interdite."
-            }
-            require(!json.optBoolean("raw_conversation_text_used", false)) {
-                "Strategy Registry utilise du texte brut de conversation."
-            }
-            require(!json.optBoolean("user_feedback_promoted_to_external_fact", false)) {
-                "Strategy Registry promeut un feedback personnel comme fait externe."
-            }
+            // Nouveau contrat 0.1.18 : les garde-fous doivent être présents et
+            // explicitement à false. Un champ manquant est rejeté fail-closed.
+            requireSafetyFalse(json, "automatic_promotion")
+            requireSafetyFalse(json, "automatic_runtime_application")
+            requireSafetyFalse(json, "runtime_application_performed")
+            requireSafetyFalse(json, "production_code_rewrite")
+            requireSafetyFalse(json, "shell_execution")
+            requireSafetyFalse(json, "raw_conversation_text_used")
+            requireSafetyFalse(json, "user_feedback_promoted_to_external_fact")
 
             val entries = parseEntries(json.optJSONArray("entries"))
             return StrategyRegistrySnapshot(
@@ -176,30 +160,14 @@ class StrategyRegistryInbox(context: Context) {
             require(status in allowedStatuses) { "Statut de stratégie non autorisé." }
             val brainProfile = required(item, "brain_profile", 100).lowercase()
 
-            require(item.optBoolean("sandbox_required", true)) {
-                "Une stratégie retire l'obligation de sandbox."
-            }
-            require(item.optBoolean("paired_scenarios_required", true)) {
-                "Une stratégie retire les scénarios appariés."
-            }
-            require(item.optBoolean("frozen_champion_required", true)) {
-                "Une stratégie retire le champion gelé."
-            }
-            require(item.optBoolean("explicit_promotion_approval_required", true)) {
-                "Une stratégie retire l'approbation explicite."
-            }
-            require(!item.optBoolean("automatic_activation", false)) {
-                "Une stratégie demande une activation automatique."
-            }
-            require(!item.optBoolean("automatic_promotion", false)) {
-                "Une stratégie demande une promotion automatique."
-            }
-            require(!item.optBoolean("production_code_change", false)) {
-                "Une stratégie demande une modification du code de production."
-            }
-            require(!item.optBoolean("runtime_application_enabled", false)) {
-                "Une stratégie demande une application runtime interdite en 0.1.18."
-            }
+            requireSafetyTrue(item, "sandbox_required")
+            requireSafetyTrue(item, "paired_scenarios_required")
+            requireSafetyTrue(item, "frozen_champion_required")
+            requireSafetyTrue(item, "explicit_promotion_approval_required")
+            requireSafetyFalse(item, "automatic_activation")
+            requireSafetyFalse(item, "automatic_promotion")
+            requireSafetyFalse(item, "production_code_change")
+            requireSafetyFalse(item, "runtime_application_enabled")
 
             val evaluationPassed = item.optBoolean("evaluation_passed", false)
             val evaluationConfidence = finiteDouble(item, "evaluation_confidence")
@@ -227,7 +195,7 @@ class StrategyRegistryInbox(context: Context) {
                 }
             }
             if (status == "ACTIVE") {
-                require(explicitApproved) {
+                require(item.has("explicit_promotion_approved") && explicitApproved) {
                     "Une stratégie ACTIVE n'a pas d'approbation explicite."
                 }
             }
@@ -282,6 +250,18 @@ class StrategyRegistryInbox(context: Context) {
                 evaluationSampleCount = evaluationSampleCount,
                 replacesStrategyId = clean(item.optString("replaces_strategy_id"), 160)
             )
+        }
+
+        private fun requireSafetyTrue(json: JSONObject, key: String) {
+            require(json.has(key) && json.optBoolean(key, false)) {
+                "Garde-fou Strategy Registry absent ou faux: $key"
+            }
+        }
+
+        private fun requireSafetyFalse(json: JSONObject, key: String) {
+            require(json.has(key) && !json.optBoolean(key, true)) {
+                "Garde-fou Strategy Registry absent ou actif: $key"
+            }
         }
 
         private fun boundedCount(json: JSONObject, key: String): Int =

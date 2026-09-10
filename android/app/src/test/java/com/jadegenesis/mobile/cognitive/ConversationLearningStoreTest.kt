@@ -3,6 +3,7 @@ package com.jadegenesis.mobile.cognitive
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,8 +38,10 @@ class ConversationLearningStoreTest {
             userInput = originalQuestion,
             answer = "Active Vulkan et vérifie la configuration du projet.",
             profile = "REASONING",
-            backendId = "pc",
-            model = "test-model"
+            backendId = "distributed-local-brain",
+            nodeId = "pc-a",
+            model = "test-model",
+            runtimeEvalObservationId = "eval-response-123"
         )
 
         var state = JSONObject(storage.getString("state_v1") ?: error("État attendu"))
@@ -49,6 +52,11 @@ class ConversationLearningStoreTest {
         val update = store.beginUserMessage("ça marche pas")
         assertTrue(update.feedbackOnly)
         assertEquals(ConversationFeedbackKind.NEGATIVE, update.feedbackKind)
+        assertTrue(update.feedbackOutcomeId.isNotBlank())
+        assertEquals("eval-response-123", update.feedbackTargetObservationId)
+        assertEquals("pc-a", update.feedbackTargetNodeId)
+        assertEquals("REASONING", update.feedbackTargetProfile)
+        assertEquals("test-model", update.feedbackTargetModel)
 
         store.completeTurn(
             userInput = "ça marche pas",
@@ -59,6 +67,9 @@ class ConversationLearningStoreTest {
         state = JSONObject(storage.getString("state_v1") ?: error("État attendu"))
         assertEquals(1, state.getJSONArray("turns").length())
         assertEquals(1, state.getJSONArray("outcomes").length())
+        val savedOutcome = state.getJSONArray("outcomes").getJSONObject(0)
+        assertEquals("eval-response-123", savedOutcome.getString("runtime_eval_observation_id"))
+        assertEquals("pc-a", savedOutcome.getString("node_id"))
 
         val topics = state.getJSONArray("topics")
         val names = buildSet {
@@ -70,6 +81,26 @@ class ConversationLearningStoreTest {
         assertFalse("faux" in names)
         assertTrue("vulkan" in names)
         assertTrue("android" in names)
+    }
+
+    @Test
+    fun explicitFeedbackWithoutRecentTurnDoesNotBecomeStandaloneExperience() {
+        val storage = FakeConversationLearningStorage()
+        val store = ConversationLearningStore(storage) { 5_000_000L }
+
+        val update = store.beginUserMessage("ça marche pas")
+        assertTrue(update.feedbackOnly)
+        assertNull(update.feedbackKind)
+
+        store.completeTurn(
+            userInput = "ça marche pas",
+            answer = "Dis-moi ce qui échoue et je vais le diagnostiquer.",
+            profile = "GENERAL",
+            nodeId = "pc-a",
+            runtimeEvalObservationId = "eval-current-feedback-answer"
+        )
+
+        assertNull(storage.getString("state_v1"))
     }
 
     @Test

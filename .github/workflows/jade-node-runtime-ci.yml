@@ -54,13 +54,17 @@ jobs:
             node-agent/vps_night_cycle.py \
             node-agent/adaptive_strategy_registry.py \
             node-agent/adaptive_vps_night_cycle.py \
+            node-agent/verifiable_task_ledger.py \
+            node-agent/skill_spec.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
             node-agent/test_adaptive_strategy_registry.py \
-            node-agent/test_adaptive_vps_night_cycle.py
+            node-agent/test_adaptive_vps_night_cycle.py \
+            node-agent/test_verifiable_task_ledger.py \
+            node-agent/test_skill_spec.py
 
-      - name: Test bounded runtime, Night Learning and brain profiles
+      - name: Test bounded runtime, learning substrate and brain profiles
         shell: bash
         run: |
           set -euo pipefail
@@ -69,7 +73,7 @@ jobs:
             -p 'test_*.py' \
             -v
 
-      - name: Validate telemetry, Cognitive Brains and Shared State without external services
+      - name: Validate telemetry, Cognitive Brains and verifiable substrate without external services
         shell: bash
         run: |
           set -euo pipefail
@@ -202,6 +206,8 @@ jobs:
           assert "vps_night_cycle_supervisor_v1" in health["capabilities"]
           assert "night_learning_lab_v1" in health["capabilities"]
           assert "adaptive_strategy_registry_v1" in health["capabilities"]
+          assert "verifiable_task_ledger_v1" in health["capabilities"]
+          assert "skill_spec_v1" in health["capabilities"]
           assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab+adaptive_strategy_registry"
           assert health["night_cycle_supervisor"]["experiment_automatic"] is False
           assert health["night_cycle_supervisor"]["promotion_automatic"] is False
@@ -215,8 +221,19 @@ jobs:
           assert health["adaptive_strategy_registry"]["production_code_rewrite"] is False
           assert health["adaptive_strategy_registry"]["model_weight_mutation"] is False
           assert health["adaptive_strategy_registry"]["shell_execution"] is False
+          assert health["verifiable_task_ledger"]["verifier_kind"] == "exact_json_v1"
+          assert health["verifiable_task_ledger"]["sealed_test_answers_exposed"] is False
+          assert health["verifiable_task_ledger"]["learned_code_execution"] is False
+          assert health["verifiable_task_ledger"]["llm_judge_used"] is False
+          assert health["skill_spec"]["body_kind"] == "JADE_PROCEDURE_DSL_V1"
+          assert health["skill_spec"]["execution_enabled"] is False
+          assert health["skill_spec"]["interpreter_present"] is False
+          assert health["skill_spec"]["network_allowed"] is False
+          assert health["skill_spec"]["filesystem_allowed"] is False
+          assert health["skill_spec"]["shell_allowed"] is False
+          assert health["skill_spec"]["generated_skill_execution"] is False
 
-          print("Node Runtime 0.1.6 + Adaptive Strategy Registry v1 validated.")
+          print("Node Runtime 0.1.6 + Verifiable Task Ledger + SkillSpec v1 validated.")
           PY
 
       - name: Prove validation did not rewrite sources

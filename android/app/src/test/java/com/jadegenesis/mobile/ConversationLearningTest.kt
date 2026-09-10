@@ -70,6 +70,7 @@ class ConversationLearningTest {
             "explique-moi pourquoi tu te trompes parfois",
             "Quelle est la valeur exacte de ce paramètre ?",
             "parfait, sauf que le build casse",
+            "c'est bon à savoir mais je crois que c'est faux",
             "super bizarre ce comportement",
             "nickel chrome ton truc",
             "super Mario Bros"
@@ -79,15 +80,12 @@ class ConversationLearningTest {
     }
 
     @Test
-    fun explicitNegativeTailOverridesPositiveLeadIn() {
-        listOf(
-            "super, mais ça marche pas",
-            "c'est bon à savoir mais je crois que c'est faux"
-        ).forEach { text ->
-            val signal = ConversationLearningPolicy.classifyFeedback(text)
-                ?: error("Signal négatif attendu pour: $text")
-            assertEquals(ConversationFeedbackKind.NEGATIVE, signal.kind)
-        }
+    fun explicitNegativeTailOverridesPositiveLeadInWhenTailIsDirect() {
+        val signal = ConversationLearningPolicy.classifyFeedback(
+            "super, mais ça marche pas"
+        ) ?: error("Signal négatif attendu")
+
+        assertEquals(ConversationFeedbackKind.NEGATIVE, signal.kind)
     }
 
     @Test

@@ -7,3 +7,10 @@ android/local.properties
 # Python generated files
 __pycache__/
 *.pyc
+
+# Repository hygiene
+# Build/release archives belong in GitHub Actions artifacts or GitHub Releases,
+# not beside the canonical source tree.
+/Jade-genesis-main.zip
+/jade-genesis-android-*.zip
+/ci-logs/

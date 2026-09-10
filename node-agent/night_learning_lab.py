@@ -1,9 +1,11 @@
-"""Bounded research, hypothesis and experiment planning for the VPS Night Cycle.
+"""Bounded research, outcome consolidation, hypothesis and experiment planning.
 
-This module only produces review artifacts. It never edits JadeConfig, promotes an
-Evolution candidate, rewrites code, executes shell commands or mutates Pixel
-memory. Public research is optional, dependency-free and restricted to a single
-hard-coded HTTPS provider with strict size/time bounds.
+The VPS Night Cycle consumes only synchronized aggregate state. This module never
+copies raw conversation text, edits JadeConfig, promotes an Evolution candidate,
+rewrites production code, executes shell commands or mutates Pixel memory.
+Public research is optional, dependency-free and restricted to one hard-coded
+HTTPS provider with strict size/time bounds. Explicit user outcomes are treated
+as personal operational evidence, not as externally verified universal facts.
 """
 
 from __future__ import annotations
@@ -33,6 +35,16 @@ LOW_SUCCESS_RATE = 0.90
 HIGH_FALLBACK_RATE = 0.15
 LATENCY_OUTLIER_RATIO = 1.50
 THROUGHPUT_OUTLIER_RATIO = 0.65
+
+# Outcome Quality mirrors the immutable Android safety thresholds. Night learning
+# may interpret these aggregate values, but it cannot lower the minimum evidence
+# required by Runtime Eval or activate a routing change by itself.
+MIN_OUTCOME_SAMPLES = 3
+STRONG_OUTCOME_SAMPLES = 8
+MIN_OUTCOME_COMPARISON_SAMPLES = 5
+LOW_OUTCOME_QUALITY = -0.25
+MIN_OUTCOME_QUALITY_GAP = 0.35
+CORRECTION_PRESSURE_RATE = 0.34
 
 
 def _now_ms() -> int:
@@ -118,7 +130,7 @@ class DuckDuckGoResearchProvider:
         request = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "JadeGenesis/0.1.11-night-learning-lab",
+                "User-Agent": "JadeGenesis/0.1.17-night-learning-lab",
                 "Accept": "application/json",
             },
             method="GET",
@@ -151,9 +163,7 @@ class DuckDuckGoResearchProvider:
             })
 
         def visit(items: Any) -> None:
-            if len(output) >= MAX_RESEARCH_EVIDENCE:
-                return
-            if not isinstance(items, list):
+            if len(output) >= MAX_RESEARCH_EVIDENCE or not isinstance(items, list):
                 return
             for item in items:
                 if len(output) >= MAX_RESEARCH_EVIDENCE:
@@ -207,9 +217,14 @@ class NightLearningLab:
 
         signals = self._signals(runtime, groups)
         questions = self._research_questions(signals, source_revision)
+        researchable_questions = [
+            item
+            for item in questions
+            if item.get("external_research_allowed", True) and item.get("query")
+        ]
         evidence: list[dict[str, Any]] = []
         research_errors: list[str] = []
-        for question in questions[:2]:
+        for question in researchable_questions[:2]:
             try:
                 found = self.research_provider.search(question["query"])
                 for item in found:
@@ -238,6 +253,18 @@ class NightLearningLab:
             for item in evolution_candidates
             if isinstance(item, dict) and item.get("status") == "VALIDATED"
         )
+        outcome_feedback_count = max(
+            0,
+            _safe_int(runtime.get("outcome_feedback_count"), 0),
+        )
+        overall_outcome_quality = min(
+            1.0,
+            max(-1.0, _safe_float(runtime.get("overall_outcome_quality"), 0.0)),
+        )
+        outcome_groups = sum(
+            1 for group in groups
+            if group["outcome_samples"] >= MIN_OUTCOME_SAMPLES
+        )
 
         return {
             "schema_version": SCHEMA_VERSION,
@@ -254,6 +281,12 @@ class NightLearningLab:
                 1.0,
                 max(0.0, _safe_float(runtime.get("confidence"), 0.0)),
             ),
+            "outcome_feedback_count": outcome_feedback_count,
+            "overall_outcome_quality": overall_outcome_quality,
+            "outcome_groups_with_minimum_evidence": outcome_groups,
+            "outcome_consolidation_used": outcome_feedback_count > 0 or outcome_groups > 0,
+            "raw_conversation_text_used": False,
+            "user_feedback_promoted_to_external_fact": False,
             "existing_validated_evolution_candidates": validated_existing,
             "signals": signals[:MAX_HYPOTHESES],
             "research_questions": questions[:MAX_RESEARCH_QUESTIONS],
@@ -262,7 +295,7 @@ class NightLearningLab:
             "hypotheses": hypotheses[:MAX_HYPOTHESES],
             "experiments": experiments[:MAX_EXPERIMENTS],
             "improvement_candidates": candidates[:MAX_IMPROVEMENT_CANDIDATES],
-            "external_research_attempted": bool(questions[:2]),
+            "external_research_attempted": bool(researchable_questions[:2]),
             "external_research_evidence_count": len(evidence),
             "automatic_experiment_execution": False,
             "automatic_promotion": False,
@@ -271,11 +304,13 @@ class NightLearningLab:
         }
 
     def _clean_group(self, group: dict[str, Any]) -> dict[str, Any]:
+        outcome_samples = max(0, _safe_int(group.get("outcome_samples"), 0))
         return {
             "node_id": _clean(group.get("node_id"), 120),
             "node_name": _clean(group.get("node_name"), 160),
             "task_kind": _clean(group.get("task_kind"), 100),
             "model": _clean(group.get("model"), 160),
+            "brain_profile": _clean(group.get("brain_profile"), 100).lower(),
             "samples": max(0, _safe_int(group.get("samples"), 0)),
             "success_rate": min(
                 1.0,
@@ -293,6 +328,27 @@ class NightLearningLab:
                 0.0,
                 _safe_float(group.get("average_tokens_per_second"), 0.0),
             ),
+            "outcome_samples": outcome_samples,
+            "positive_outcomes": min(
+                outcome_samples,
+                max(0, _safe_int(group.get("positive_outcomes"), 0)),
+            ),
+            "negative_outcomes": min(
+                outcome_samples,
+                max(0, _safe_int(group.get("negative_outcomes"), 0)),
+            ),
+            "corrections": min(
+                outcome_samples,
+                max(0, _safe_int(group.get("corrections"), 0)),
+            ),
+            "outcome_quality_score": min(
+                1.0,
+                max(-1.0, _safe_float(group.get("outcome_quality_score"), 0.0)),
+            ),
+            "outcome_confidence": min(
+                1.0,
+                max(0.0, _safe_float(group.get("outcome_confidence"), 0.0)),
+            ),
         }
 
     def _signals(
@@ -303,12 +359,93 @@ class NightLearningLab:
         output: list[dict[str, Any]] = []
         observation_count = max(0, _safe_int(runtime.get("observation_count"), 0))
         confidence = min(1.0, max(0.0, _safe_float(runtime.get("confidence"), 0.0)))
+        outcome_feedback_count = max(
+            0,
+            _safe_int(runtime.get("outcome_feedback_count"), 0),
+        )
+        overall_outcome_quality = min(
+            1.0,
+            max(-1.0, _safe_float(runtime.get("overall_outcome_quality"), 0.0)),
+        )
+
+        # Outcomes are personal operational evidence. They are prioritized when
+        # sufficiently measured, but never treated as external factual truth.
+        if 0 < outcome_feedback_count < MIN_OUTCOME_SAMPLES:
+            output.append({
+                "kind": "outcome_evidence_low",
+                "task_kind": "brain_chat",
+                "node_id": "",
+                "model": "",
+                "brain_profile": "",
+                "samples": outcome_feedback_count,
+                "metric": overall_outcome_quality,
+                "outcome_confidence": 0.0,
+            })
+
+        outcome_groups = [
+            group
+            for group in groups
+            if group["task_kind"] == "brain_chat"
+            and group["outcome_samples"] >= MIN_OUTCOME_SAMPLES
+            and group["outcome_confidence"] > 0.0
+        ]
+        poor_outcome = sorted(
+            [
+                group for group in outcome_groups
+                if group["outcome_quality_score"] <= LOW_OUTCOME_QUALITY
+            ],
+            key=lambda item: (
+                item["outcome_quality_score"],
+                -item["outcome_confidence"],
+                -item["outcome_samples"],
+            ),
+        )
+        if poor_outcome:
+            group = poor_outcome[0]
+            output.append(self._outcome_signal("outcome_quality_risk", group))
+
+        correction_pressure = sorted(
+            [
+                group for group in outcome_groups
+                if group["corrections"] >= 2
+                and group["corrections"] / max(1, group["outcome_samples"])
+                >= CORRECTION_PRESSURE_RATE
+            ],
+            key=lambda item: (
+                -(item["corrections"] / max(1, item["outcome_samples"])),
+                -item["outcome_confidence"],
+                -item["outcome_samples"],
+            ),
+        )
+        if correction_pressure:
+            group = correction_pressure[0]
+            signal = self._outcome_signal("outcome_correction_pressure", group)
+            signal["metric"] = group["corrections"] / max(1, group["outcome_samples"])
+            output.append(signal)
+
+        comparison = self._best_outcome_comparison(outcome_groups)
+        if comparison is not None:
+            best, worst, gap = comparison
+            signal = self._outcome_signal("outcome_quality_advantage", best)
+            signal.update({
+                "metric": gap,
+                "preferred_node_id": best["node_id"],
+                "preferred_model": best["model"],
+                "comparison_node_id": worst["node_id"],
+                "comparison_model": worst["model"],
+                "comparison_quality": worst["outcome_quality_score"],
+                "comparison_samples": worst["outcome_samples"],
+                "comparison_confidence": worst["outcome_confidence"],
+            })
+            output.append(signal)
+
         if observation_count < MIN_RUNTIME_SAMPLES or confidence < MIN_RESEARCH_CONFIDENCE:
             output.append({
                 "kind": "runtime_evidence_low",
                 "task_kind": "",
                 "node_id": "",
                 "model": "",
+                "brain_profile": "",
                 "samples": observation_count,
                 "metric": confidence,
             })
@@ -325,6 +462,7 @@ class NightLearningLab:
                 "task_kind": group["task_kind"],
                 "node_id": group["node_id"],
                 "model": group["model"],
+                "brain_profile": group["brain_profile"],
                 "samples": group["samples"],
                 "metric": group["success_rate"],
             })
@@ -340,6 +478,7 @@ class NightLearningLab:
                 "task_kind": group["task_kind"],
                 "node_id": group["node_id"],
                 "model": group["model"],
+                "brain_profile": group["brain_profile"],
                 "samples": group["samples"],
                 "metric": group["fallback_rate"],
             })
@@ -366,6 +505,7 @@ class NightLearningLab:
                 "task_kind": group["task_kind"],
                 "node_id": group["node_id"],
                 "model": group["model"],
+                "brain_profile": group["brain_profile"],
                 "samples": group["samples"],
                 "metric": ratio,
             })
@@ -384,6 +524,7 @@ class NightLearningLab:
                     "task_kind": slow["task_kind"],
                     "node_id": slow["node_id"],
                     "model": slow["model"],
+                    "brain_profile": slow["brain_profile"],
                     "samples": slow["samples"],
                     "metric": slow["average_tokens_per_second"] / best_tps,
                 })
@@ -394,10 +535,71 @@ class NightLearningLab:
                 "task_kind": "",
                 "node_id": "",
                 "model": "",
+                "brain_profile": "",
                 "samples": observation_count,
                 "metric": confidence,
             })
         return output[:MAX_HYPOTHESES]
+
+    def _outcome_signal(
+        self,
+        kind: str,
+        group: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "kind": kind,
+            "task_kind": group["task_kind"],
+            "node_id": group["node_id"],
+            "model": group["model"],
+            "brain_profile": group["brain_profile"],
+            "samples": group["outcome_samples"],
+            "metric": group["outcome_quality_score"],
+            "outcome_confidence": group["outcome_confidence"],
+            "positive_outcomes": group["positive_outcomes"],
+            "negative_outcomes": group["negative_outcomes"],
+            "corrections": group["corrections"],
+        }
+
+    def _best_outcome_comparison(
+        self,
+        outcome_groups: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, Any], float] | None:
+        by_profile: dict[str, list[dict[str, Any]]] = {}
+        for group in outcome_groups:
+            profile = group["brain_profile"]
+            if not profile or group["outcome_samples"] < MIN_OUTCOME_COMPARISON_SAMPLES:
+                continue
+            by_profile.setdefault(profile, []).append(group)
+
+        candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
+        for items in by_profile.values():
+            if len(items) < 2:
+                continue
+            ordered = sorted(
+                items,
+                key=lambda item: (
+                    item["outcome_quality_score"],
+                    item["outcome_confidence"],
+                    item["outcome_samples"],
+                ),
+                reverse=True,
+            )
+            best = ordered[0]
+            worst = ordered[-1]
+            gap = best["outcome_quality_score"] - worst["outcome_quality_score"]
+            if gap >= MIN_OUTCOME_QUALITY_GAP:
+                candidates.append((gap, best, worst))
+        if not candidates:
+            return None
+        gap, best, worst = max(
+            candidates,
+            key=lambda item: (
+                item[0],
+                item[1]["outcome_confidence"],
+                item[2]["outcome_confidence"],
+            ),
+        )
+        return best, worst, gap
 
     def _research_questions(
         self,
@@ -410,7 +612,25 @@ class NightLearningLab:
             task = signal.get("task_kind", "")
             model = signal.get("model", "")
             node = signal.get("node_id", "")
-            if kind == "runtime_evidence_low":
+            profile = signal.get("brain_profile", "")
+            external_allowed = True
+            if kind == "outcome_evidence_low":
+                query = "Collecter davantage de retours utilisateur sur des réponses comparables"
+                reason = "Les outcomes explicites sont encore trop rares pour consolider une préférence nocturne."
+                external_allowed = False
+            elif kind == "outcome_quality_risk":
+                query = f"Comparer en interne les outcomes du profil {profile or 'inconnu'} pour {model or node or 'ce groupe'}"
+                reason = "Les retours utilisateur agrégés indiquent une qualité négative mesurée; ce signal reste personnel et non universel."
+                external_allowed = False
+            elif kind == "outcome_correction_pressure":
+                query = f"Comparer en interne le taux de corrections du profil {profile or 'inconnu'} pour {model or node or 'ce groupe'}"
+                reason = "Une part importante des réponses mesurées a dû être corrigée par l'utilisateur."
+                external_allowed = False
+            elif kind == "outcome_quality_advantage":
+                query = f"Valider en interne l'avantage outcome du profil {profile or 'inconnu'} sur scénarios appariés"
+                reason = "Deux backends comparables montrent un écart d'Outcome Quality assez grand pour justifier un challenger borné."
+                external_allowed = False
+            elif kind == "runtime_evidence_low":
                 query = (
                     "runtime evaluation sample size confidence adaptive routing "
                     "distributed inference benchmark"
@@ -438,6 +658,7 @@ class NightLearningLab:
                 "query": query,
                 "reason": _clean(reason),
                 "signal_kind": kind,
+                "external_research_allowed": external_allowed,
             })
         return output[:MAX_RESEARCH_QUESTIONS]
 
@@ -487,11 +708,39 @@ class NightLearningLab:
             item["question_id"]: item["evidence_id"] for item in evidence
         }
         output: list[dict[str, Any]] = []
-        for index, signal in enumerate(signals[:MAX_HYPOTHESES]):
+        for signal in signals[:MAX_HYPOTHESES]:
             kind = signal["kind"]
             node = signal.get("node_id", "")
             task = signal.get("task_kind", "")
-            if kind == "runtime_evidence_low":
+            model = signal.get("model", "")
+            profile = signal.get("brain_profile", "")
+            outcome_confidence = min(
+                1.0,
+                max(0.0, _safe_float(signal.get("outcome_confidence"), 0.0)),
+            )
+            if kind == "outcome_evidence_low":
+                statement = "Les retours utilisateur explicites sont encore insuffisants pour apprendre une préférence de stratégie nocturne fiable."
+                metric = "outcome_feedback_count"
+                expected = f">= {MIN_OUTCOME_SAMPLES} outcomes actifs avant toute influence nocturne"
+                confidence = 0.65
+            elif kind == "outcome_quality_risk":
+                statement = f"Pour le profil {profile or 'mesuré'}, {model or node or 'ce backend'} produit probablement moins souvent le résultat attendu par l'utilisateur que les alternatives comparables."
+                metric = "outcome_quality_score"
+                expected = "challenger >= champion + 0.25 en Outcome Quality, fiabilité protégée"
+                confidence = min(0.90, 0.55 + 0.35 * outcome_confidence)
+            elif kind == "outcome_correction_pressure":
+                statement = f"Pour le profil {profile or 'mesuré'}, {model or node or 'ce backend'} provoque probablement trop de corrections utilisateur sur des tâches comparables."
+                metric = "correction_rate"
+                expected = "taux de corrections challenger inférieur d'au moins 0.15, fiabilité protégée"
+                confidence = min(0.90, 0.55 + 0.35 * outcome_confidence)
+            elif kind == "outcome_quality_advantage":
+                preferred = signal.get("preferred_model") or signal.get("preferred_node_id") or "le backend mesuré"
+                comparison = signal.get("comparison_model") or signal.get("comparison_node_id") or "son pair"
+                statement = f"Pour le profil {profile or 'mesuré'}, {preferred} semble mieux satisfaire l'utilisateur que {comparison}, mais l'écart doit être reproduit avant promotion."
+                metric = "outcome_quality_score_delta"
+                expected = f"écart >= 0.25 avec >= {STRONG_OUTCOME_SAMPLES} outcomes par côté et fiabilité protégée"
+                confidence = min(0.92, 0.60 + 0.30 * outcome_confidence)
+            elif kind == "runtime_evidence_low":
                 statement = "L'incertitude actuelle vient principalement d'un échantillon Runtime Eval encore insuffisant."
                 metric = "runtime_eval.confidence"
                 expected = ">= 0.75 avec au moins 12 observations"
@@ -537,6 +786,8 @@ class NightLearningLab:
                 "falsifiable_metric": metric,
                 "success_criterion": _clean(expected),
                 "evidence_ids": evidence_ids,
+                "personal_outcome_evidence": kind.startswith("outcome_"),
+                "promoted_as_external_fact": False,
             })
         return output
 
@@ -548,7 +799,33 @@ class NightLearningLab:
         output: list[dict[str, Any]] = []
         for hypothesis in hypotheses[:MAX_EXPERIMENTS]:
             kind = hypothesis["signal_kind"]
-            if kind == "runtime_evidence_low":
+            minimum_samples = MIN_RUNTIME_SAMPLES
+            maximum_samples = MIN_RUNTIME_SAMPLES * 2
+            if kind == "outcome_evidence_low":
+                target = "outcome_eval"
+                change_hint = "Collecter de nouveaux outcomes explicites sur des réponses comparables sans modifier le champion."
+                metric = "outcome_feedback_count"
+                minimum_samples = MIN_OUTCOME_SAMPLES
+                maximum_samples = STRONG_OUTCOME_SAMPLES
+            elif kind == "outcome_quality_risk":
+                target = "routing.profile_model_preference"
+                change_hint = "Tester en sandbox une préférence moindre pour le groupe à Outcome Quality négative, uniquement sur le même profil et des scénarios appariés."
+                metric = "outcome_quality_score"
+                minimum_samples = MIN_OUTCOME_COMPARISON_SAMPLES
+                maximum_samples = STRONG_OUTCOME_SAMPLES * 2
+            elif kind == "outcome_correction_pressure":
+                target = "routing.profile_model_preference"
+                change_hint = "Tester en sandbox un challenger qui réduit la préférence du groupe souvent corrigé, sans dégrader succès, latence ou fallback."
+                metric = "correction_rate"
+                minimum_samples = MIN_OUTCOME_COMPARISON_SAMPLES
+                maximum_samples = STRONG_OUTCOME_SAMPLES * 2
+            elif kind == "outcome_quality_advantage":
+                target = "routing.profile_model_preference"
+                change_hint = "Rejouer un champion/challenger apparié entre les deux backends du même profil pour confirmer l'avantage Outcome Quality avant toute préférence durable."
+                metric = "outcome_quality_score_delta"
+                minimum_samples = MIN_OUTCOME_COMPARISON_SAMPLES
+                maximum_samples = STRONG_OUTCOME_SAMPLES * 2
+            elif kind == "runtime_evidence_low":
                 target = "runtime_eval"
                 change_hint = "Collecter un nouveau lot apparié sans modifier le champion."
                 metric = "confidence"
@@ -584,11 +861,11 @@ class NightLearningLab:
                 "target": target,
                 "change_hint": _clean(change_hint),
                 "primary_metric": metric,
-                "minimum_samples_per_side": MIN_RUNTIME_SAMPLES,
-                "maximum_samples_per_side": MIN_RUNTIME_SAMPLES * 2,
+                "minimum_samples_per_side": minimum_samples,
+                "maximum_samples_per_side": maximum_samples,
                 "paired_scenarios_required": True,
                 "frozen_champion_required": True,
-                "sandbox_required": target != "observation_only",
+                "sandbox_required": target not in {"observation_only", "outcome_eval"},
                 "automatic_execution": False,
                 "requires_explicit_promotion_approval": True,
             })
@@ -601,13 +878,21 @@ class NightLearningLab:
     ) -> list[dict[str, Any]]:
         output: list[dict[str, Any]] = []
         for experiment in experiments[:MAX_IMPROVEMENT_CANDIDATES]:
-            observation_only = experiment["target"] in {"runtime_eval", "observation_only"}
-            kind = "EVIDENCE_COLLECTION" if observation_only else "CONFIG_HINT"
-            title = (
-                "Renforcer les preuves avant évolution"
-                if observation_only else
-                f"Challenger borné pour {experiment['target']}"
-            )
+            observation_only = experiment["target"] in {
+                "runtime_eval",
+                "outcome_eval",
+                "observation_only",
+            }
+            strategy = experiment["target"] == "routing.profile_model_preference"
+            if observation_only:
+                kind = "EVIDENCE_COLLECTION"
+                title = "Renforcer les preuves avant évolution"
+            elif strategy:
+                kind = "STRATEGY_HINT"
+                title = "Challenger de stratégie fondé sur les outcomes"
+            else:
+                kind = "CONFIG_HINT"
+                title = f"Challenger borné pour {experiment['target']}"
             candidate_id = _stable_id(
                 "nlc",
                 source_revision,

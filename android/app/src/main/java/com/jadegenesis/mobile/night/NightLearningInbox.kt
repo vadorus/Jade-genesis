@@ -64,6 +64,10 @@ data class NightLearningSnapshot(
     val reviewedAt: Long,
     val runtimeObservationCount: Int,
     val runtimeConfidence: Double,
+    val outcomeFeedbackCount: Int,
+    val overallOutcomeQuality: Double,
+    val outcomeGroupsWithMinimumEvidence: Int,
+    val outcomeConsolidationUsed: Boolean,
     val researchQuestions: List<NightResearchQuestion>,
     val researchEvidence: List<NightResearchEvidence>,
     val hypotheses: List<NightHypothesis>,
@@ -109,8 +113,9 @@ class NightLearningInbox(context: Context) {
             }
 
             // Fail closed: a learning snapshot is review-only. Any request to
-            // execute, promote, rewrite production code or run shell commands
-            // makes the whole snapshot untrusted and therefore ignored.
+            // execute, promote, rewrite production code, run shell commands,
+            // use raw conversation text for outcome consolidation or promote a
+            // personal user outcome as an external fact makes it untrusted.
             require(!json.optBoolean("automatic_experiment_execution", false)) {
                 "Night Learning demande une exécution automatique interdite."
             }
@@ -122,6 +127,12 @@ class NightLearningInbox(context: Context) {
             }
             require(!json.optBoolean("shell_execution", false)) {
                 "Night Learning demande une commande shell interdite."
+            }
+            require(!json.optBoolean("raw_conversation_text_used", false)) {
+                "Night Learning utilise du texte brut de conversation pour les outcomes."
+            }
+            require(!json.optBoolean("user_feedback_promoted_to_external_fact", false)) {
+                "Night Learning promeut un feedback personnel comme fait externe."
             }
 
             val questions = parseQuestions(json.optJSONArray("research_questions"))
@@ -139,6 +150,18 @@ class NightLearningInbox(context: Context) {
                     .coerceAtLeast(0),
                 runtimeConfidence = finiteDouble(json, "runtime_confidence")
                     .coerceIn(0.0, 1.0),
+                outcomeFeedbackCount = json.optInt("outcome_feedback_count", 0)
+                    .coerceIn(0, SafetyPolicy.MAX_RUNTIME_EVAL_OUTCOME_FEEDBACK),
+                overallOutcomeQuality = finiteDouble(json, "overall_outcome_quality")
+                    .coerceIn(-1.0, 1.0),
+                outcomeGroupsWithMinimumEvidence = json.optInt(
+                    "outcome_groups_with_minimum_evidence",
+                    0
+                ).coerceIn(0, SafetyPolicy.MAX_SHARED_STATE_RUNTIME_GROUPS),
+                outcomeConsolidationUsed = json.optBoolean(
+                    "outcome_consolidation_used",
+                    false
+                ),
                 researchQuestions = questions,
                 researchEvidence = evidence,
                 hypotheses = hypotheses,

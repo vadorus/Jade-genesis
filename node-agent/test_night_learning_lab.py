@@ -24,6 +24,15 @@ class FakeResearchProvider:
         }]
 
 
+class CountingResearchProvider(FakeResearchProvider):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def search(self, query: str) -> list[dict]:
+        self.calls.append(query)
+        return super().search(query)
+
+
 class FailingResearchProvider:
     def search(self, query: str) -> list[dict]:
         raise TimeoutError("offline")
@@ -165,6 +174,169 @@ class NightLearningLabTest(unittest.TestCase):
             len(result["improvement_candidates"]),
             MAX_IMPROVEMENT_CANDIDATES,
         )
+
+    def test_sparse_outcomes_collect_evidence_without_public_research(self) -> None:
+        provider = CountingResearchProvider()
+        result = NightLearningLab(provider).review(self.view({
+            "observation_count": 20,
+            "confidence": 1.0,
+            "score": 85.0,
+            "outcome_feedback_count": 2,
+            "overall_outcome_quality": -0.5,
+            "groups": [],
+        }), now_ms=2000)
+
+        self.assertEqual("outcome_evidence_low", result["signals"][0]["kind"])
+        self.assertEqual("EVIDENCE_COLLECTION", result["improvement_candidates"][0]["kind"])
+        self.assertFalse(result["external_research_attempted"])
+        self.assertEqual([], provider.calls)
+        self.assertTrue(result["outcome_consolidation_used"])
+        self.assertFalse(result["raw_conversation_text_used"])
+        self.assertFalse(result["user_feedback_promoted_to_external_fact"])
+
+    def test_negative_outcomes_prepare_strategy_hint_only(self) -> None:
+        provider = CountingResearchProvider()
+        result = NightLearningLab(provider).review(self.view({
+            "observation_count": 30,
+            "confidence": 1.0,
+            "score": 80.0,
+            "outcome_feedback_count": 5,
+            "overall_outcome_quality": -0.6,
+            "groups": [{
+                "node_id": "pc-a",
+                "node_name": "PC A",
+                "task_kind": "brain_chat",
+                "model": "model-a",
+                "brain_profile": "code",
+                "samples": 20,
+                "success_rate": 1.0,
+                "average_duration_ms": 1000.0,
+                "fallback_rate": 0.0,
+                "average_tokens_per_second": 80.0,
+                "outcome_samples": 5,
+                "positive_outcomes": 1,
+                "negative_outcomes": 2,
+                "corrections": 2,
+                "outcome_quality_score": -0.6,
+                "outcome_confidence": 0.5,
+            }],
+        }), now_ms=2000)
+
+        kinds = {item["kind"] for item in result["signals"]}
+        self.assertIn("outcome_quality_risk", kinds)
+        self.assertIn("outcome_correction_pressure", kinds)
+        strategy = [
+            item for item in result["improvement_candidates"]
+            if item["kind"] == "STRATEGY_HINT"
+        ]
+        self.assertGreaterEqual(len(strategy), 1)
+        self.assertTrue(all(item["status"] == "CANDIDATE" for item in strategy))
+        self.assertTrue(all(item["sandbox_required"] for item in strategy))
+        self.assertTrue(all(not item["automatic_activation"] for item in strategy))
+        self.assertTrue(all(not item["automatic_promotion"] for item in strategy))
+        self.assertEqual([], provider.calls)
+
+    def test_outcome_advantage_requires_same_profile_and_enough_evidence(self) -> None:
+        provider = CountingResearchProvider()
+        result = NightLearningLab(provider).review(self.view({
+            "observation_count": 40,
+            "confidence": 1.0,
+            "score": 90.0,
+            "outcome_feedback_count": 10,
+            "overall_outcome_quality": 0.5,
+            "groups": [{
+                "node_id": "pc-a",
+                "node_name": "PC A",
+                "task_kind": "brain_chat",
+                "model": "model-good",
+                "brain_profile": "code",
+                "samples": 20,
+                "success_rate": 1.0,
+                "average_duration_ms": 1000.0,
+                "fallback_rate": 0.0,
+                "average_tokens_per_second": 80.0,
+                "outcome_samples": 5,
+                "positive_outcomes": 5,
+                "negative_outcomes": 0,
+                "corrections": 0,
+                "outcome_quality_score": 0.8,
+                "outcome_confidence": 0.5,
+            }, {
+                "node_id": "pc-b",
+                "node_name": "PC B",
+                "task_kind": "brain_chat",
+                "model": "model-weak",
+                "brain_profile": "code",
+                "samples": 20,
+                "success_rate": 1.0,
+                "average_duration_ms": 1000.0,
+                "fallback_rate": 0.0,
+                "average_tokens_per_second": 80.0,
+                "outcome_samples": 5,
+                "positive_outcomes": 3,
+                "negative_outcomes": 2,
+                "corrections": 0,
+                "outcome_quality_score": 0.2,
+                "outcome_confidence": 0.5,
+            }],
+        }), now_ms=2000)
+
+        advantage = [
+            item for item in result["signals"]
+            if item["kind"] == "outcome_quality_advantage"
+        ]
+        self.assertEqual(1, len(advantage))
+        self.assertEqual("model-good", advantage[0]["preferred_model"])
+        self.assertEqual("model-weak", advantage[0]["comparison_model"])
+        self.assertGreaterEqual(advantage[0]["metric"], 0.35)
+        strategy = [
+            item for item in result["improvement_candidates"]
+            if item["kind"] == "STRATEGY_HINT"
+        ]
+        self.assertGreaterEqual(len(strategy), 1)
+        self.assertEqual([], provider.calls)
+
+    def test_outcome_advantage_is_not_created_across_different_profiles(self) -> None:
+        result = NightLearningLab(FakeResearchProvider()).review(self.view({
+            "observation_count": 40,
+            "confidence": 1.0,
+            "score": 90.0,
+            "outcome_feedback_count": 10,
+            "overall_outcome_quality": 0.5,
+            "groups": [{
+                "node_id": "pc-a",
+                "task_kind": "brain_chat",
+                "model": "model-good",
+                "brain_profile": "code",
+                "samples": 20,
+                "success_rate": 1.0,
+                "average_duration_ms": 1000.0,
+                "fallback_rate": 0.0,
+                "average_tokens_per_second": 80.0,
+                "outcome_samples": 5,
+                "positive_outcomes": 5,
+                "outcome_quality_score": 0.8,
+                "outcome_confidence": 0.5,
+            }, {
+                "node_id": "pc-b",
+                "task_kind": "brain_chat",
+                "model": "model-weak",
+                "brain_profile": "general",
+                "samples": 20,
+                "success_rate": 1.0,
+                "average_duration_ms": 1000.0,
+                "fallback_rate": 0.0,
+                "average_tokens_per_second": 80.0,
+                "outcome_samples": 5,
+                "positive_outcomes": 3,
+                "negative_outcomes": 2,
+                "outcome_quality_score": 0.2,
+                "outcome_confidence": 0.5,
+            }],
+        }), now_ms=2000)
+
+        kinds = {item["kind"] for item in result["signals"]}
+        self.assertNotIn("outcome_quality_advantage", kinds)
 
 
 if __name__ == "__main__":

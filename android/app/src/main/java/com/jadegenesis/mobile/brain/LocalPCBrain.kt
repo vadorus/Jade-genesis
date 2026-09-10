@@ -35,7 +35,7 @@ class LocalPCBrain(
     }
 
     override val info = BrainInfo(
-        id = "distributed-local-brain-0.1.14",
+        id = "distributed-local-brain-0.1.16",
         displayName = "Adaptive Distributed Cognitive Brain",
         backendType = BrainBackendType.LOCAL_NODE,
         location = "compute-mesh",
@@ -46,8 +46,8 @@ class LocalPCBrain(
         priority = 110,
         details =
             "Backend génératif distribué avec profils FAST/GENERAL/REASONING/CODE/CRITIC. " +
-                "Le prior matériel est maintenant corrigé par l'expérience Runtime Eval du profil " +
-                "sur chaque nœud, avec influence bornée et minimum de preuves."
+                "Le prior matériel est corrigé par Runtime Eval et, après assez de preuves, " +
+                "par les outcomes explicites réellement rattachés aux réponses précédentes."
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
@@ -155,6 +155,12 @@ class LocalPCBrain(
                     put("observed_tokens_per_second", selectedCandidate.evidence.averageTokensPerSecond)
                     put("observed_fallback_rate", selectedCandidate.evidence.fallbackRate)
                     put("last_observed_model", selectedCandidate.evidence.lastModel)
+                    put("outcome_samples", selectedCandidate.evidence.outcomeSamples)
+                    put("outcome_confidence", selectedCandidate.evidence.outcomeConfidence)
+                    put("outcome_quality_score", selectedCandidate.evidence.outcomeQualityScore)
+                    put("positive_outcomes", selectedCandidate.evidence.positiveOutcomes)
+                    put("negative_outcomes", selectedCandidate.evidence.negativeOutcomes)
+                    put("corrections", selectedCandidate.evidence.corrections)
                     put("active", selectedCandidate.evidence.active)
                 }
             )
@@ -279,7 +285,7 @@ class LocalPCBrain(
             admissionController.release(lease)
         }
 
-        evalStore?.recordExecution(
+        val evalObservation = evalStore?.recordExecution(
             request = admissionProbe,
             node = node,
             success = true,
@@ -294,12 +300,17 @@ class LocalPCBrain(
         if (text.isBlank()) {
             error("Le backend génératif a renvoyé une réponse vide.")
         }
+        val actualModel = json.optString("model").trim()
+            .ifBlank { evalObservation?.model.orEmpty() }
 
         return BrainResult(
             text = text,
             backendId = info.id,
             backendDisplayName = info.displayName,
-            model = json.optString("model")
+            model = actualModel,
+            nodeId = node.nodeId,
+            brainProfile = brainPlan.profile.name.lowercase(),
+            runtimeEvalObservationId = evalObservation?.observationId.orEmpty()
         )
     }
 

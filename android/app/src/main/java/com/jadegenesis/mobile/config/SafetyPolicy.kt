@@ -76,8 +76,9 @@ object SafetyPolicy {
     const val MAX_CONVERSATION_LEARNING_TEXT_CHARS = 1_000
 
     // Memory Health : l'historique sert uniquement à mesurer la croissance du
-    // stockage. Il ne déclenche jamais de purge automatique.
-    const val MAX_MEMORY_HEALTH_SAMPLES = 45
+    // stockage. Il ne déclenche jamais de purge automatique. 75 échantillons à
+    // 12 h couvrent plus de 30 jours de tendance.
+    const val MAX_MEMORY_HEALTH_SAMPLES = 75
     const val MIN_MEMORY_HEALTH_SAMPLE_INTERVAL_HOURS = 12
 
     // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.

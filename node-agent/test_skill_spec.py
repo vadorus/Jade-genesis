@@ -20,8 +20,8 @@ class SkillSpecTest(unittest.TestCase):
                 "required_fields": ["first", "last"],
             },
             "output_contract": {
-                "type": "object",
-                "required_fields": ["value"],
+                "type": "string",
+                "required_fields": [],
             },
             "body_kind": BODY_KIND,
             "body": {
@@ -73,6 +73,15 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "skill_body_op_not_allowed"):
             normalize_skill_spec(spec)
 
+    def test_pipeline_is_not_part_of_0_1_20_semantics(self) -> None:
+        spec = self.valid_spec()
+        spec["body"] = {
+            "op": "pipeline",
+            "args": [{"op": "input", "args": []}],
+        }
+        with self.assertRaisesRegex(ValueError, "skill_body_op_not_allowed"):
+            normalize_skill_spec(spec)
+
     def test_arbitrary_python_body_kind_is_rejected(self) -> None:
         spec = self.valid_spec()
         spec["body_kind"] = "PYTHON"
@@ -109,16 +118,22 @@ class SkillSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported_input_contract_field"):
             normalize_skill_spec(spec)
 
-    def test_status_keeps_execution_boundary_explicit(self) -> None:
+    def test_status_keeps_contract_and_runtime_distinct(self) -> None:
         status = skill_spec_status()
         self.assertEqual(BODY_KIND, status["body_kind"])
         self.assertFalse(status["execution_enabled"])
-        self.assertFalse(status["interpreter_present"])
+        self.assertFalse(status["interpreter_present_in_contract"])
+        self.assertNotIn("interpreter_present", status)
         self.assertFalse(status["generated_skill_execution"])
         self.assertFalse(status["dependencies_allowed"])
         self.assertEqual(0, status["max_dependencies"])
         self.assertFalse(status["network_allowed"])
+        self.assertFalse(status["filesystem_allowed"])
         self.assertFalse(status["shell_allowed"])
+        self.assertFalse(status["process_allowed"])
+        self.assertFalse(status["environment_allowed"])
+        self.assertFalse(status["clock_allowed"])
+        self.assertFalse(status["randomness_allowed"])
 
 
 if __name__ == "__main__":

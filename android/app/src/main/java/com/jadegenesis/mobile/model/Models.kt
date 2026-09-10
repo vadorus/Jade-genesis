@@ -330,7 +330,10 @@ data class BrainResult(
     val backendDisplayName: String = "",
     val model: String = "",
     val fallbackUsed: Boolean = false,
-    val fallbackReason: String? = null
+    val fallbackReason: String? = null,
+    val nodeId: String = "",
+    val brainProfile: String = "",
+    val runtimeEvalObservationId: String = ""
 )
 
 data class MemorySnapshot(

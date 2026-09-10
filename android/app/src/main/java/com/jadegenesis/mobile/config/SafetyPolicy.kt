@@ -83,13 +83,16 @@ object SafetyPolicy {
 
     // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.
     // Les essais doivent rester petits, appariés et suffisamment mesurés avant
-    // qu'une promotion explicite puisse devenir possible.
+    // qu'une promotion explicite puisse devenir possible. La confiance Evolution
+    // est volontairement plus lente à saturer que le minimum d'échantillons afin
+    // que le garde-fou de confiance reste réellement discriminant.
     const val MAX_EVOLUTION_CANDIDATES = 40
     const val MAX_EVOLUTION_TRANSITIONS_PER_CANDIDATE = 20
     const val MAX_EVOLUTION_SANDBOX_NOTES = 16
     const val MAX_EVOLUTION_CONFIG_JSON_CHARS = 64_000
     const val MAX_EVOLUTION_CONFIG_CHANGED_FIELDS = 12
     const val MIN_EVOLUTION_TRIAL_SAMPLES = 12
+    const val STRONG_EVOLUTION_EVIDENCE_SAMPLES = 24
     const val MIN_EVOLUTION_EVIDENCE_CONFIDENCE = 0.75
     const val MAX_EVOLUTION_SUCCESS_RATE_REGRESSION = 0.02
     const val MIN_EVOLUTION_SCORE_DELTA = 2.0
@@ -131,4 +134,9 @@ object SafetyPolicy {
     const val MAX_MEMORY_PURGE_BATCH_SIZE = 100
     const val MAX_AUTO_DELETE_CONFIDENCE = 0.70
     const val MIN_RECALL_PROTECTION_COUNT = 1
+
+    // Les observations visuelles ponctuelles sont des instantanés transitoires,
+    // pas des faits vérifiés. Cette limite compilée permet leur expiration après
+    // la durée de rétention même si la confiance de perception standard vaut 0.68.
+    const val MAX_TRANSIENT_VISION_RETENTION_CONFIDENCE = 0.70
 }

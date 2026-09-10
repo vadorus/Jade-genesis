@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.memory
 
+import com.jadegenesis.mobile.cognitive.ConversationLearningRuntime
 import com.jadegenesis.mobile.config.RetentionTuning
 import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.model.MemorySnapshot
@@ -56,18 +57,39 @@ class MemoryStore(private val dao: MemoryDao) {
 
     /**
      * Mémoire réellement injectée dans un contexte de raisonnement.
-     * Ces éléments sont marqués comme rappelés afin que la rétention puisse
-     * distinguer une mémoire utile d'un simple événement ancien.
+     *
+     * Depuis 0.1.15, le contexte conversationnel local borné est injecté en
+     * premier lorsqu'un message utilisateur est en cours. Il ne remplace pas
+     * la mémoire Room durable et ne compte pas artificiellement comme rappel
+     * d'une ligne de la base. Le reste du budget est rempli avec la mémoire
+     * persistante existante, qui conserve son suivi de rappel normal.
      */
     suspend fun latestForContext(limit: Int = 20): List<MemorySnapshot> {
-        val entities = dao.latest(limit.coerceAtLeast(1))
+        val safeLimit = limit.coerceAtLeast(1)
+        val conversation = ConversationLearningRuntime.currentOrNull()
+            ?.contextMemories(
+                min(
+                    safeLimit,
+                    SafetyPolicy.MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS
+                )
+            )
+            .orEmpty()
+            .take(safeLimit)
+
+        val persistentLimit = (safeLimit - conversation.size).coerceAtLeast(0)
+        if (persistentLimit == 0) return conversation
+
+        val entities = dao.latest(persistentLimit)
         val recalledAt = markRecalled(entities)
-        return entities.map { entity ->
+        val persistent = entities.map { entity ->
             entity.toSnapshot(
                 recalledAtOverride = recalledAt,
                 recallCountOverride = entity.recallCount + 1
             )
         }
+        return (conversation + persistent)
+            .distinctBy { it.id }
+            .take(safeLimit)
     }
 
     suspend fun search(query: String, limit: Int = 10): List<MemorySnapshot> =

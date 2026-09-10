@@ -54,6 +54,17 @@ object SafetyPolicy {
     const val STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES = 12
     const val MAX_ADAPTIVE_BRAIN_ROUTING_ADJUSTMENT = 40.0
 
+    // Conversation Learning : état local borné, utilisé uniquement comme
+    // contexte et expérience. Les retours utilisateur ne deviennent jamais
+    // automatiquement des faits externes vérifiés ni une mutation de modèle.
+    const val MAX_CONVERSATION_LEARNING_TURNS = 12
+    const val MAX_CONVERSATION_LEARNING_OUTCOMES = 80
+    const val MAX_CONVERSATION_LEARNING_TOPICS = 80
+    const val MAX_CONVERSATION_LEARNING_TOPICS_PER_TURN = 6
+    const val MAX_CONVERSATION_LEARNING_CONTEXT_TURNS = 2
+    const val MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS = 6
+    const val MAX_CONVERSATION_LEARNING_TEXT_CHARS = 1_000
+
     // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.
     // Les essais doivent rester petits, appariés et suffisamment mesurés avant
     // qu'une promotion explicite puisse devenir possible.

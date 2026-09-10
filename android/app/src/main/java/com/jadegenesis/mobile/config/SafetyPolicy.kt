@@ -57,12 +57,14 @@ object SafetyPolicy {
     // Conversation Learning : état local borné, utilisé uniquement comme
     // contexte et expérience. Les retours utilisateur ne deviennent jamais
     // automatiquement des faits externes vérifiés ni une mutation de modèle.
+    // Le contexte conversationnel a son propre petit quota et ne doit jamais
+    // évincer la mémoire principale préparée par JadeCore.
     const val MAX_CONVERSATION_LEARNING_TURNS = 12
     const val MAX_CONVERSATION_LEARNING_OUTCOMES = 80
     const val MAX_CONVERSATION_LEARNING_TOPICS = 80
     const val MAX_CONVERSATION_LEARNING_TOPICS_PER_TURN = 6
     const val MAX_CONVERSATION_LEARNING_CONTEXT_TURNS = 2
-    const val MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS = 6
+    const val MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS = 3
     const val MAX_CONVERSATION_LEARNING_TEXT_CHARS = 1_000
 
     // Evolution Engine : aucun candidat ne peut augmenter seul ces limites.

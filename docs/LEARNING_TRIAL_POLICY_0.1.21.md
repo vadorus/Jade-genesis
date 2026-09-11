@@ -87,10 +87,12 @@ The first family is intentionally trivial. Its oracle is Python `text.strip().lo
 
 ## Precommitted post-restart proof vector
 
-Before any live learning dataset is collected and before the teacher starts, the post-restart real-user input is fixed as:
+The initial launch marker used a payload with trailing spaces. Before any live dataset attestation and before any teacher call, that vector was superseded in GitHub issue #27 because the Android 0.1.21 chat UI trims the whole message before dispatch. A trailing-space payload therefore cannot be reproduced exactly through the real Pixel UI.
+
+The corrected real-user input is fixed as:
 
 ```json
-{"text":"  ÉcLaiR-ÇA_fÊTe42  "}
+{"text":"  ÉcLaiR-ÇA_fÊTe42"}
 ```
 
 Expected deterministic output:
@@ -99,11 +101,11 @@ Expected deterministic output:
 {"text":"éclair-ça_fête42"}
 ```
 
-This vector deliberately combines leading/trailing whitespace, internal mixed case, accented letters, punctuation and digits. It is intended to exercise a visibly different surface form from simple labels.
+This vector deliberately combines leading whitespace, internal mixed case, accented letters, punctuation and digits while remaining exactly representable through the shipping Pixel UI.
 
 This precommitment does **not** replace the runtime novelty check. The live proof remains eligible only when `novel_vs_learning_cases is True` and the measured Ollama-call delta is exactly `0`. If the exact canonical input was already present in the learning cases, the proof fails closed and this vector cannot be silently replaced after restart.
 
-The same vector and expected result were timestamped externally in GitHub issue #27 before the live trial.
+The corrected vector and expected result were timestamped externally in GitHub issue #27 before any live dataset attestation. The runtime protocol identifier remains `0.1.21-first-acquisition-v1`; no learning algorithm, verifier, partition plan, failure policy, APK or Node Runtime behavior changed as part of this pre-data correction.
 
 ## Post-demo confirmation policy
 

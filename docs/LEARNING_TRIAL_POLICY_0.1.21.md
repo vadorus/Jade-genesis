@@ -20,6 +20,14 @@ The 0.1.21 milestone may be described as a demonstrated persistent procedural ac
 
 `RETAINED` alone is not the success criterion.
 
+## External evidence log
+
+The public, timestamped evidence log for this live trial is GitHub issue **#27**:
+
+`https://github.com/vadorus/Jade-genesis/issues/27`
+
+It may publish commitments and structural metadata, but it must never publish hidden SEALED_TEST inputs/answers, the private seal nonce, pairing tokens, private keys or signing material.
+
 ## External seal publication format
 
 For the first family, each external publication must contain all of the following before the teacher is allowed to run:
@@ -75,6 +83,28 @@ Therefore the allowed claim levels are different:
 - after the live acquisition/restart/reuse proof: **“Jade demonstrated persistent acquisition and reuse of one bounded procedure.”**
 - not yet allowed: **“Jade reliably knows this task family.”**
 
+The first family is intentionally trivial. Its oracle is Python `text.strip().lower()` and the restricted DSL already exposes `trim` and `lower` primitives with the same Python semantics. A successful first trial therefore validates the causal plumbing — data collection, bounded synthesis, hidden exam, retention, restart and measured reuse — but does **not** demonstrate that the teacher can discover a non-trivial algorithm. A later family must test a composition whose solution is not named directly by the task statement.
+
+## Precommitted post-restart proof vector
+
+Before any live learning dataset is collected and before the teacher starts, the post-restart real-user input is fixed as:
+
+```json
+{"text":"  ÉcLaiR-ÇA_fÊTe42  "}
+```
+
+Expected deterministic output:
+
+```json
+{"text":"éclair-ça_fête42"}
+```
+
+This vector deliberately combines leading/trailing whitespace, internal mixed case, accented letters, punctuation and digits. It is intended to exercise a visibly different surface form from simple labels.
+
+This precommitment does **not** replace the runtime novelty check. The live proof remains eligible only when `novel_vs_learning_cases is True` and the measured Ollama-call delta is exactly `0`. If the exact canonical input was already present in the learning cases, the proof fails closed and this vector cannot be silently replaced after restart.
+
+The same vector and expected result were timestamped externally in GitHub issue #27 before the live trial.
+
 ## Post-demo confirmation policy
 
 After the acquisition demo, robustness must be tested with the **exact same frozen SkillSpec hash**. No teacher call, no resynthesis and no body modification are allowed during this confirmation.
@@ -88,6 +118,8 @@ For `normalize_label_v1`, the precommitted next threshold is:
 - this adds 8 fresh hidden cases, for 10 hidden cases total when including the original acquisition exam.
 
 Ten all-pass hidden cases are still not a formal statistical proof because real inputs are not guaranteed independent or identically distributed. The threshold is a stronger robustness check, not a license to overclaim general competence.
+
+The current 0.1.21 implementation precommits this confirmation policy but does not yet implement a complete multi-dataset re-examination path for an already retained exact SkillSpec hash. That follow-up must not be reported as completed until such a path exists and is exercised.
 
 ## Runtime-version compatibility
 

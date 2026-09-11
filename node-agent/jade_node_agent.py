@@ -24,12 +24,12 @@ from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
 from learning_environment import learning_environment_status
+from learning_stores import open_archive_ledger, open_workshop_goals, zone_store_status
 from procedure_runtime import procedure_runtime_status
 from shared_genesis_state import run_shared_state_sync, shared_state_status
 from skill_registry import skill_registry_status
 from skill_spec import skill_spec_status
 from skill_synthesis_loop import skill_synthesis_status
-from verifiable_task_ledger import verifiable_task_ledger_status
 
 VERSION = "0.1.8"
 PROTOCOL = core.PROTOCOL
@@ -52,6 +52,17 @@ def _execute_allowlisted_task(
 
 def _profiled_brain_chat(payload: str, config: dict):
     return run_brain_chat_profiled(payload, config, core)
+
+
+def _learning_status_payload() -> dict:
+    ledger = open_archive_ledger()
+    goals = open_workshop_goals()
+    return {
+        "verifiable_task_ledger": ledger.status(),
+        "skill_synthesis": skill_synthesis_status(goals),
+        "learning_environment": learning_environment_status(),
+        "learning_stores": zone_store_status(),
+    }
 
 
 def _health_payload(config: dict, store=None) -> dict:
@@ -92,12 +103,14 @@ def _health_payload(config: dict, store=None) -> dict:
         result["shared_state"] = shared_state_status()
         result["night_cycle_supervisor"] = supervisor_status(config)
         result["adaptive_strategy_registry"] = adaptive_strategy_registry_status()
-        result["verifiable_task_ledger"] = verifiable_task_ledger_status()
+        learning = _learning_status_payload()
+        result["verifiable_task_ledger"] = learning["verifiable_task_ledger"]
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
-        result["skill_synthesis"] = skill_synthesis_status()
-        result["learning_environment"] = learning_environment_status()
+        result["skill_synthesis"] = learning["skill_synthesis"]
+        result["learning_environment"] = learning["learning_environment"]
+        result["learning_stores"] = learning["learning_stores"]
     result["agent_version"] = VERSION
     return result
 
@@ -110,12 +123,14 @@ def _runtime_payload(config: dict) -> dict:
         result["shared_state"] = shared_state_status()
         result["night_cycle_supervisor"] = supervisor_status(config)
         result["adaptive_strategy_registry"] = adaptive_strategy_registry_status()
-        result["verifiable_task_ledger"] = verifiable_task_ledger_status()
+        learning = _learning_status_payload()
+        result["verifiable_task_ledger"] = learning["verifiable_task_ledger"]
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
-        result["skill_synthesis"] = skill_synthesis_status()
-        result["learning_environment"] = learning_environment_status()
+        result["skill_synthesis"] = learning["skill_synthesis"]
+        result["learning_environment"] = learning["learning_environment"]
+        result["learning_stores"] = learning["learning_stores"]
     return result
 
 

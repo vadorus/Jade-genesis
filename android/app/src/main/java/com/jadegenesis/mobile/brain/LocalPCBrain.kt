@@ -60,7 +60,21 @@ class LocalPCBrain(
 
     override suspend fun think(context: BrainContext): BrainResult {
         val brainPlan = CognitiveBrainPolicy.plan(context)
+        val firstLearning = firstLearningRequest(context)
         val compatible = compatibleNodes(context.selfModel.knownNodes)
+            .let { candidates ->
+                if (firstLearning == null) {
+                    candidates
+                } else {
+                    // The first causal-learning experiment must live in the
+                    // always-on workshop. Do not let normal hardware scoring
+                    // silently send its evidence to a PC-local registry.
+                    candidates.filter { node ->
+                        "learning_workshop_v1" in node.capabilities &&
+                            "verified_skill_pre_ollama_dispatch_v1" in node.capabilities
+                    }
+                }
+            }
         val preferredId = context.selfModel.preferredComputeNodeId
         val routing = JadeConfigRuntime.current().validated().routing
         val ranked = compatible
@@ -82,6 +96,12 @@ class LocalPCBrain(
             .sortedByDescending { it.score }
 
         if (ranked.isEmpty()) {
+            if (firstLearning != null) {
+                error(
+                    "Aucun atelier VPS en ligne n'annonce learning_workshop_v1 " +
+                        "et verified_skill_pre_ollama_dispatch_v1."
+                )
+            }
             error("Aucun nœud génératif en ligne n'annonce brain_chat.")
         }
 
@@ -91,7 +111,6 @@ class LocalPCBrain(
         // sort + take(10) could discard exactly the durable knowledge produced
         // by the night consolidation cycle.
         val memories = context.memories.take(10)
-        val firstLearning = firstLearningRequest(context)
 
         val taskId = "brain-${UUID.randomUUID()}"
         val admissionProbe = DistributedTaskRequest(

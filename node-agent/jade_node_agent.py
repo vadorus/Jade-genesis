@@ -10,6 +10,11 @@ The wire protocol remains jade-genesis-node/0.0.6 for already paired Android
 clients. Procedure execution, Skill Registry mutation and Skill Synthesis are
 still deliberately not exposed as arbitrary remote tasks. 0.1.21 first proves
 the local causal acquisition path before any broader trigger surface is opened.
+
+Correction capabilities are advertised separately in the generic capability
+list so NodeManager can later route evaluation work by what a node can *judge*,
+not only by what it can execute. Advertising a correction capability does not
+open a new remote task kind.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import jade_node_runtime_core as core
 from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
+from learning_environment import learning_environment_status
 from procedure_runtime import procedure_runtime_status
 from shared_genesis_state import run_shared_state_sync, shared_state_status
 from skill_registry import skill_registry_status
@@ -51,8 +57,13 @@ def _profiled_brain_chat(payload: str, config: dict):
 def _health_payload(config: dict, store=None) -> dict:
     result = _original_health(config, store)
     capabilities = list(result.get("capabilities", []))
-    if "cognitive_brain_profiles_v1" not in capabilities:
-        capabilities.append("cognitive_brain_profiles_v1")
+    for capability in (
+        "cognitive_brain_profiles_v1",
+        "correction_exact_json_v1",
+        "correction_restricted_procedure_v1",
+    ):
+        if capability not in capabilities:
+            capabilities.append(capability)
     result["capabilities"] = capabilities
     result["brain_profiles"] = brain_profiles_status(config, core)
 
@@ -70,6 +81,10 @@ def _health_payload(config: dict, store=None) -> dict:
             "procedure_runtime_v1",
             "skill_registry_v1",
             "skill_synthesis_loop_v1",
+            "learning_environment_v1",
+            "learning_workshop_v1",
+            "correction_sealed_skill_exam_v1",
+            "skill_attribution_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
@@ -82,6 +97,7 @@ def _health_payload(config: dict, store=None) -> dict:
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
         result["skill_synthesis"] = skill_synthesis_status()
+        result["learning_environment"] = learning_environment_status()
     result["agent_version"] = VERSION
     return result
 
@@ -99,6 +115,7 @@ def _runtime_payload(config: dict) -> dict:
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
         result["skill_synthesis"] = skill_synthesis_status()
+        result["learning_environment"] = learning_environment_status()
     return result
 
 

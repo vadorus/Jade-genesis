@@ -70,7 +70,7 @@ class SkillRegistryTest(unittest.TestCase):
             },
         }
 
-    def test_register_does_not_auto_activate(self) -> None:
+    def test_register_developer_does_not_auto_activate(self) -> None:
         saved = self.registry.register_developer_skill(
             self.identity,
             self.sum_skill(),
@@ -83,9 +83,13 @@ class SkillRegistryTest(unittest.TestCase):
         status = self.registry.status()
         self.assertEqual(1, status["registered_skill_count"])
         self.assertEqual(0, status["active_family_count"])
-        self.assertFalse(status["activation_automatic"])
+        self.assertTrue(status["developer_activation_requires_explicit_approval"])
+        self.assertEqual(
+            "sealed_verified_learning_only",
+            status["automatic_activation_scope"],
+        )
 
-    def test_activation_requires_explicit_approval(self) -> None:
+    def test_developer_activation_requires_explicit_approval(self) -> None:
         self.registry.register_developer_skill(
             self.identity,
             self.sum_skill(),
@@ -103,7 +107,7 @@ class SkillRegistryTest(unittest.TestCase):
                 now_ms=1_200,
             )
 
-    def test_external_teacher_skill_cannot_enter_0_1_20_registry(self) -> None:
+    def test_external_teacher_skill_cannot_use_developer_registration_path(self) -> None:
         with self.assertRaisesRegex(
             PermissionError,
             "skill_registry_developer_source_required",
@@ -135,11 +139,12 @@ class SkillRegistryTest(unittest.TestCase):
         self.assertEqual("exact_task_family", result["selection_kind"])
         self.assertEqual("sum-fields", result["selected_skill_id"])
         self.assertEqual({"value": 21}, result["execution"]["result"])
+        self.assertFalse(result["verified_learned_skill"])
         self.assertFalse(result["llm_used"])
         self.assertFalse(result["network_used"])
         self.assertFalse(result["selection_automatic_learning"])
 
-    def test_registry_survives_restart_and_reuses_active_skill(self) -> None:
+    def test_registry_survives_restart_and_reuses_active_developer_skill(self) -> None:
         self.registry.register_developer_skill(
             self.identity,
             self.sum_skill(),
@@ -201,14 +206,26 @@ class SkillRegistryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "skill_registry_identity_mismatch"):
             self.registry.selected_skill("other-jade", "synthetic_json_sum")
 
-    def test_status_is_explicit_about_non_learning_boundary(self) -> None:
+    def test_status_exposes_verified_learning_boundary(self) -> None:
         status = self.registry.status()
-        self.assertTrue(status["developer_authored_only"])
-        self.assertTrue(status["activation_requires_explicit_approval"])
-        self.assertFalse(status["activation_automatic"])
-        self.assertFalse(status["generated_skill_registration"])
-        self.assertFalse(status["generated_skill_execution"])
-        self.assertFalse(status["external_teacher_execution"])
+        self.assertFalse(status["developer_authored_only"])
+        self.assertTrue(status["developer_activation_requires_explicit_approval"])
+        self.assertTrue(status["activation_automatic"])
+        self.assertEqual(
+            "sealed_verified_learning_only",
+            status["automatic_activation_scope"],
+        )
+        self.assertTrue(status["generated_skill_registration"])
+        self.assertEqual(
+            "passed_sealed_exam_exact_hash",
+            status["generated_skill_registration_gate"],
+        )
+        self.assertTrue(status["generated_skill_execution"])
+        self.assertEqual(
+            "verified_registry_only",
+            status["generated_skill_execution_gate"],
+        )
+        self.assertTrue(status["external_teacher_execution"])
         self.assertTrue(status["exact_family_selection"])
         self.assertFalse(status["fuzzy_recall"])
         self.assertFalse(status["dependencies_allowed"])

@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Jade Genesis Node Runtime 0.1.7 entrypoint.
+"""Jade Genesis Node Runtime 0.1.8 entrypoint.
 
 The stable runtime core stays separate while this wrapper layers Shared Genesis
 State, bounded VPS Night Learning, Adaptive Strategy Registry, Verifiable Task
-Ledger, SkillSpec, the restricted 0.1.20 Procedure Runtime and the developer
-Skill Registry on top.
+Ledger, SkillSpec, the restricted Procedure Runtime, the persistent Skill
+Registry and the 0.1.21 verified Skill Synthesis Loop on top.
 
 The wire protocol remains jade-genesis-node/0.0.6 for already paired Android
-clients. Procedure execution and Skill Registry mutation are deliberately not
-exposed as arbitrary remote tasks in 0.1.20: only developer-authored pure
-SkillSpecs can execute through the local restricted interpreter, and activation
-requires an explicit local approval path.
+clients. Procedure execution, Skill Registry mutation and Skill Synthesis are
+still deliberately not exposed as arbitrary remote tasks. 0.1.21 first proves
+the local causal acquisition path before any broader trigger surface is opened.
 """
 
 from __future__ import annotations
@@ -23,9 +22,10 @@ from procedure_runtime import procedure_runtime_status
 from shared_genesis_state import run_shared_state_sync, shared_state_status
 from skill_registry import skill_registry_status
 from skill_spec import skill_spec_status
+from skill_synthesis_loop import skill_synthesis_status
 from verifiable_task_ledger import verifiable_task_ledger_status
 
-VERSION = "0.1.7"
+VERSION = "0.1.8"
 PROTOCOL = core.PROTOCOL
 
 _original_execute = core.execute_allowlisted_task
@@ -69,6 +69,7 @@ def _health_payload(config: dict, store=None) -> dict:
             "skill_spec_v1",
             "procedure_runtime_v1",
             "skill_registry_v1",
+            "skill_synthesis_loop_v1",
         ):
             if capability not in capabilities:
                 capabilities.append(capability)
@@ -80,6 +81,7 @@ def _health_payload(config: dict, store=None) -> dict:
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
+        result["skill_synthesis"] = skill_synthesis_status()
     result["agent_version"] = VERSION
     return result
 
@@ -96,6 +98,7 @@ def _runtime_payload(config: dict) -> dict:
         result["skill_spec"] = skill_spec_status()
         result["procedure_runtime"] = procedure_runtime_status()
         result["skill_registry"] = skill_registry_status()
+        result["skill_synthesis"] = skill_synthesis_status()
     return result
 
 
@@ -109,7 +112,7 @@ def _runtime_stopping() -> None:
 
 # Patch the core module before its main loop constructs handlers/stores. Functions
 # defined in the core resolve these globals dynamically, so synchronous and async
-# task paths both see the 0.1.7 extension.
+# task paths both see the 0.1.8 extension.
 core.VERSION = VERSION
 core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync",)
 core.run_brain_chat = _profiled_brain_chat

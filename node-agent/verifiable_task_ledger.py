@@ -1,16 +1,19 @@
-"""Machine-verifiable task ledger for Jade Genesis 0.1.20.
+"""Machine-verifiable task ledger for Jade Genesis 0.1.21.
 
 The ledger stores bounded deterministic task cases, separates visible
 TRAIN/VALIDATION evidence from a hidden SEALED_TEST partition, commits the
 hidden set before evaluation, and scores exact JSON outputs internally.
 
-0.1.20 hardens the final sealed evaluation:
+Final sealed evaluation invariants:
 - individual SEALED_TEST cases cannot be queried through evaluate_case();
 - the whole sealed set can be consumed only by run_sealed_skill_exam();
 - one sealed dataset is burned by the first final candidate;
 - retries of the exact same frozen spec are idempotent;
 - the public final result exposes only aggregate PASS/FAIL, never per-case
-  expected values, per-case verdicts or the private nonce.
+  expected values, per-case verdicts or the private nonce;
+- EXTERNAL_TEACHER/FUTURE_SYNTHESIS candidates may execute only inside this
+  verifier-controlled final exam (or visible synthesis testing), never through
+  the default Procedure Runtime authorization path.
 
 The ledger itself performs no LLM calls and is not conversation memory.
 """
@@ -448,13 +451,14 @@ class VerifiableTaskLedger:
         raw_skill_spec: dict[str, Any],
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        """Consume one sealed dataset with one frozen developer SkillSpec.
+        """Consume one sealed dataset with one frozen restricted SkillSpec.
 
         The verifier owns the expected outputs and calls the restricted
-        procedure runtime internally. A different candidate can never reuse an
-        already-consumed sealed dataset. Repeating the exact same candidate is
-        idempotent and returns the stored aggregate verdict without re-running
-        the cases.
+        procedure runtime internally. Generated/external-teacher candidates are
+        authorized only for this verifier-owned call. A different candidate can
+        never reuse an already-consumed sealed dataset. Repeating the exact same
+        candidate is idempotent and returns the stored aggregate verdict without
+        re-running the cases.
         """
 
         from procedure_runtime import execute_skill
@@ -462,6 +466,9 @@ class VerifiableTaskLedger:
 
         dataset_id = _clean_id(dataset_id, "dataset_id")
         normalized_spec = normalize_skill_spec(raw_skill_spec)
+        source_kind = str(normalized_spec["provenance"].get("source_kind", "")).upper()
+        if source_kind not in {"DEVELOPER", "EXTERNAL_TEACHER", "FUTURE_SYNTHESIS"}:
+            raise PermissionError("sealed_exam_skill_source_not_allowed")
         candidate_sha = str(normalized_spec.get("spec_sha256", "")).lower()
         if not _SHA256_RE.fullmatch(candidate_sha):
             raise ValueError("invalid_candidate_spec_sha256")
@@ -505,7 +512,11 @@ class VerifiableTaskLedger:
             execution_failures = 0
             for case in hidden:
                 try:
-                    execution = execute_skill(normalized_spec, case["input"])
+                    execution = execute_skill(
+                        normalized_spec,
+                        case["input"],
+                        allowed_source_kinds={source_kind},
+                    )
                     actual = execution["result"]
                     passed = _canonical_json(actual) == _canonical_json(
                         case["expected_output"]
@@ -534,6 +545,8 @@ class VerifiableTaskLedger:
                 "exam_id": exam_id,
                 "candidate_spec_sha256": candidate_sha,
                 "sealed_set_sha256": expected_commitment,
+                "task_family": dataset.get("task_family", ""),
+                "source_kind": source_kind,
                 "verdict": bool(verdict),
                 "passed_count": passed_count,
                 "total_count": total,
@@ -560,6 +573,45 @@ class VerifiableTaskLedger:
             state["attempts"] = attempts[-MAX_ATTEMPTS:]
             self._touch_and_save(state, now)
             return self._sealed_exam_public(internal, replayed=False)
+
+    def verified_exam_for_candidate(
+        self,
+        identity_id: str,
+        dataset_id: str,
+        candidate_spec_sha256: str,
+    ) -> dict[str, Any]:
+        """Return a non-secret retention proof only for a passed frozen candidate."""
+
+        dataset_id = _clean_id(dataset_id, "dataset_id")
+        candidate_sha = str(candidate_spec_sha256 or "").strip().lower()
+        if not _SHA256_RE.fullmatch(candidate_sha):
+            raise ValueError("invalid_candidate_spec_sha256")
+        with self.lock:
+            state = self._load()
+            self._bind_identity(state, identity_id)
+            dataset = state["datasets"].get(dataset_id)
+            if not isinstance(dataset, dict):
+                raise ValueError("dataset_not_found")
+            exam = dataset.get("sealed_exam")
+            if not isinstance(exam, dict):
+                raise PermissionError("verified_sealed_exam_required")
+            if str(exam.get("candidate_spec_sha256", "")).lower() != candidate_sha:
+                raise PermissionError("verified_candidate_hash_mismatch")
+            if exam.get("verdict") is not True:
+                raise PermissionError("verified_candidate_must_pass")
+            return {
+                "dataset_id": dataset_id,
+                "task_family": dataset.get("task_family", ""),
+                "exam_id": exam.get("exam_id", ""),
+                "candidate_spec_sha256": candidate_sha,
+                "sealed_set_sha256": exam.get("sealed_set_sha256", ""),
+                "verdict": True,
+                "evaluated_at": max(0, int(exam.get("evaluated_at", 0))),
+                "feedback_detail_exposed": False,
+                "per_case_verdicts_exposed": False,
+                "expected_outputs_exposed": False,
+                "seal_nonce_exposed": False,
+            }
 
     @staticmethod
     def _sealed_exam_public(
@@ -656,7 +708,9 @@ class VerifiableTaskLedger:
                 "sealed_case_evaluation_allowed": False,
                 "sealed_final_exam_single_use": True,
                 "sealed_final_exam_feedback": "aggregate_pass_fail_only",
-                "learned_code_execution": False,
+                "generated_skill_exam_execution": True,
+                "generated_skill_general_execution": False,
+                "arbitrary_code_execution": False,
                 "llm_judge_used": False,
                 "network_access": False,
                 "conversation_memory": False,
@@ -682,7 +736,9 @@ def verifiable_task_ledger_status() -> dict[str, Any]:
             "sealed_case_evaluation_allowed": False,
             "sealed_final_exam_single_use": True,
             "sealed_final_exam_feedback": "aggregate_pass_fail_only",
-            "learned_code_execution": False,
+            "generated_skill_exam_execution": True,
+            "generated_skill_general_execution": False,
+            "arbitrary_code_execution": False,
             "llm_judge_used": False,
             "network_access": False,
             "conversation_memory": False,

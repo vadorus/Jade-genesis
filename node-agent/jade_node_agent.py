@@ -28,7 +28,12 @@ import jade_node_runtime_core as core
 from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
-from learning_environment import learning_environment_status
+from first_learning_family import (
+    TASK_FAMILY as FIRST_LEARNING_FAMILY,
+    input_seen_in_learning,
+    record_real_case,
+)
+from learning_environment import append_attribution_event, learning_environment_status
 from learning_stores import (
     open_archive_ledger,
     open_archive_skill_registry,
@@ -106,6 +111,13 @@ def _structured_skill_request(context: dict) -> tuple[str, str, object] | None:
     return jade_id, family, context.get("skill_input")
 
 
+def _is_real_user_learning_traffic(context: dict) -> bool:
+    return (
+        str(context.get("traffic_source", "")).strip().upper() == "REAL_USER"
+        and context.get("learning_observation_allowed") is True
+    )
+
+
 def _profiled_brain_chat(payload: str, config: dict):
     started = time.perf_counter_ns()
     try:
@@ -113,10 +125,22 @@ def _profiled_brain_chat(payload: str, config: dict):
     except json.JSONDecodeError:
         context = None
 
+    learning_observation: dict | None = None
     if isinstance(context, dict):
         structured = _structured_skill_request(context)
         if structured is not None:
             identity_id, family, skill_input = structured
+            real_user_traffic = _is_real_user_learning_traffic(context)
+            novel_vs_learning_cases: bool | None = None
+            if real_user_traffic and family == FIRST_LEARNING_FAMILY:
+                try:
+                    novel_vs_learning_cases = not input_seen_in_learning(
+                        identity_id,
+                        skill_input,
+                    )
+                except Exception:
+                    novel_vs_learning_cases = None
+
             before = ollama_call_counters()
             registry = open_archive_skill_registry()
             try:
@@ -131,6 +155,29 @@ def _profiled_brain_chat(payload: str, config: dict):
                 after = ollama_call_counters()
                 duration_ms = int((time.perf_counter_ns() - started) // 1_000_000)
                 result_value = recall["execution"]["result"]
+                delta = after["total_calls"] - before["total_calls"]
+                real_reuse_recorded = False
+                if real_user_traffic:
+                    try:
+                        append_attribution_event(
+                            "real_skill_reuse",
+                            {
+                                "identity_id": identity_id,
+                                "task_family": family,
+                                "skill_id": recall["selected_skill_id"],
+                                "skill_version": recall["selected_skill_version"],
+                                "spec_sha256": recall["selected_spec_sha256"],
+                                "novel_vs_learning_cases": novel_vs_learning_cases,
+                                "real_production_traffic": True,
+                                "ollama_calls_delta": delta,
+                                "post_restart_proof_eligible": (
+                                    novel_vs_learning_cases is True and delta == 0
+                                ),
+                            },
+                        )
+                        real_reuse_recorded = True
+                    except RuntimeError:
+                        real_reuse_recorded = False
                 response = {
                     "text": json.dumps(
                         result_value,
@@ -153,7 +200,10 @@ def _profiled_brain_chat(payload: str, config: dict):
                     "verified_learned_skill": recall["verified_learned_skill"],
                     "ollama_calls_before": before,
                     "ollama_calls_after": after,
-                    "ollama_calls_delta": after["total_calls"] - before["total_calls"],
+                    "ollama_calls_delta": delta,
+                    "real_user_traffic": real_user_traffic,
+                    "novel_vs_learning_cases": novel_vs_learning_cases,
+                    "real_reuse_attribution_recorded": real_reuse_recorded,
                     "router_level_skill_dispatch_pending": True,
                 }
                 return (
@@ -161,7 +211,32 @@ def _profiled_brain_chat(payload: str, config: dict):
                     duration_ms,
                 )
 
-    return run_brain_chat_profiled(payload, config, core)
+            if real_user_traffic and family == FIRST_LEARNING_FAMILY:
+                try:
+                    learning_observation = record_real_case(identity_id, skill_input)
+                except Exception as exc:
+                    learning_observation = {
+                        "recorded": False,
+                        "reason": "real_case_recording_failed",
+                        "error": type(exc).__name__,
+                        "task_family": family,
+                    }
+
+    fallback_output, fallback_duration = run_brain_chat_profiled(payload, config, core)
+    if learning_observation is None:
+        return fallback_output, fallback_duration
+    try:
+        decoded = json.loads(fallback_output)
+        if isinstance(decoded, dict):
+            decoded["learning_observation"] = learning_observation
+            decoded["learning_observation_from_real_user_traffic"] = True
+            return (
+                json.dumps(decoded, ensure_ascii=False, separators=(",", ":")),
+                fallback_duration,
+            )
+    except json.JSONDecodeError:
+        pass
+    return fallback_output, fallback_duration
 
 
 def _learning_status_payload() -> dict:
@@ -184,6 +259,7 @@ def _health_payload(config: dict, store=None) -> dict:
         "correction_restricted_procedure_v1",
         "verified_skill_pre_ollama_dispatch_v1",
         "ollama_call_counter_v1",
+        "real_learning_case_collection_v1",
     ):
         if capability not in capabilities:
             capabilities.append(capability)
@@ -194,6 +270,8 @@ def _health_payload(config: dict, store=None) -> dict:
         "enabled_for_structured_brain_chat": True,
         "exact_task_family_only": True,
         "before_ollama": True,
+        "first_learning_family": FIRST_LEARNING_FAMILY,
+        "real_case_collection_requires_explicit_real_user_marker": True,
         "router_level_dispatch_pending": True,
         "router_level_dispatch_reason": "0.1.21 proof first; avoid widening routing changes before causal acquisition is demonstrated",
     }
@@ -244,6 +322,7 @@ def _runtime_payload(config: dict) -> dict:
         "enabled_for_structured_brain_chat": True,
         "exact_task_family_only": True,
         "before_ollama": True,
+        "first_learning_family": FIRST_LEARNING_FAMILY,
         "router_level_dispatch_pending": True,
     }
     if str(config.get("node_kind", "")).upper() == "VPS":

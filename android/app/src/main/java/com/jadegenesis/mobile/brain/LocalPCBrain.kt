@@ -346,10 +346,14 @@ class LocalPCBrain(
         )
         val actualModel = json.optString("model").trim()
             .ifBlank { evalObservation?.model.orEmpty() }
-        val text = renderFirstLearningResult(
+        val rendered = renderFirstLearningResult(
             firstLearning = firstLearning,
             backend = json.optString("backend"),
             rawText = rawText
+        )
+        val text = appendSealReceipt(
+            text = rendered,
+            observation = json.optJSONObject("learning_observation")
         )
         val actualProfile = json.optString("brain_profile").trim()
             .ifBlank { brainPlan.profile.name.lowercase() }
@@ -388,6 +392,24 @@ class LocalPCBrain(
         return runCatching {
             JSONObject(rawText).optString("text").takeIf { it.isNotBlank() }
         }.getOrNull() ?: rawText
+    }
+
+    private fun appendSealReceipt(
+        text: String,
+        observation: JSONObject?
+    ): String {
+        if (observation?.optBoolean("dataset_sealed", false) != true) return text
+        val datasetId = observation.optString("dataset_id").trim()
+        val sealedHash = observation.optString("sealed_set_sha256").trim()
+        if (datasetId.isBlank() || sealedHash.length != 64) return text
+        return buildString {
+            append(text)
+            append("\n\n[0.1.21] Dataset scellé : ")
+            append(datasetId)
+            append("\nSHA-256 : ")
+            append(sealedHash)
+            append("\nÀ publier comme attestation externe avant le professeur.")
+        }
     }
 
     private fun compatibleNodes(

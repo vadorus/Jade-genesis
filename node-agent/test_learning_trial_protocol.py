@@ -22,6 +22,7 @@ class LearningTrialProtocolTest(unittest.TestCase):
                 from first_learning_family import (
                     INPUT_CONTRACT,
                     OUTPUT_CONTRACT,
+                    PARTITION_PLAN,
                     TASK_FAMILY,
                     family_status,
                     record_real_case,
@@ -29,6 +30,8 @@ class LearningTrialProtocolTest(unittest.TestCase):
                 from learning_environment import read_attribution_events
                 from learning_stores import open_archive_ledger
                 from learning_trial_protocol import (
+                    POST_DEMO_CONFIRMATORY_FRESH_DATASETS,
+                    POST_DEMO_TOTAL_HIDDEN_CASE_TARGET,
                     open_attested_gap,
                     publish_seal_attestation,
                     ready_dataset_pool,
@@ -51,6 +54,8 @@ class LearningTrialProtocolTest(unittest.TestCase):
                     assert result["recorded"] is True
                     assert result["real_production_traffic"] is True
                     if result["dataset_sealed"]:
+                        assert result["case_count"] == 5
+                        assert result["partition_plan"] == list(PARTITION_PLAN)
                         sealed.append(result)
 
                 status = family_status(identity)
@@ -71,13 +76,17 @@ class LearningTrialProtocolTest(unittest.TestCase):
                     assert learning["sealed_test_count"] == 2
 
                 for index, item in enumerate(sealed[:2]):
-                    publish_seal_attestation(
+                    attested = publish_seal_attestation(
                         identity,
                         item["dataset_id"],
                         item["sealed_set_sha256"],
+                        case_count=item["case_count"],
+                        partition_plan=item["partition_plan"],
                         external_publication_ref=f"external:trial-note-{index+1}",
                         now_ms=2_000 + index,
                     )
+                    assert attested["case_count"] == 5
+                    assert attested["partition_plan"] == list(PARTITION_PLAN)
                 assert len(ready_dataset_pool(identity, TASK_FAMILY)) == 2
                 try:
                     open_attested_gap(
@@ -99,6 +108,8 @@ class LearningTrialProtocolTest(unittest.TestCase):
                     identity,
                     third["dataset_id"],
                     third["sealed_set_sha256"],
+                    case_count=third["case_count"],
+                    partition_plan=third["partition_plan"],
                     external_publication_ref="external:trial-note-3",
                     now_ms=2_200,
                 )
@@ -157,6 +168,11 @@ class LearningTrialProtocolTest(unittest.TestCase):
                 assert result["state"] == "RETAINED", result
                 assert result["skill_retained"] is True
                 assert result["seal_attestation_verified"] is True
+                assert result["structured_partition_attestation_verified"] is True
+                assert result["trial_terminal"] is False
+                assert result["initial_acquisition_is_mastery_claim"] is False
+                assert result["post_demo_confirmatory_fresh_datasets_required"] == POST_DEMO_CONFIRMATORY_FRESH_DATASETS
+                assert result["post_demo_total_hidden_case_target"] == POST_DEMO_TOTAL_HIDDEN_CASE_TARGET
                 assert len(calls) == 1
                 assert calls[0]["sealed_test_inputs_exposed"] is False
                 assert calls[0]["sealed_test_answers_exposed"] is False
@@ -173,6 +189,8 @@ class LearningTrialProtocolTest(unittest.TestCase):
                     if event["event_kind"] == "skill_teacher_started"
                     and event["payload"]["dataset_id"] == selected_dataset
                 )
+                assert attested["payload"]["case_count"] == 5
+                assert attested["payload"]["partition_plan"] == list(PARTITION_PLAN)
                 assert attested["sequence"] < teacher_started["sequence"]
                 assert attested["occurred_at"] <= teacher_started["occurred_at"]
                 '''
@@ -186,6 +204,158 @@ class LearningTrialProtocolTest(unittest.TestCase):
             if completed.returncode != 0:
                 self.fail(
                     "isolated real trial protocol failed:\n"
+                    + completed.stdout
+                    + "\n"
+                    + completed.stderr
+                )
+
+    def test_one_sealed_failure_terminates_trial_and_forbids_fresh_dataset_retry(self) -> None:
+        node_dir = Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory(prefix="jade-terminal-trial-") as config_dir:
+            script = textwrap.dedent(
+                r'''
+                import os
+                import sys
+                os.environ["JADE_GENESIS_CONFIG_DIR"] = sys.argv[2]
+                sys.path.insert(0, sys.argv[1])
+
+                from first_learning_family import (
+                    INPUT_CONTRACT,
+                    OUTPUT_CONTRACT,
+                    TASK_FAMILY,
+                    record_real_case,
+                )
+                from learning_environment import read_attribution_events
+                from learning_trial_protocol import (
+                    open_attested_gap,
+                    publish_seal_attestation,
+                    ready_dataset_pool,
+                    run_attested_learning,
+                )
+
+                identity = "jade-terminal-trial"
+                # Dataset 1 visible cases are already lowercase, so a trim-only
+                # candidate passes TRAIN/VALIDATION but fails the uppercase hidden cases.
+                values = [
+                    " alpha ", " beta ", " gamma ", " DELTA ", " EPSILON ",
+                    " one ", " two ", " three ", " FOUR ", " FIVE ",
+                    " red ", " blue ", " green ", " WHITE ", " BLACK ",
+                ]
+                sealed = []
+                for index, text in enumerate(values):
+                    result = record_real_case(
+                        identity,
+                        {"text": text},
+                        now_ms=10_000 + index,
+                    )
+                    if result["dataset_sealed"]:
+                        sealed.append(result)
+                assert len(sealed) == 3
+
+                for index, item in enumerate(sealed):
+                    publish_seal_attestation(
+                        identity,
+                        item["dataset_id"],
+                        item["sealed_set_sha256"],
+                        case_count=item["case_count"],
+                        partition_plan=item["partition_plan"],
+                        external_publication_ref=f"external:terminal-note-{index+1}",
+                        now_ms=11_000 + index,
+                    )
+                assert len(ready_dataset_pool(identity, TASK_FAMILY)) == 3
+
+                opened = open_attested_gap(
+                    identity,
+                    "goal-terminal-v1",
+                    TASK_FAMILY,
+                    INPUT_CONTRACT,
+                    OUTPUT_CONTRACT,
+                    reason="terminal failure protocol test",
+                    now_ms=12_000,
+                )
+
+                calls = []
+                def bad_teacher(request):
+                    calls.append(request)
+                    return {
+                        "skill_id": "bad-trim-only",
+                        "description": "Incorrectly trims without lowercasing.",
+                        "domain": "verifiable_procedure",
+                        "body": {
+                            "op": "object",
+                            "args": [
+                                {"op": "literal", "args": ["text"]},
+                                {
+                                    "op": "trim",
+                                    "args": [
+                                        {
+                                            "op": "get",
+                                            "args": [
+                                                {"op": "literal", "args": ["text"]}
+                                            ],
+                                        }
+                                    ],
+                                },
+                            ],
+                        },
+                    }
+
+                failed = run_attested_learning(
+                    identity,
+                    "goal-terminal-v1",
+                    bad_teacher,
+                    teacher_id="bad-test-teacher",
+                    source_model="fake-code-model",
+                    now_ms=12_100,
+                )
+                assert failed["state"] == "SEALED_FAILED", failed
+                assert failed["trial_terminal"] is True
+                assert failed["max_sealed_failures_per_trial"] == 1
+                assert failed["failed_candidate_retry_on_fresh_dataset_allowed"] is False
+                assert failed["sealed_dataset_reserve_after_run"] == 2
+                assert len(calls) == 1
+
+                # The two fresh reserve datasets still exist, but the protocol
+                # must refuse to convert them into retries after seeing hidden feedback.
+                assert len(ready_dataset_pool(identity, TASK_FAMILY)) == 2
+                try:
+                    open_attested_gap(
+                        identity,
+                        "goal-terminal-v2",
+                        TASK_FAMILY,
+                        INPUT_CONTRACT,
+                        OUTPUT_CONTRACT,
+                        reason="must not retry after hidden failure",
+                        min_ready_datasets=2,
+                        now_ms=12_200,
+                    )
+                except PermissionError as exc:
+                    assert str(exc) == "learning_trial_family_terminal_after_sealed_failure"
+                else:
+                    raise AssertionError("fresh sealed dataset was incorrectly used as retry budget")
+
+                events = read_attribution_events()
+                terminal = [
+                    event for event in events
+                    if event["event_kind"] == "learning_trial_terminal_failure"
+                ]
+                assert len(terminal) == 1
+                assert terminal[0]["payload"]["dataset_id"] == opened["dataset_id"]
+                assert terminal[0]["payload"]["sealed_failures_used"] == 1
+                assert terminal[0]["payload"]["failed_candidate_retry_on_fresh_dataset_allowed"] is False
+                assert terminal[0]["payload"]["remaining_reserve_is_not_retry_budget"] is True
+                assert terminal[0]["payload"]["family_status_for_protocol"] == "NOT_LEARNED_TERMINAL"
+                '''
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(node_dir), config_dir],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if completed.returncode != 0:
+                self.fail(
+                    "isolated terminal failure protocol failed:\n"
                     + completed.stdout
                     + "\n"
                     + completed.stderr

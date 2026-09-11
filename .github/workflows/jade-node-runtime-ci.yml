@@ -247,9 +247,24 @@ jobs:
           assert environment["attribution_log_hash_chained"] is True
 
           night_skill = health["night_cycle_supervisor"]["skill_learning_cycle"]
+          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v1"
           assert night_skill["task_family"] == "normalize_label_v1"
           assert night_skill["minimum_ready_datasets"] == 3
           assert night_skill["requires_external_hash_attestation"] is True
+          assert night_skill["attestation_requires_dataset_id"] is True
+          assert night_skill["attestation_requires_case_count"] is True
+          assert night_skill["attestation_requires_partition_plan"] is True
+          assert night_skill["expected_case_count"] == 5
+          assert night_skill["expected_partition_plan"] == [
+              "TRAIN", "TRAIN", "VALIDATION", "SEALED_TEST", "SEALED_TEST"
+          ]
+          assert night_skill["max_sealed_failures_per_trial"] == 1
+          assert night_skill["failed_candidate_retry_on_fresh_dataset_allowed"] is False
+          assert night_skill["family_terminal_after_sealed_failure"] is True
+          assert night_skill["remaining_reserve_is_retry_budget"] is False
+          assert night_skill["initial_acquisition_is_mastery_claim"] is False
+          assert night_skill["post_demo_confirmatory_fresh_datasets_required"] == 4
+          assert night_skill["post_demo_total_hidden_case_target"] == 10
           assert night_skill["teacher"] == "ollama_code_profile"
           assert night_skill["teacher_trigger"] == "vps_night_cycle_only"
           assert night_skill["remote_learning_task_exposed"] is False

@@ -4,6 +4,10 @@ Low-level stores remain independently testable and accept explicit paths. This
 module is the production factory: callers that participate in learning must use
 these constructors so workshop, archive and production state cannot silently
 collapse back into the legacy flat config directory.
+
+The canonical archive ledger additionally writes an immutable complete case
+pack whenever a dataset becomes sealed. The materialized ledger may evolve, but
+the sealed evidence behind an exam is preserved under archive/case-packs/.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from case_pack_archive import archive_sealed_case_pack
 from learning_environment import (
     ARCHIVE_TASK_LEDGER_PATH,
     CONFIG_DIR,
@@ -38,10 +43,29 @@ def _migrate_file_once(source: Path, destination: Path) -> bool:
     return True
 
 
-def open_archive_ledger() -> VerifiableTaskLedger:
+class ArchiveVerifiableTaskLedger(VerifiableTaskLedger):
+    """Canonical verifier ledger with write-once case-pack archival on seal."""
+
+    def seal_dataset(
+        self,
+        identity_id: str,
+        dataset_id: str,
+        now_ms: int | None = None,
+    ) -> dict[str, Any]:
+        manifest = super().seal_dataset(identity_id, dataset_id, now_ms=now_ms)
+        pack = archive_sealed_case_pack(self, identity_id, dataset_id)
+        return {
+            **manifest,
+            "case_pack_sha256": pack["case_pack_sha256"],
+            "case_pack_immutable": True,
+            "case_pack_path_exposed_to_teacher": False,
+        }
+
+
+def open_archive_ledger() -> ArchiveVerifiableTaskLedger:
     ensure_learning_environment()
     _migrate_file_once(LEGACY_TASK_LEDGER_PATH, ARCHIVE_TASK_LEDGER_PATH)
-    return VerifiableTaskLedger(ARCHIVE_TASK_LEDGER_PATH)
+    return ArchiveVerifiableTaskLedger(ARCHIVE_TASK_LEDGER_PATH)
 
 
 def open_workshop_goals() -> LearningGoalStore:
@@ -78,6 +102,7 @@ def zone_store_status() -> dict[str, Any]:
         "ledger_in_archive": ledger.path == ARCHIVE_TASK_LEDGER_PATH,
         "goals_in_workshop": goals.path == WORKSHOP_GOALS_PATH,
         "skill_archive_separate_from_production": registry.path != registry.routes.path,
+        "sealed_case_pack_write_once": True,
         "legacy_ledger_preserved": LEGACY_TASK_LEDGER_PATH.exists(),
         "legacy_goals_preserved": LEGACY_LEARNING_GOALS_PATH.exists(),
     }

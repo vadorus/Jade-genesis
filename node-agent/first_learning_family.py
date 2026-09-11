@@ -23,7 +23,12 @@ from learning_stores import open_archive_ledger
 
 TASK_FAMILY = "normalize_label_v1"
 CASES_PER_DATASET = 5
-_PARTITIONS = ("TRAIN", "TRAIN", "VALIDATION", "SEALED_TEST", "SEALED_TEST")
+PARTITION_PLAN = ("TRAIN", "TRAIN", "VALIDATION", "SEALED_TEST", "SEALED_TEST")
+PARTITION_COUNTS = {
+    "TRAIN": 2,
+    "VALIDATION": 1,
+    "SEALED_TEST": 2,
+}
 
 INPUT_CONTRACT = {
     "type": "object",
@@ -61,7 +66,12 @@ def _family_datasets(ledger: Any, identity_id: str) -> list[dict[str, Any]]:
             for item in state.get("datasets", {}).values()
             if isinstance(item, dict) and item.get("task_family") == TASK_FAMILY
         ]
-        datasets.sort(key=lambda item: (int(item.get("created_at", 0)), str(item.get("dataset_id", ""))))
+        datasets.sort(
+            key=lambda item: (
+                int(item.get("created_at", 0)),
+                str(item.get("dataset_id", "")),
+            )
+        )
         return json.loads(json.dumps(datasets))
 
 
@@ -129,7 +139,7 @@ def record_real_case(
 
     if position < 0 or position >= CASES_PER_DATASET:
         raise RuntimeError("normalize_label_dataset_position_invalid")
-    partition = _PARTITIONS[position]
+    partition = PARTITION_PLAN[position]
     case_id = f"real-{position + 1:02d}"
     ledger.add_case(
         identity_id,
@@ -158,6 +168,9 @@ def record_real_case(
                 "dataset_sealed": True,
                 "sealed_set_sha256": manifest["sealed_set_sha256"],
                 "sealed_test_count": manifest["sealed_test_count"],
+                "case_count": CASES_PER_DATASET,
+                "partition_plan": list(PARTITION_PLAN),
+                "partition_counts": dict(PARTITION_COUNTS),
                 "external_attestation_required": True,
             }
         )
@@ -169,6 +182,8 @@ def record_real_case(
                 "dataset_id": dataset_id,
                 "sealed_set_sha256": manifest["sealed_set_sha256"],
                 "case_count": CASES_PER_DATASET,
+                "partition_plan": list(PARTITION_PLAN),
+                "partition_counts": dict(PARTITION_COUNTS),
                 "partition_plan_fixed_before_teacher": True,
                 "real_production_traffic": True,
                 "external_attestation_required": True,
@@ -184,14 +199,18 @@ def family_status(identity_id: str) -> dict[str, Any]:
     return {
         "task_family": TASK_FAMILY,
         "dataset_count": len(datasets),
-        "sealed_dataset_count": sum(1 for item in datasets if item.get("sealed") is True),
+        "sealed_dataset_count": sum(
+            1 for item in datasets if item.get("sealed") is True
+        ),
         "unconsumed_sealed_dataset_count": sum(
             1
             for item in datasets
-            if item.get("sealed") is True and not isinstance(item.get("sealed_exam"), dict)
+            if item.get("sealed") is True
+            and not isinstance(item.get("sealed_exam"), dict)
         ),
         "cases_per_dataset": CASES_PER_DATASET,
-        "fixed_partition_plan": list(_PARTITIONS),
+        "fixed_partition_plan": list(PARTITION_PLAN),
+        "partition_counts": dict(PARTITION_COUNTS),
         "source_required": "real_production_brain_chat",
         "teacher_used_for_partitioning": False,
     }

@@ -1,52 +1,74 @@
-# Jade Genesis Android — current 0.1.20.1
+# Jade Genesis Android — current 0.1.21
 
 Native Android / Pixel application for Jade Genesis.
 
 Current package/version:
 
 - application ID: `com.jadegenesis.mobile`
-- versionName: `0.1.20.1`
-- versionCode: `38`
+- versionName: `0.1.21`
+- versionCode: `39`
 - minSdk: `31`
 - compileSdk / targetSdk: `37`
 
 ## Role in the system
 
-The Android app is Jade's primary personal-device presence. It owns the local persistent identity and can continue operating when a PC/VPS node is unavailable, although richer cognitive replies depend on an available brain backend.
+The Android app is Jade's primary personal-device presence. It owns a local persistent copy of Jade's identity and state and remains usable when richer PC/VPS resources are unavailable.
 
-Current responsibilities include:
-
-- persistent Jade identity;
-- local structured memory;
-- device profiling and self-model state;
-- Jetpack Compose UI;
-- tool registry and Android-side capabilities;
-- authenticated communication with paired Node Runtime instances;
-- local Shared Genesis State cache/outbox with retry;
-- bounded Runtime Evaluation / outcome data;
-- validation of synchronized Night Learning / maintenance snapshots;
-- visibility into current adaptive/verifiable-learning substrate state.
+Current responsibilities include persistent identity, local structured memory, device profiling/self-model state, Jetpack Compose UI, tool registry, authenticated Node Runtime communication, Shared Genesis State cache/outbox, Runtime Evaluation/outcome data, and visibility into distributed learning/night-cycle state.
 
 ## Conversation status
 
-The Android UI is already a persistent Jade interface, but 0.1.20.1 should not be presented as a finished standalone conversational assistant. When no suitable PC/VPS/model backend is available, the app may expose only the minimal local prototype/fallback behavior.
+Android can route `brain_chat` requests to compatible PC/VPS nodes and falls back to the minimal local prototype when the richer backend is unavailable. 0.1.21 does not claim that Jade's everyday conversational system is finished; backend availability and routing are still important operational dependencies.
 
-The distributed `brain_chat` path and cognitive profiles exist in the Node Runtime. A later Android integration milestone still needs to make everyday routing, backend availability, chosen brain and fallback behavior clearer to the user.
+## 0.1.21 first causal-learning command
 
-## Cognitive plumbing hardening — 0.1.20.1
+For the first falsifiable procedural-learning experiment, Android recognizes one explicit command only:
 
-This maintenance milestone fixes several Android producer-to-consumer paths found during a code audit:
+```text
+/normalize <text>
+```
 
-- `MemoryStore.latestForContext()` reserves bounded space for USER facts and `JADE_CONSOLIDATION_*` knowledge before recent memory fills the rest;
-- `LocalPCBrain` no longer sorts consolidated knowledge behind volatile memories before its final truncation;
-- exact textual duplicates from a successfully consolidated batch can be marked superseded, while USER facts and heuristic contradictions remain protected;
-- stale transient `VISION_*` observations have a dedicated compiled retention ceiling compatible with the normal `0.68` visual confidence;
-- the Shared Genesis State phone cache semantically coalesces repeated operational snapshots by `(originNode, kind, entityId)`, preserving rarer durable learning/night-cycle events from snapshot churn;
-- Evolution evidence uses an independent 12→24 sample confidence curve and an unsaturated `rawScore`, so its confidence and score-improvement gates remain meaningful if the engine is wired later.
+This command is mapped to the deterministic family `normalize_label_v1` and routed specifically to a node that advertises both:
 
-The Evolution Engine remains intentionally unconnected to autonomous proposal/testing/promotion in this version.
+```text
+learning_workshop_v1
+verified_skill_pre_ollama_dispatch_v1
+```
 
-See [`../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md).
+In the current architecture that means the VPS workshop. Normal conversation keeps the ordinary adaptive PC/VPS routing policy.
+
+Only this explicit command is tagged:
+
+```text
+traffic_source = REAL_USER
+learning_observation_allowed = true
+```
+
+Ordinary conversation is therefore not silently turned into the first Skill-learning dataset.
+
+Before an active Skill exists, the real input can be recorded as one verifier-owned case and the request still falls through to the normal cognitive backend. Every fifth unique real input completes and immediately seals one dataset using the partition plan fixed before teaching:
+
+```text
+TRAIN, TRAIN, VALIDATION, SEALED_TEST, SEALED_TEST
+```
+
+When a dataset is sealed, the Pixel response displays only its dataset ID and `sealed_set_sha256`. It never displays hidden SEALED_TEST inputs, answers or the private seal nonce. That hash is intended to be published as external evidence before any teacher call.
+
+After a verified learned Skill is active, the same `/normalize` path can be answered by the retained deterministic procedure before the Node calls Ollama. Android renders the normalized text directly instead of exposing the internal Skill result JSON.
+
+The formal 0.1.21 proof still requires a real VPS process restart followed by a genuinely new Pixel input and a measured Ollama-call delta of zero. See [`../docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`](../docs/SKILL_SYNTHESIS_LOOP_0.1.21.md).
+
+## Cognitive plumbing hardening inherited from 0.1.20.1
+
+0.1.20.1 fixed several Android producer-to-consumer paths before Skill synthesis was connected:
+
+- bounded USER and `JADE_CONSOLIDATION_*` memory slots reach the brain;
+- exact textual duplicates can be superseded after successful consolidation while USER facts remain protected;
+- stale transient `VISION_*` observations use a dedicated retention ceiling;
+- Shared Genesis State operational snapshots are semantically coalesced so rarer Night Learning events survive cache churn;
+- Evolution evidence uses an independent confidence curve and unsaturated comparison score.
+
+The Android Evolution Engine remains intentionally separate from the 0.1.21 Skill-learning proof.
 
 ## Stack
 
@@ -58,19 +80,9 @@ See [`../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](../docs/COGNITIVE_PLUMB
 - Room 3.0.2
 - DataStore 1.2.1
 
-## Open in Android Studio
+## Build
 
-1. Clone the repository.
-2. Open the `android/` directory in a recent Android Studio.
-3. Use JDK 17.
-4. Install Android API 37 and Build Tools 36.0.0.
-5. Let Gradle synchronize dependencies.
-6. Connect the Android device with USB debugging enabled for a debug run.
-7. Run the `app` configuration.
-
-## Command-line build
-
-Canonical GitHub Actions currently installs Gradle 9.6.0 explicitly and runs:
+Canonical GitHub Actions installs Gradle 9.6.0 explicitly and runs real unit tests plus debug and release assembly:
 
 ```bash
 gradle --no-daemon --stacktrace --console=plain -p android \
@@ -79,51 +91,31 @@ gradle --no-daemon --stacktrace --console=plain -p android \
   :app:assembleRelease
 ```
 
-`gradle/wrapper/gradle-wrapper.properties` pins the Gradle 9.6.0 binary distribution and its official SHA-256 checksum. The repository still does not bundle `gradle-wrapper.jar`; until that is corrected, local command-line builds should use Android Studio or an installed Gradle 9.6.0 matching CI.
+`gradle/wrapper/gradle-wrapper.properties` pins the Gradle 9.6.0 binary distribution and its official SHA-256 checksum. The repository still does not bundle `gradle-wrapper.jar`; use Android Studio or an installed Gradle 9.6.0 matching CI until a complete verified wrapper is committed.
 
 ## Signing model
 
-Debug builds use the normal Android debug signing path.
-
-Ordinary CI release builds are intentionally unsigned. Stable signing credentials are injected only in the explicit stable-release workflow path and must never be committed or printed.
+Debug builds use normal Android debug signing. Ordinary CI release builds are intentionally unsigned. Stable signing credentials are injected only in the explicit signed-release path and must never be committed or printed.
 
 ## Distributed operation
 
-Android communicates with the Node Runtime through authenticated node traffic. A paired PC/VPS can provide additional compute/model resources and, on VPS, a durable Shared Genesis State replica plus supervised Night Cycle processing.
+Android communicates with authenticated Node Runtime instances. The VPS hosts the canonical 0.1.21 workshop/archive for the first learning trial; the phone remains the personal interface and keeps local Jade identity/state. The VPS is not Jade's identity owner.
 
-The VPS is not the owner of Jade's identity. If it is unavailable, the phone retains local state and retries bounded synchronization later.
+The temporary 0.1.21 Skill lookup occurs inside the Node `brain_chat` path before Ollama but after Android has selected the node and acquired a Resource Lease. Moving Skill dispatch upward into the task router is intentional post-proof debt, not part of the first experiment.
 
-## Learning status
+## Important learning limits
 
-Android participates in the evidence/governance side of Jade's learning architecture. The deterministic Procedure Runtime and developer-only Skill Registry live on the Python Node Runtime side.
+0.1.21 is a bounded procedural-learning experiment. It does not grant learned Skills shell, filesystem, network, process, arbitrary Python, randomness or Skill-to-Skill dependencies. Teacher models propose a restricted DSL body; the verifier-owned Ledger decides the hidden final exam; only an exact verified artifact may receive a production route.
 
-Current foundations include:
-
-- restricted `JADE_PROCEDURE_DSL_V1` execution;
-- developer-only Skill Registry;
-- exact task-family selection;
-- persistent reuse of explicitly activated developer Skills;
-- single-use aggregate `SEALED_TEST` final exams;
-- no per-case sealed verdict oracle.
-
-Important limits:
-
-- Android does not autonomously synthesize Skills;
-- generated/external-teacher Skills remain non-executable;
-- Skill-to-Skill dependencies are disabled;
-- there is no automatic Skill promotion into production behavior;
-- the Android Evolution Engine is still dormant from autonomous use;
-- 0.1.20.1 is not proof of autonomous skill acquisition.
-
-The planned 0.1.21 milestone will attempt the first falsifiable synthesis/restart/reuse proof.
+Repository tests prove the mechanism, including sealed-data isolation, three-dataset reserve, teacher restrictions and zero-Ollama Skill short-circuiting. They do **not** replace the required live hard-restart proof on real Pixel/VPS traffic.
 
 ## Related documentation
 
 - [`../README.md`](../README.md)
 - [`../docs/ARCHITECTURE_OVERVIEW.md`](../docs/ARCHITECTURE_OVERVIEW.md)
-- [`../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md`](../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md)
 - [`../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md`](../docs/VERIFIABLE_TASK_LEDGER_SKILLSPEC_0.1.19.md)
 - [`../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`](../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md)
 - [`../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](../docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md)
+- [`../docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`](../docs/SKILL_SYNTHESIS_LOOP_0.1.21.md)
 
-When documentation and source disagree, the exact repository commit and its CI result are authoritative.
+When documentation and source disagree, the exact repository commit and its verified CI result are authoritative.

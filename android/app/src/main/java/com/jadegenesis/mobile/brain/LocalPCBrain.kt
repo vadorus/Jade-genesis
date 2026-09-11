@@ -34,6 +34,11 @@ class LocalPCBrain(
             get() = priorScore + evidence.adjustment
     }
 
+    private data class FirstLearningRequest(
+        val taskFamily: String,
+        val text: String
+    )
+
     override val info = BrainInfo(
         id = "distributed-local-brain-0.1.16",
         displayName = "Adaptive Distributed Cognitive Brain",
@@ -55,7 +60,21 @@ class LocalPCBrain(
 
     override suspend fun think(context: BrainContext): BrainResult {
         val brainPlan = CognitiveBrainPolicy.plan(context)
+        val firstLearning = firstLearningRequest(context)
         val compatible = compatibleNodes(context.selfModel.knownNodes)
+            .let { candidates ->
+                if (firstLearning == null) {
+                    candidates
+                } else {
+                    // The first causal-learning experiment must live in the
+                    // always-on workshop. Do not let normal hardware scoring
+                    // silently send its evidence to a PC-local registry.
+                    candidates.filter { node ->
+                        "learning_workshop_v1" in node.capabilities &&
+                            "verified_skill_pre_ollama_dispatch_v1" in node.capabilities
+                    }
+                }
+            }
         val preferredId = context.selfModel.preferredComputeNodeId
         val routing = JadeConfigRuntime.current().validated().routing
         val ranked = compatible
@@ -77,6 +96,12 @@ class LocalPCBrain(
             .sortedByDescending { it.score }
 
         if (ranked.isEmpty()) {
+            if (firstLearning != null) {
+                error(
+                    "Aucun atelier VPS en ligne n'annonce learning_workshop_v1 " +
+                        "et verified_skill_pre_ollama_dispatch_v1."
+                )
+            }
             error("Aucun nœud génératif en ligne n'annonce brain_chat.")
         }
 
@@ -143,6 +168,20 @@ class LocalPCBrain(
             put("user_input", context.userInput.take(10_000))
             put("draft_response", context.draftResponse?.take(14_000) ?: "")
             put("review_note", context.reviewNote?.take(2_000) ?: "")
+            if (firstLearning != null) {
+                // Explicit user command only. Ordinary conversation never gets
+                // marked as learning traffic and therefore cannot populate the
+                // first experimental Skill dataset by accident.
+                put("task_family", firstLearning.taskFamily)
+                put(
+                    "skill_input",
+                    JSONObject().apply {
+                        put("text", firstLearning.text)
+                    }
+                )
+                put("traffic_source", "REAL_USER")
+                put("learning_observation_allowed", true)
+            }
             put(
                 "adaptive_routing",
                 JSONObject().apply {
@@ -281,8 +320,8 @@ class LocalPCBrain(
         }
 
         val json = JSONObject(response.output)
-        val text = json.optString("text").trim()
-        if (text.isBlank()) {
+        val rawText = json.optString("text").trim()
+        if (rawText.isBlank()) {
             evalStore?.recordExecution(
                 request = admissionProbe,
                 node = node,
@@ -307,6 +346,17 @@ class LocalPCBrain(
         )
         val actualModel = json.optString("model").trim()
             .ifBlank { evalObservation?.model.orEmpty() }
+        val rendered = renderFirstLearningResult(
+            firstLearning = firstLearning,
+            backend = json.optString("backend"),
+            rawText = rawText
+        )
+        val text = appendSealReceipt(
+            text = rendered,
+            observation = json.optJSONObject("learning_observation")
+        )
+        val actualProfile = json.optString("brain_profile").trim()
+            .ifBlank { brainPlan.profile.name.lowercase() }
 
         return BrainResult(
             text = text,
@@ -314,9 +364,52 @@ class LocalPCBrain(
             backendDisplayName = info.displayName,
             model = actualModel,
             nodeId = node.nodeId,
-            brainProfile = brainPlan.profile.name.lowercase(),
+            brainProfile = actualProfile,
             runtimeEvalObservationId = evalObservation?.observationId.orEmpty()
         )
+    }
+
+    private fun firstLearningRequest(context: BrainContext): FirstLearningRequest? {
+        if (context.operation != "answer") return null
+        val prefix = "/normalize "
+        if (!context.userInput.startsWith(prefix, ignoreCase = true)) return null
+        val value = context.userInput.substring(prefix.length).take(4_096)
+        if (value.isBlank()) return null
+        return FirstLearningRequest(
+            taskFamily = "normalize_label_v1",
+            text = value
+        )
+    }
+
+    private fun renderFirstLearningResult(
+        firstLearning: FirstLearningRequest?,
+        backend: String,
+        rawText: String
+    ): String {
+        if (firstLearning == null || backend != "verified_skill_registry") {
+            return rawText
+        }
+        return runCatching {
+            JSONObject(rawText).optString("text").takeIf { it.isNotBlank() }
+        }.getOrNull() ?: rawText
+    }
+
+    private fun appendSealReceipt(
+        text: String,
+        observation: JSONObject?
+    ): String {
+        if (observation?.optBoolean("dataset_sealed", false) != true) return text
+        val datasetId = observation.optString("dataset_id").trim()
+        val sealedHash = observation.optString("sealed_set_sha256").trim()
+        if (datasetId.isBlank() || sealedHash.length != 64) return text
+        return buildString {
+            append(text)
+            append("\n\n[0.1.21] Dataset scellé : ")
+            append(datasetId)
+            append("\nSHA-256 : ")
+            append(sealedHash)
+            append("\nÀ publier comme attestation externe avant le professeur.")
+        }
     }
 
     private fun compatibleNodes(

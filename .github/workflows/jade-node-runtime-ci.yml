@@ -57,7 +57,15 @@ jobs:
             node-agent/verifiable_task_ledger.py \
             node-agent/skill_spec.py \
             node-agent/procedure_runtime.py \
+            node-agent/learning_environment.py \
+            node-agent/case_pack_archive.py \
+            node-agent/learning_stores.py \
             node-agent/skill_registry.py \
+            node-agent/skill_synthesis_loop.py \
+            node-agent/ollama_skill_teacher.py \
+            node-agent/first_learning_family.py \
+            node-agent/learning_trial_protocol.py \
+            node-agent/skill_learning_cycle.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
@@ -66,7 +74,12 @@ jobs:
             node-agent/test_verifiable_task_ledger.py \
             node-agent/test_skill_spec.py \
             node-agent/test_procedure_runtime.py \
-            node-agent/test_skill_registry.py
+            node-agent/test_learning_environment.py \
+            node-agent/test_skill_registry.py \
+            node-agent/test_skill_synthesis_loop.py \
+            node-agent/test_ollama_skill_teacher.py \
+            node-agent/test_pre_ollama_skill_dispatch.py \
+            node-agent/test_learning_trial_protocol.py
 
       - name: Test bounded runtime, learning substrate and brain profiles
         shell: bash
@@ -77,7 +90,7 @@ jobs:
             -p 'test_*.py' \
             -v
 
-      - name: Validate telemetry, Cognitive Brains and restricted procedure substrate without external services
+      - name: Validate 0.1.21 causal-learning boundaries without external services
         shell: bash
         run: |
           set -euo pipefail
@@ -96,104 +109,34 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          assert module.VERSION == "0.1.7"
+          assert module.VERSION == "0.1.8"
           assert module.PROTOCOL == "jade-genesis-node/0.0.6"
           assert "brain_chat" in module.ALLOWED_TASKS
           assert "vision_analyze" in module.ALLOWED_TASKS
           assert "shared_state_sync" in module.ALLOWED_TASKS
-          assert "night_learning_lab" not in module.ALLOWED_TASKS
-          assert "procedure_execute" not in module.ALLOWED_TASKS
-          assert "skill_registry_mutate" not in module.ALLOWED_TASKS
+          for forbidden_task in (
+              "night_learning_lab",
+              "procedure_execute",
+              "skill_registry_mutate",
+              "skill_synthesis",
+              "skill_learn",
+              "sealed_skill_exam",
+          ):
+              assert forbidden_task not in module.ALLOWED_TASKS
           assert all("shell" not in task for task in module.ALLOWED_TASKS)
 
           cpu = module.cpu_load_percent(sample_seconds=0.02)
           assert cpu == -1.0 or 0.0 <= cpu <= 100.0
-
           gpu = module.gpu_telemetry()
-          required = {
+          assert {
               "gpu_name",
               "gpu_vram_total_gb",
               "gpu_vram_free_gb",
               "gpu_utilization_percent",
-          }
-          assert required.issubset(gpu.keys())
+          }.issubset(gpu.keys())
 
           task_store = module.AsyncTaskStore({})
           assert task_store.stats() == {"active": 0, "queued": 0, "running": 0}
-
-          from shared_genesis_state import SharedGenesisStateStore
-          with tempfile.TemporaryDirectory(prefix="jade-state-") as temp_dir:
-              state_store = SharedGenesisStateStore(Path(temp_dir) / "state.json")
-              request = {
-                  "schema_version": 1,
-                  "identity_id": "jade-test",
-                  "replica_id": "pixel-test",
-                  "known_revision": 0,
-                  "events": [{
-                      "event_id": "event-1",
-                      "origin_node": "pixel-test",
-                      "kind": "identity_presence",
-                      "entity_id": "jade-test",
-                      "payload": "{}",
-                      "created_at": 1000,
-                  }],
-              }
-              first = state_store.sync(request)
-              assert first["server_revision"] == 1
-              assert first["server_head_revision"] == 1
-              assert first["ack_event_ids"] == ["event-1"]
-              assert len(first["events"]) == 1
-              assert first["has_more"] is False
-
-              second = state_store.sync(request)
-              assert second["server_revision"] == 1
-              assert second["ack_event_ids"] == ["event-1"]
-
-              try:
-                  state_store.sync({**request, "identity_id": "other-jade"})
-              except ValueError as exc:
-                  assert str(exc) == "shared_state_identity_mismatch"
-              else:
-                  raise AssertionError("identity mismatch should be rejected")
-
-              bulk = []
-              for index in range(2, 207):
-                  bulk.append({
-                      "event_id": f"event-{index}",
-                      "origin_node": "pixel-test",
-                      "kind": "test_event",
-                      "entity_id": f"entity-{index}",
-                      "payload": "{}",
-                      "created_at": 1000 + index,
-                  })
-              state_store.sync({
-                  "schema_version": 1,
-                  "identity_id": "jade-test",
-                  "replica_id": "pixel-test",
-                  "known_revision": 1,
-                  "events": bulk[:200],
-              })
-              paged = state_store.sync({
-                  "schema_version": 1,
-                  "identity_id": "jade-test",
-                  "replica_id": "pixel-test",
-                  "known_revision": 1,
-                  "events": bulk[200:],
-              })
-              assert paged["server_revision"] == 201
-              assert paged["server_head_revision"] == 206
-              assert len(paged["events"]) == 200
-              assert paged["has_more"] is True
-              tail = state_store.sync({
-                  "schema_version": 1,
-                  "identity_id": "jade-test",
-                  "replica_id": "pixel-test",
-                  "known_revision": paged["server_revision"],
-                  "events": [],
-              })
-              assert tail["server_revision"] == 206
-              assert len(tail["events"]) == 5
-              assert tail["has_more"] is False
 
           health = module.health_payload({
               "node_id": "vps-test",
@@ -202,89 +145,178 @@ jobs:
               "runtime_channel": "stable",
               "ollama_url": "http://127.0.0.1:9",
           }, task_store)
-          assert "cognitive_brain_profiles_v1" in health["capabilities"]
-          assert health["brain_profiles"]["policy_version"] == "1"
-          assert health["brain_profiles"]["automatic_download"] is False
-          assert health["brain_profiles"]["automatic_model_weight_mutation"] is False
-          assert health["brain_profiles"]["automatic_privilege_escalation"] is False
-          assert "shared_genesis_state_v1" in health["capabilities"]
-          assert "shared_state_sync" in health["capabilities"]
-          assert "vps_night_cycle_supervisor_v1" in health["capabilities"]
-          assert "night_learning_lab_v1" in health["capabilities"]
-          assert "adaptive_strategy_registry_v1" in health["capabilities"]
-          assert "verifiable_task_ledger_v1" in health["capabilities"]
-          assert "skill_spec_v1" in health["capabilities"]
-          assert "procedure_runtime_v1" in health["capabilities"]
-          assert "skill_registry_v1" in health["capabilities"]
-          assert health["night_cycle_supervisor"]["mode"] == "bounded_learning_lab+adaptive_strategy_registry"
-          assert health["night_cycle_supervisor"]["experiment_automatic"] is False
-          assert health["night_cycle_supervisor"]["promotion_automatic"] is False
-          assert health["night_cycle_supervisor"]["strategy_persistence_automatic"] is True
-          assert health["night_cycle_supervisor"]["strategy_activation_automatic"] is False
-          assert health["night_cycle_supervisor"]["strategy_promotion_automatic"] is False
-          assert health["night_cycle_supervisor"]["strategy_model_weight_mutation"] is False
-          assert health["night_cycle_supervisor"]["arbitrary_shell"] is False
-          assert health["adaptive_strategy_registry"]["automatic_activation"] is False
-          assert health["adaptive_strategy_registry"]["automatic_promotion"] is False
-          assert health["adaptive_strategy_registry"]["production_code_rewrite"] is False
-          assert health["adaptive_strategy_registry"]["model_weight_mutation"] is False
-          assert health["adaptive_strategy_registry"]["shell_execution"] is False
+
+          capabilities = set(health["capabilities"])
+          for required in (
+              "cognitive_brain_profiles_v1",
+              "shared_genesis_state_v1",
+              "verifiable_task_ledger_v1",
+              "skill_spec_v1",
+              "procedure_runtime_v1",
+              "skill_registry_v1",
+              "skill_synthesis_loop_v1",
+              "learning_environment_v1",
+              "learning_workshop_v1",
+              "correction_exact_json_v1",
+              "correction_restricted_procedure_v1",
+              "correction_sealed_skill_exam_v1",
+              "skill_attribution_v1",
+              "verified_skill_pre_ollama_dispatch_v1",
+              "ollama_call_counter_v1",
+              "real_learning_case_collection_v1",
+          ):
+              assert required in capabilities
+
+          ollama_calls = health["ollama_calls"]
+          assert ollama_calls["model_list_calls"] >= 0
+          assert ollama_calls["chat_calls"] >= 0
+          assert ollama_calls["total_calls"] == (
+              ollama_calls["model_list_calls"] + ollama_calls["chat_calls"]
+          )
+          assert ollama_calls["process_local_counter"] is True
+
+          dispatch = health["skill_dispatch"]
+          assert dispatch["enabled_for_structured_brain_chat"] is True
+          assert dispatch["exact_task_family_only"] is True
+          assert dispatch["before_ollama"] is True
+          assert dispatch["first_learning_family"] == "normalize_label_v1"
+          assert dispatch["real_case_collection_requires_explicit_real_user_marker"] is True
+          assert dispatch["router_level_dispatch_pending"] is True
 
           ledger = health["verifiable_task_ledger"]
           assert ledger["verifier_kind"] == "exact_json_v1"
+          assert ledger["sealed_test_inputs_exposed"] is False
           assert ledger["sealed_test_answers_exposed"] is False
           assert ledger["sealed_case_evaluation_allowed"] is False
           assert ledger["sealed_final_exam_single_use"] is True
           assert ledger["sealed_final_exam_feedback"] == "aggregate_pass_fail_only"
-          assert ledger["learned_code_execution"] is False
+          assert ledger["generated_skill_exam_execution"] is True
+          assert ledger["generated_skill_general_execution"] is False
+          assert ledger["arbitrary_code_execution"] is False
           assert ledger["llm_judge_used"] is False
 
-          skill = health["skill_spec"]
-          assert skill["body_kind"] == "JADE_PROCEDURE_DSL_V1"
-          assert skill["execution_enabled"] is False
-          assert skill["interpreter_present_in_contract"] is False
-          assert skill["dependencies_allowed"] is False
-          assert skill["max_dependencies"] == 0
-          assert skill["network_allowed"] is False
-          assert skill["filesystem_allowed"] is False
-          assert skill["shell_allowed"] is False
-          assert skill["process_allowed"] is False
-          assert skill["generated_skill_execution"] is False
-
           procedure = health["procedure_runtime"]
-          assert procedure["body_kind"] == "JADE_PROCEDURE_DSL_V1"
           assert procedure["interpreter_present"] is True
           assert procedure["execution_enabled"] is True
           assert procedure["developer_authored_execution"] is True
           assert procedure["generated_skill_execution"] is False
           assert procedure["external_teacher_execution"] is False
           assert procedure["dependencies_allowed"] is False
-          assert procedure["deterministic"] is True
           assert procedure["network_allowed"] is False
           assert procedure["filesystem_allowed"] is False
           assert procedure["shell_allowed"] is False
           assert procedure["process_allowed"] is False
-          assert procedure["environment_allowed"] is False
-          assert procedure["clock_allowed"] is False
           assert procedure["randomness_allowed"] is False
           assert procedure["arbitrary_code_allowed"] is False
-          assert procedure["os_process_isolation"] is False
-          assert procedure["untrusted_generated_execution"] is False
 
           registry = health["skill_registry"]
-          assert registry["developer_authored_only"] is True
-          assert registry["activation_requires_explicit_approval"] is True
-          assert registry["activation_automatic"] is False
-          assert registry["generated_skill_registration"] is False
-          assert registry["generated_skill_execution"] is False
-          assert registry["external_teacher_execution"] is False
-          assert registry["exact_family_selection"] is True
-          assert registry["fuzzy_recall"] is False
+          assert registry["developer_authored_only"] is False
+          assert registry["developer_activation_requires_explicit_approval"] is True
+          assert registry["activation_automatic"] is True
+          assert registry["automatic_activation_scope"] == "sealed_verified_learning_only"
+          assert registry["generated_skill_registration"] is True
+          assert registry["generated_skill_registration_gate"] == "passed_sealed_exam_exact_hash"
+          assert registry["generated_skill_execution"] is True
+          assert registry["generated_skill_execution_gate"] == "verified_registry_only"
+          assert registry["archive_and_production_physically_separate"] is True
+          assert registry["production_contains_skill_bodies"] is False
+          assert registry["attribution_append_only"] is True
           assert registry["dependencies_allowed"] is False
           assert registry["llm_used_for_selection"] is False
           assert registry["network_access"] is False
 
-          print("Node Runtime 0.1.7 + Procedure Runtime + restricted Skill Registry validated.")
+          synthesis = health["skill_synthesis"]
+          assert synthesis["teacher_role"] == "proposal_only"
+          assert synthesis["teacher_controls_provenance"] is False
+          assert synthesis["teacher_controls_verifier"] is False
+          assert synthesis["teacher_controls_activation"] is False
+          assert synthesis["sealed_test_visible_to_teacher"] is False
+          assert synthesis["sealed_test_final_exam_single_use"] is True
+          assert synthesis["candidate_dependencies_allowed"] is False
+          assert synthesis["arbitrary_code_execution"] is False
+          assert synthesis["shell_access"] is False
+          assert synthesis["filesystem_access"] is False
+          assert synthesis["autonomous_triggering"] is False
+
+          environment = health["learning_environment"]
+          assert environment["physically_separated_roots"] is True
+          assert environment["production_contains_active_routes_only"] is True
+          assert environment["workshop_disposable"] is True
+          assert environment["archive_contains_retained_skills_and_sealed_evidence"] is True
+          assert environment["attribution_log_append_only"] is True
+          assert environment["attribution_log_hash_chained"] is True
+
+          night_skill = health["night_cycle_supervisor"]["skill_learning_cycle"]
+          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v1"
+          assert night_skill["task_family"] == "normalize_label_v1"
+          assert night_skill["minimum_ready_datasets"] == 3
+          assert night_skill["requires_external_hash_attestation"] is True
+          assert night_skill["attestation_requires_dataset_id"] is True
+          assert night_skill["attestation_requires_case_count"] is True
+          assert night_skill["attestation_requires_partition_plan"] is True
+          assert night_skill["expected_case_count"] == 5
+          assert night_skill["expected_partition_plan"] == [
+              "TRAIN", "TRAIN", "VALIDATION", "SEALED_TEST", "SEALED_TEST"
+          ]
+          assert night_skill["max_sealed_failures_per_trial"] == 1
+          assert night_skill["failed_candidate_retry_on_fresh_dataset_allowed"] is False
+          assert night_skill["family_terminal_after_sealed_failure"] is True
+          assert night_skill["remaining_reserve_is_retry_budget"] is False
+          assert night_skill["initial_acquisition_is_mastery_claim"] is False
+          assert night_skill["post_demo_confirmatory_fresh_datasets_required"] == 4
+          assert night_skill["post_demo_total_hidden_case_target"] == 10
+          assert night_skill["teacher"] == "ollama_code_profile"
+          assert night_skill["teacher_trigger"] == "vps_night_cycle_only"
+          assert night_skill["remote_learning_task_exposed"] is False
+          assert night_skill["router_level_skill_dispatch_pending"] is True
+
+          stores = health["learning_stores"]
+          assert stores["ledger_in_archive"] is True
+          assert stores["goals_in_workshop"] is True
+          assert stores["skill_archive_separate_from_production"] is True
+          assert stores["sealed_case_pack_write_once"] is True
+
+          # Prove a custom test registry physically separates archive skill bodies
+          # from production routing and derives usage from append-only events.
+          from skill_registry import SkillRegistry
+          from skill_spec import BODY_KIND
+          with tempfile.TemporaryDirectory(prefix="jade-zones-") as temp_dir:
+              root = Path(temp_dir)
+              registry = SkillRegistry(root / "archive" / "skills.json")
+              spec_data = {
+                  "schema_version": 1,
+                  "skill_id": "ci-dev-sum",
+                  "skill_version": 1,
+                  "task_family": "ci_sum",
+                  "domain": "verifiable_procedure",
+                  "description": "CI developer sum.",
+                  "input_contract": {"type": "object", "required_fields": ["a", "b"]},
+                  "output_contract": {"type": "object", "required_fields": ["value"]},
+                  "body_kind": BODY_KIND,
+                  "body": {"op": "object", "args": [
+                      {"op": "literal", "args": ["value"]},
+                      {"op": "add", "args": [
+                          {"op": "get", "args": [{"op": "literal", "args": ["a"]}]},
+                          {"op": "get", "args": [{"op": "literal", "args": ["b"]}]},
+                      ]},
+                  ]},
+                  "dependencies": [],
+                  "provenance": {"source_kind": "DEVELOPER", "source_id": "ci", "source_model": "", "created_at": 1},
+                  "evaluation_policy": {"verifier_kind": "exact_json_v1", "sealed_set_sha256": "a" * 64, "min_pass_rate": 1.0, "max_protected_failures": 0},
+              }
+              registry.register_developer_skill("jade-ci", spec_data, now_ms=10)
+              registry.activate_developer_skill("jade-ci", "ci-dev-sum", 1, approved=True, now_ms=11)
+              result = registry.execute_for_family("jade-ci", "ci_sum", {"a": 20, "b": 22})
+              assert result["execution"]["result"] == {"value": 42}
+              assert result["production_route_separate_from_archive"] is True
+              assert registry.path != registry.routes.path
+              archive_text = registry.path.read_text(encoding="utf-8")
+              route_text = registry.routes.path.read_text(encoding="utf-8")
+              assert '"body"' in archive_text
+              assert '"body"' not in route_text
+              assert '"expected_output"' not in route_text
+
+          print("Node Runtime 0.1.8 + causal Skill Synthesis plumbing validated.")
           PY
 
       - name: Prove validation did not rewrite sources

@@ -2,255 +2,220 @@
 
 Jade Genesis is an experimental personal AI architecture built around one persistent logical identity that can operate across Android, PC and VPS nodes.
 
-The project is **not** designed around a single permanent LLM as Jade's identity or central brain. Local and external language/vision models are intended to remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, evaluate outcomes, consolidate useful evidence and progressively retain reusable strategies and skills under explicit safety boundaries.
+The project is **not** designed around one permanent LLM as Jade's identity or central brain. Local and external language/vision models remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, measure outcomes, consolidate useful evidence and acquire reusable bounded capabilities under explicit safety boundaries.
 
-> Current Android product version on this branch: **0.1.20.1** (`versionCode 38`)
+> Current Android product version on this branch: **0.1.21** (`versionCode 39`)
 >
-> Current dependency-free Node Runtime version: **0.1.7** / protocol `jade-genesis-node/0.0.6`
+> Current dependency-free Node Runtime version: **0.1.8** / protocol `jade-genesis-node/0.0.6`
 >
-> Status: **experimental / personal research project**. Jade can execute approved deterministic procedures. 0.1.20.1 hardens the existing cognitive plumbing before autonomous Skill synthesis is attempted.
+> Status: **experimental / personal research project**. The 0.1.21 mechanism for verified procedural acquisition is implemented and tested in CI. The decisive live VPS/Pixel restart-and-reuse proof is still required before claiming that Jade has demonstrated persistent acquisition in production.
 
 ## What exists today
 
-The repository contains working foundations for:
+Working foundations now include:
 
-- persistent Jade identity on Android;
-- local structured memory, device profiling and self-model state;
-- authenticated distributed Node Runtime for PC/VPS;
+- persistent Jade identity and local structured memory on Android;
+- device profiling, self-model and authenticated PC/VPS nodes;
 - bounded task routing and cognitive brain profiles;
-- Shared Genesis State replication with offline/retry behavior;
-- Runtime Evaluation and Outcome Quality signals;
-- VPS-supervised Night Cycle / Night Learning;
-- a persistent Adaptive Strategy Registry;
-- a Verifiable Task Ledger with TRAIN, VALIDATION and hidden `SEALED_TEST` partitions;
-- `SkillSpec v1`, a bounded declarative skill contract;
-- a restricted deterministic `JADE_PROCEDURE_DSL_V1` interpreter;
-- a persistent developer-only Skill Registry with exact task-family selection;
-- a single-use aggregate sealed final-exam path for deterministic skills;
-- GitHub Actions that compile/test Android and validate the Node Runtime.
+- Shared Genesis State with offline/retry behavior;
+- Runtime Evaluation and explicit outcome evidence;
+- supervised VPS Night Cycle / Night Learning;
+- Adaptive Strategy Registry;
+- Verifiable Task Ledger with TRAIN, VALIDATION and hidden `SEALED_TEST`;
+- `SkillSpec v1` and the bounded `JADE_PROCEDURE_DSL_V1`;
+- deterministic restricted procedure execution;
+- physically separated production / workshop / archive learning zones;
+- immutable sealed case packs and a hash-chained attribution journal;
+- verified learned-Skill registration gated by an exact hidden-exam proof;
+- bounded Ollama CODE-profile teacher integration;
+- measured exact-family Skill reuse before Ollama;
+- one deliberately narrow real-traffic family, `normalize_label_v1`;
+- Android `/normalize <text>` plumbing to send genuine Pixel traffic to the VPS workshop;
+- GitHub Actions that compile/test Android and validate the Node learning boundaries.
+
+## What 0.1.21 is trying to prove
+
+The milestone is not successful merely because a generated Skill reaches `RETAINED`.
+
+The required causal proof is:
+
+```text
+no target Skill
+-> real Pixel usage
+-> fixed partitions + sealed datasets
+-> hashes published before teacher
+-> teacher sees TRAIN/VALIDATION only
+-> candidate frozen
+-> one-shot hidden exam
+-> exact verified Skill retained and routed
+-> hard Node Runtime restart
+-> genuinely new real Pixel input
+-> retained Skill selected automatically
+-> measured Ollama call delta = 0
+-> negative control: deactivate Skill and model calls return
+```
+
+That sequence distinguishes “a procedure passed a test” from “Jade acquired a persistent capability that changes future behavior.”
+
+See [`docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`](docs/SKILL_SYNTHESIS_LOOP_0.1.21.md).
+
+## First real family
+
+The first family is intentionally boring and objectively verifiable:
+
+`normalize_label_v1`
+
+It maps a label to the same label trimmed and lower-cased. On Android, only the explicit command:
+
+```text
+/normalize <text>
+```
+
+is marked `REAL_USER` and allowed to feed this experiment. Ordinary chat is not enrolled.
+
+These commands are routed specifically to the VPS workshop rather than normal generative hardware scoring, so evidence, hidden tests and retained Skills live in the canonical always-on learning environment.
+
+Every five unique real inputs complete one dataset with a partition plan fixed before teaching:
+
+```text
+TRAIN, TRAIN, VALIDATION, SEALED_TEST, SEALED_TEST
+```
+
+The fifth case seals the dataset. The Pixel then displays only the dataset ID and `sealed_set_sha256`, which can be published externally before the teacher is enabled. Hidden inputs, hidden answers and the private seal nonce remain undisclosed.
+
+At least **three** independently sealed, externally attested and unconsumed datasets are required before the teacher may run. One failed final candidate therefore burns one hidden exam without creating pressure to unseal or recycle it.
+
+## Author / judge separation
+
+The 0.1.21 teacher is a proposal source, not the judge.
+
+`OllamaSkillTeacher` receives visible TRAIN/VALIDATION evidence and can return only:
+
+```text
+skill_id
+description
+domain
+body
+```
+
+Jade constructs provenance, verifier policy, dependencies and the exact hidden-set commitment itself. The teacher cannot choose activation or verdict.
+
+The Verifiable Task Ledger owns the final exam. Individual `SEALED_TEST` cases cannot be queried through the normal evaluator. The complete hidden set is executed internally and only aggregate PASS/FAIL is returned. The first final candidate consumes that dataset even on failure.
+
+## Three-zone learning environment
+
+0.1.21 separates failure-prone experimentation from production:
+
+```text
+production/
+  skill-routes.json
+
+workshop/
+  skill-learning-goals.json
+  candidates/
+
+archive/
+  skill-registry.json
+  verifiable-task-ledger.json
+  case-packs/
+  skill-attribution.jsonl
+```
+
+Production contains route references only, not Skill bodies or hidden expected answers. Workshop state is disposable. Archive contains retained artifacts, verifier evidence and append-only attribution.
+
+The attribution journal is SHA-256 chained. Usage and measured gain are derived from events instead of trusting one mutable counter.
+
+## Restricted execution
+
+Learned procedures remain inside `JADE_PROCEDURE_DSL_V1`. There is no DSL primitive for arbitrary Python, shell/process execution, filesystem, network, imports/eval/exec, environment variables, clock or randomness. Skill-to-Skill dependencies remain disabled.
+
+The runtime enforces AST/value/output limits plus deterministic logical step and cost budgets. This is a restricted interpreter, not an OS/container sandbox for arbitrary native code.
+
+## Measured model bypass
+
+The Node Runtime wraps the actual Ollama model-list path and `/api/chat` path with process-local counters. Exact-family Skill lookup occurs immediately before the profiled Ollama call.
+
+For the formal proof, the post-restart request must show a real `ollama_calls_delta = 0`. Latency is not accepted as a proxy. The negative control must remove the active route and show that a comparable request causes counted model access again.
+
+The current Skill lookup is intentionally placed inside Node `brain_chat` for the cheapest proof. Android has already selected a node and acquired a Resource Lease at that point. Moving Skill dispatch upward into the task router is explicit post-proof debt.
+
+## Night-cycle crank
+
+The existing VPS Night Cycle now has one narrow 0.1.21 Skill-learning phase. It remains inert unless `learning_trial_enabled` is explicitly enabled.
+
+Before a teacher call, it requires Jade's identity, an uncovered exact family, at least three attested sealed datasets, and attestation records matching the exact commitments. It then opens the goal and delegates proposal, visible evaluation, final exam and retention to the existing bounded components.
+
+No arbitrary remote `skill_learn`, `skill_synthesis`, `sealed_skill_exam`, registry-mutation or procedure-execution task is exposed.
 
 ## Important limits
 
-Jade must not yet be confused with autonomous general learning.
+Jade must not yet be confused with autonomous general intelligence or unrestricted self-improvement.
 
-- only `DEVELOPER`-authored SkillSpecs are executable;
-- `EXTERNAL_TEACHER` and future generated SkillSpecs remain non-executable;
-- Skill-to-Skill dependencies are disabled;
-- there is no arbitrary Python, shell, process, filesystem, network, environment, clock or randomness primitive in the procedure DSL;
-- procedure execution is bounded by deterministic step/cost/value/output limits;
-- the Procedure Runtime is **not** exposed as an arbitrary remote task;
-- Skill Registry registration/activation is not automatic and activation requires explicit approval;
-- adaptive strategies still cannot automatically rewrite production code or mutate model weights;
-- the Android Evolution Engine is intentionally **not wired to autonomous proposal/testing/promotion** in 0.1.20.1;
-- the restricted interpreter is an in-process interpreter, **not** an OS/container security sandbox for hostile native code;
-- autonomous gap detection, Skill synthesis, promotion and broad recall remain future work.
-
-## Repository layout
-
-```text
-Jade-genesis/
-├── android/                 Native Android / Pixel application (Kotlin + Compose)
-├── node-agent/              Dependency-free Python runtime for PC/VPS nodes
-├── docs/                    Versioned architecture and learning-substrate notes
-├── .github/workflows/       Android and Node Runtime verification workflows
-├── .gitignore
-└── README.md
-```
-
-The Git repository is the canonical source of truth. Generated archives, APKs and CI logs belong in GitHub Actions artifacts or releases rather than beside current source files.
+- 0.1.21 learns one bounded procedural family, not arbitrary tasks;
+- the final live hard-restart proof has not yet been completed on the real VPS/Pixel path;
+- fuzzy Skill retrieval and broad confidence-based recall are not implemented;
+- Skill-to-Skill composition is disabled;
+- learned Skills cannot access shell/filesystem/network primitives;
+- model weights are not trained or mutated;
+- the Android Evolution Engine remains separate and does not autonomously rewrite production code;
+- the phone/VPS integration still depends on available authenticated nodes and cognitive backends.
 
 ## Architecture at a glance
 
 ```mermaid
 flowchart LR
-    A[Android / Pixel\nPersistent Jade identity] <-->|Authenticated node traffic| N[PC / VPS Node Runtime]
-    A <-->|Bounded sync / retry| S[Shared Genesis State]
-    N <-->|Durable replica| S
-    S --> E[Runtime Eval / Outcome Quality]
-    E --> L[Night Learning]
-    L --> R[Adaptive Strategy Registry]
-    E --> V[Verifiable Task Ledger]
-    V --> K[SkillSpec]
-    K --> P[Restricted Procedure Runtime]
-    P --> G[Developer Skill Registry]
-    M[Local / external models] -->|Cognitive resource, not identity| A
-    M -->|Cognitive resource, not identity| N
+    P[Pixel / Android\nidentity + real user interface] <-->|authenticated tasks| V[VPS Node Runtime\nworkshop + verifier]
+    P <-->|bounded shared state| S[Shared Genesis State]
+    V <--> S
+    E[Real task evidence] --> L[Verifiable Task Ledger]
+    L --> T[TRAIN / VALIDATION]
+    L --> H[hidden SEALED_TEST]
+    T --> M[External teacher\nproposal only]
+    M --> K[Restricted SkillSpec candidate]
+    K --> R[Procedure Runtime]
+    R --> H
+    H -->|PASS exact hash| A[Archive Skill Registry]
+    A --> Q[Production exact-family route]
+    Q -->|reuse before Ollama| V
 ```
 
 Detailed architecture: [`docs/ARCHITECTURE_OVERVIEW.md`](docs/ARCHITECTURE_OVERVIEW.md).
 
-## Cognitive plumbing hardening — 0.1.20.1
+## Version trajectory
 
-A code audit after 0.1.20 found several places where state existed but did not reliably reach later decisions. 0.1.20.1 fixes those paths before autonomous synthesis is enabled.
+- **0.1.19 — Verifiable Task Ledger + SkillSpec:** deterministic datasets and declarative procedure payload. Implemented.
+- **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry and one-shot hidden final exam. Implemented.
+- **0.1.20.1 — Cognitive Plumbing Hardening:** durable memory delivery, lifecycle cleanup, Shared State compaction and meaningful Evolution metrics. Implemented on `main`.
+- **0.1.21 — Verified Skill Synthesis Loop:** three-zone environment, bounded teacher, dataset reserve/attestation, Night Cycle crank, measured Skill reuse and Pixel real-traffic path. Mechanism implemented on this branch; live restart proof pending.
+- **0.1.22 — Retrieval/lifecycle quality:** only after 0.1.21's live proof; multiple-skill selection, confidence, abstention, regression/rollback and maintenance.
+- **0.1.23+ — Composition/generalisation:** controlled composition after the single-Skill causal model is proven.
 
-### Durable memory reaches the brain
+## Android / Node build versions
 
-`MemoryStore.latestForContext()` now reserves bounded slots for active USER facts and `JADE_CONSOLIDATION_*` knowledge before filling the remaining context with recent memories. `LocalPCBrain` preserves that ordering instead of pushing consolidated knowledge behind recent observations before truncation.
+Android uses Kotlin/Compose with JDK 17, Gradle 9.6.0, AGP 9.4.0, compile/target SDK 37 and minSdk 31. See [`android/README.md`](android/README.md).
 
-This means a busy stream of recent visual/operational memories can no longer automatically evict all consolidated knowledge from the model payload.
+The Node Runtime is dependency-free Python despite the historical directory name `node-agent`. See [`node-agent/README.md`](node-agent/README.md).
 
-### Memory lifecycle performs conservative cleanup
+Ordinary Android CI builds debug and unsigned release APKs. Stable signing is a separate explicit path; a green ordinary CI check is not evidence of stable signing.
 
-After a **successful consolidation**, exact textual duplicates in the processed batch can now be marked superseded. USER facts are never automatically superseded. Heuristic contradictions remain candidates only; they are not automatically deleted or declared false.
-
-Old transient `VISION_*` observations also use a separate compiled retention ceiling so the normal visual confidence value does not make temporary screenshots immortal after the configured retention period.
-
-### Shared State cache resists operational churn
-
-The phone cache now coalesces the latest operational snapshots by `(originNode, kind, entityId)` for the seven high-frequency snapshot kinds. Durable/non-operational events continue to deduplicate only by event ID. This prevents continuously regenerated snapshot UUIDs from consuming the entire bounded cache and preferentially evicting rarer Night Learning/VPS events.
-
-### Evolution metrics are no longer self-neutralizing
-
-Evolution evidence now has its own confidence curve: the 12-observation minimum gives only 0.5 confidence, the 0.75 gate is reached at 18 observations, and strong evidence reaches 1.0 at 24 observations.
-
-Runtime Eval also retains an **unsaturated `rawScore`** for Evolution comparison while keeping the normal display/routing score bounded to 0..100. A champion displayed at 100 can therefore still be compared to a genuinely better challenger instead of making `+2` mathematically impossible.
-
-These fixes make the guard rails meaningful, but they do **not** activate the dormant Evolution Engine automatically.
-
-See [`docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md`](docs/COGNITIVE_PLUMBING_HARDENING_0.1.20.1.md).
-
-## Learning trajectory
-
-The learning-related stack deliberately separates evidence, governance, executable capability and future autonomous acquisition:
+## Repository layout
 
 ```text
-experience
-  -> outcome
-  -> runtime evaluation
-  -> night consolidation
-  -> bounded strategy candidate
-  -> durable adaptive registry
-  -> verifiable task evidence
-  -> SkillSpec
-  -> restricted deterministic execution       [0.1.20]
-  -> developer-approved registry/reuse         [0.1.20]
-  -> cognitive plumbing hardening              [0.1.20.1]
-  -> frozen candidate + sealed final exam      [0.1.20 substrate]
-  -> autonomous synthesis + minimal recall     [future 0.1.21]
+Jade-genesis/
+├── android/
+├── node-agent/
+├── docs/
+├── .github/workflows/
+├── .gitignore
+└── README.md
 ```
 
-The first convincing autonomous-learning proof must require Jade to acquire a capability whose final SkillSpec body was not written by the developer, survive restart, retrieve that retained skill for a new matching task and execute it successfully without asking the teaching LLM to solve the task again.
-
-### SEALED_TEST anti-oracle boundary
-
-`SEALED_TEST` is treated as a final examination rather than iterative training feedback.
-
-- individual sealed cases cannot be queried through the normal case evaluator;
-- the hidden set is committed with a private random nonce;
-- a frozen SkillSpec must reference the exact sealed-set commitment;
-- the final exam executes the whole sealed set internally;
-- public feedback is aggregate `PASS/FAIL` only;
-- the first candidate consumes that sealed dataset;
-- a different candidate cannot retry against the same consumed hidden set;
-- replaying the exact same frozen spec is idempotent and does not rerun the hidden cases.
-
-The hidden cases still live in the local ledger state file, so future 0.1.21 synthesis must preserve a strict process/access boundary between the teacher/generator and the verifier-owned ledger.
-
-## Restricted Procedure Runtime — 0.1.20
-
-`node-agent/procedure_runtime.py` interprets only normalized `JADE_PROCEDURE_DSL_V1` ASTs. The language is intentionally small and deterministic: bounded JSON input/literals, object/array construction, field/index access, basic string transformations, arithmetic, comparisons, boolean operators and conditional execution.
-
-There are no loop, recursion, import, dynamic-code, shell, process, filesystem or network primitives. Skill-to-Skill dependencies are rejected.
-
-Execution reports deterministic resource accounting (`steps`, `cost_units`) and fails closed on invalid types, missing values, division/modulo by zero, non-finite numbers or resource-limit violations.
-
-See [`docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`](docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md).
-
-## Skill Registry
-
-The restricted Skill Registry persists approved developer procedures and proves the causal path:
-
-```text
-SkillSpec
--> explicit registration
--> explicit activation
--> exact task-family selection
--> restricted execution
--> deterministic result
--> persistence across restart
-```
-
-This registry is deliberately separate from the Adaptive Strategy Registry. It does not accept generated/external-teacher skills, does not fuzzy-match tasks and does not use an LLM for selection.
-
-## Android
-
-The Android application is native Kotlin/Jetpack Compose and currently uses:
-
-- JDK 17;
-- Gradle 9.6.0;
-- Android Gradle Plugin 9.4.0;
-- compileSdk / targetSdk 37;
-- minSdk 31;
-- application ID `com.jadegenesis.mobile`.
-
-See [`android/README.md`](android/README.md).
-
-### Android conversation status
-
-The phone application already exposes Jade's identity, UI, local state and distributed-node foundations. A fully usable everyday conversational brain is still dependent on an available/connected cognitive backend; when that path is unavailable the app can fall back to its minimal prototype behavior. A later integration milestone will make routing and brain availability clearer in the Android chat UI.
-
-## Build / reproducibility
-
-Canonical Android CI runs real tests and debug/release assembly with Gradle 9.6.0.
-
-```bash
-gradle --no-daemon --stacktrace --console=plain -p android \
-  :app:testDebugUnitTest \
-  :app:assembleDebug \
-  :app:assembleRelease
-```
-
-`android/gradle/wrapper/gradle-wrapper.properties` pins the Gradle 9.6.0 binary distribution and its official SHA-256 checksum. The repository still does **not** bundle `gradle-wrapper.jar`, so local command-line reproducibility is not yet perfect; use Android Studio or Gradle 9.6.0 matching CI until a complete verified wrapper is committed.
-
-Ordinary CI must not receive the stable signing keystore. Normal CI release APKs are therefore unsigned; stable signing is a separate explicit path.
-
-## PC / VPS Node Runtime
-
-The Node Runtime is Python and dependency-free. It is **not Node.js** despite the historical directory name `node-agent`.
-
-From `node-agent/`:
-
-```bash
-python3 jade_node_agent.py --node-kind VPS
-```
-
-On Windows:
-
-```powershell
-py jade_node_agent.py
-```
-
-Runtime configuration/state is stored under `~/.jade-genesis/` (or the equivalent user directory on Windows). Pairing secrets, signing material and private runtime state must never be committed.
-
-See [`node-agent/README.md`](node-agent/README.md).
-
-## CI and verification policy
-
-The repository validates Android and the dependency-free Python Node Runtime with GitHub Actions. A green check alone is not considered sufficient evidence for a release: verification should also confirm the exact commit, Android version/package/debuggable state, signing identity when applicable, evaluation results and that validation did not rewrite tracked sources.
-
-## Versioning and distribution
-
-Android versions are defined in `android/app/build.gradle.kts`.
-
-The project currently has no formal GitHub Releases. Long-term distribution should link:
-
-```text
-version -> Git tag -> exact source commit -> successful CI -> signed artifact -> SHA-256
-```
-
-## Roadmap
-
-- **0.1.19 — Verifiable Task Ledger + SkillSpec:** machine-verifiable datasets and declarative skill payload. Implemented.
-- **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry, exact-family reuse and sealed final-exam hardening. Implemented and validated on `main`.
-- **0.1.20.1 — Cognitive Plumbing Hardening:** durable memory delivery, conservative lifecycle cleanup, Shared State cache compaction and meaningful Evolution metrics. Current hardening milestone.
-- **0.1.21 — Skill Synthesis + minimal recall proof:** gap/goal, external teacher proposal, visible training/validation, frozen candidate, sealed exam, persistence, restart and reuse without an LLM solving the final task.
-- **0.1.22 — Retrieval quality / confidence / lifecycle:** multiple-skill selection, abstention, regression, rollback, pruning and maintenance.
-- **0.1.23+ — Composition / generalisation:** controlled Skill-to-Skill composition and broader transfer tests after the single-skill safety model is proven.
+The Git repository is the canonical source of truth. Generated APKs, logs and evaluation artifacts belong in Actions/release artifacts rather than the source tree.
 
 ## License
 
-No software license has been selected yet. The repository is public, but public visibility alone does **not** grant open-source reuse rights. A license/usage decision should be made explicitly before presenting Jade Genesis as an open-source project or inviting redistribution.
+No software license has been selected yet. The repository is public, but public visibility alone does **not** grant open-source reuse or redistribution rights. A formal license/usage decision remains to be made.
 
 ## Project status
 
-Jade Genesis is under active development. Documentation is updated as part of each meaningful version milestone. If documentation and code disagree, the exact source commit and verified implementation take precedence.
+Jade Genesis is under active development. Documentation is updated with meaningful milestones. If documentation and code disagree, the exact source commit and verified implementation take precedence.

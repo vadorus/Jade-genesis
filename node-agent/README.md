@@ -1,189 +1,190 @@
-# Jade Genesis — Distributed Node Runtime 0.1.7
+# Jade Genesis — Distributed Node Runtime 0.1.8
 
-The Node Runtime connects a PC or VPS to the same logical Jade Genesis identity. It remains dependency-free and keeps the compatible wire protocol `jade-genesis-node/0.0.6`.
+The dependency-free Python Node Runtime connects PC/VPS compute to the same persistent Jade Genesis identity while keeping the compatible wire protocol `jade-genesis-node/0.0.6`.
 
-The Node Runtime version is independent from the Android product version. Current Android product version on this branch is **0.1.20** (`versionCode 37`).
+Current Android product version on this branch is **0.1.21** (`versionCode 39`). Node and Android versions are independent.
 
 ## Start
 
-From the `node-agent` directory:
-
-```powershell
-py jade_node_agent.py
-```
-
-On Linux/VPS:
+From `node-agent/`:
 
 ```bash
 python3 jade_node_agent.py --node-kind VPS
 ```
 
-The node ID, pairing token, port, node kind and runtime configuration are persisted in `~/.jade-genesis/node-agent.json` (or `%USERPROFILE%\.jade-genesis\node-agent.json` on Windows). The token is not printed by default; `--show-token` is an explicit local administrative action.
-
-## Authenticated API
-
-Endpoints include:
-
-- `GET /health`
-- `GET /runtime`
-- `GET /diagnostics`
-- `GET /tasks/<task_id>`
-- `POST /task`
-- `POST /tasks`
-
-Allow-listed tasks include `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS replicas, `shared_state_sync`.
-
-The following are deliberately **not** exposed as arbitrary remote tasks in 0.1.20:
-
-- Night Learning execution;
-- Procedure Runtime execution;
-- Skill Registry registration/activation;
-- arbitrary shell/system commands.
-
-## Cognitive Brain Profiles
-
-Jade remains the persistent identity while local/external models are interchangeable cognitive resources. Requests can use bounded roles such as `FAST`, `GENERAL`, `REASONING`, `CODE` and `CRITIC`.
-
-The runtime can score already-installed Ollama models against role, size and available GPU VRAM. Small models remain usable as bounded fallback resources but are not treated as Jade's identity.
-
-Profile selection does not automatically download models, mutate model weights, grant privileges or expose shell execution.
-
-## Shared Genesis State
-
-On VPS nodes, the runtime maintains a durable operational-state replica in `~/.jade-genesis/genesis-state.json` plus a backup. Sync is identity-bound and idempotent by event ID.
-
-The Pixel keeps its own local cache/outbox. A VPS replica is not the owner of Jade's identity, and temporary VPS loss does not erase local Android state.
-
-## Night Cycle / Night Learning
-
-A VPS can run the bounded Night Cycle supervisor. It reviews durable state, Runtime Evaluation summaries and bounded evolution signals.
-
-Night Learning can produce research questions, hypotheses, experiment proposals and strategy hints. Those artifacts cannot automatically rewrite production code, mutate model weights or execute arbitrary commands.
-
-## Adaptive Strategy Registry — 0.1.18 substrate
-
-`adaptive_strategy_registry_v1` persists bounded strategy evidence and lifecycle metadata. It remains governance/adaptation infrastructure rather than proof of general learned behavior.
-
-Automatic activation, automatic promotion, code rewrite and model-weight mutation remain disabled.
-
-See `../docs/ADAPTIVE_STRATEGY_REGISTRY_0.1.18.md`.
-
-## Verifiable Task Ledger — hardened in 0.1.20
-
-`verifiable_task_ledger_v1` stores deterministic task cases in:
-
-- `TRAIN`
-- `VALIDATION`
-- hidden `SEALED_TEST`
-
-The hidden set is committed with a private random nonce. In 0.1.20, `SEALED_TEST` can no longer be queried through the interactive per-case evaluator.
-
-A final sealed exam:
-
-- requires the exact frozen SkillSpec commitment;
-- evaluates the whole hidden set internally;
-- exposes only aggregate `PASS/FAIL`;
-- consumes the sealed dataset for the first candidate;
-- rejects a different candidate after consumption;
-- returns an idempotent stored result for the exact same candidate without rerunning hidden cases.
-
-This blocks the obvious repeated-feedback oracle. It is not yet an OS-level secret enclave: the hidden data still physically exists in the verifier-owned local ledger file, so future synthesis must isolate generator access from that state.
-
-## SkillSpec v1 — 0.1.20 contract
-
-`SkillSpec` describes one closed declarative procedure with:
-
-- skill identity/version;
-- task family/domain;
-- input/output contracts;
-- `JADE_PROCEDURE_DSL_V1` AST body;
-- provenance;
-- evaluation policy;
-- stable body/spec hashes.
-
-Skill-to-Skill dependencies are deliberately disabled in 0.1.20 (`max_dependencies = 0`).
-
-The contract itself does not grant execution permission. Runtime policy decides which provenance kinds may execute.
-
-## Restricted Procedure Runtime — 0.1.20
-
-`procedure_runtime.py` is the first real executable SkillSpec substrate.
-
-Only `DEVELOPER`-authored SkillSpecs are executable in 0.1.20. `EXTERNAL_TEACHER` and future generated candidates remain blocked until the 0.1.21 synthesis/promotion boundary exists.
-
-The interpreter is deterministic and exposes no primitive for:
-
-- filesystem;
-- network;
-- shell/process;
-- imports/eval/exec;
-- environment variables;
-- clock/time;
-- randomness;
-- arbitrary Python/native code.
-
-Supported operations are intentionally small: bounded JSON input/literals, object/array construction, field/index lookup, string operations, arithmetic, comparison, boolean operators and `if`.
-
-Execution is bounded by:
-
-- AST validation limits;
-- logical step budget;
-- logical cost budget that grows with processed value size;
-- JSON depth/collection/string/output-size limits;
-- input/output contract checks;
-- fail-closed arithmetic/type errors.
-
-This is a restricted in-process interpreter, not an OS/container sandbox for hostile native code.
-
-## Developer Skill Registry — 0.1.20
-
-`skill_registry_v1` proves the first persistent causal execution path:
-
-```text
-DEVELOPER SkillSpec
--> register
--> explicit approved activation
--> exact task-family selection
--> restricted execution
--> deterministic result
--> persisted selection across restart
-```
-
-Properties:
-
-- only developer-authored SkillSpecs can be registered/activated;
-- activation requires explicit approval;
-- no automatic promotion;
-- no generated-skill registration/execution;
-- no fuzzy recall yet;
-- no LLM used for selection;
-- no Skill-to-Skill dependencies;
-- no network access by the registry.
-
-This registry is separate from the Adaptive Strategy Registry because an executable skill is a capability payload, not merely tuning metadata.
-
-## What 0.1.20 does NOT prove
-
-0.1.20 proves that Jade's runtime can persist, select and execute an approved deterministic procedure safely within the DSL boundary.
-
-It does **not** prove that Jade can autonomously acquire a new skill. The developer still authors/approves the executable SkillSpec. Autonomous gap detection, teacher proposal, candidate iteration, promotion and restart recall belong to 0.1.21+.
-
-See `../docs/RESTRICTED_PROCEDURE_RUNTIME_0.1.20.md`.
-
-## Resource and model telemetry
-
-Runtime 0.1.7 preserves CPU/task/RAM telemetry, NVIDIA GPU/VRAM telemetry when available, Ollama model state and measured generation throughput. Existing vision and asynchronous-task capabilities remain available.
-
-## Useful local commands
+On Windows:
 
 ```powershell
-py jade_node_agent.py --show-config
-py jade_node_agent.py --probe-ollama
-py jade_node_agent.py --show-token
+py jade_node_agent.py
 ```
 
-Use `--reset-token` only when intentionally rotating the pairing token; paired Android clients will then need the new token.
+Runtime configuration/state is stored under `~/.jade-genesis/` (or the Windows user equivalent). Pairing tokens and private runtime state must never be committed.
 
-## Safety / source-control note
+## Remote surface
 
-Do not commit pairing tokens, private keys, signing material, hidden task-ledger state or local runtime-state files. CI logs and generated release artifacts belong in GitHub Actions/artifacts rather than in the canonical source tree.
+Authenticated endpoints include health/runtime/diagnostics and bounded task execution. Existing allow-listed work includes `genesis_probe`, `text_analysis`, `memory_consolidation`, `brain_chat`, `screen_analyze`, `vision_analyze` and, on VPS, `shared_state_sync`.
+
+0.1.21 deliberately does **not** expose arbitrary remote tasks for:
+
+```text
+night_learning_lab
+procedure_execute
+skill_registry_mutate
+skill_synthesis
+skill_learn
+sealed_skill_exam
+shell/system execution
+```
+
+The first Skill-learning loop is turned only from the supervised VPS Night Cycle after its prerequisites are satisfied.
+
+## Cognitive resources
+
+Local language models remain interchangeable cognitive resources rather than Jade's identity. Runtime profiles include FAST, GENERAL, REASONING, CODE and CRITIC. Selection can consider installed Ollama models and available GPU VRAM without downloading models, mutating weights or escalating privileges.
+
+## 0.1.21 three-zone learning environment
+
+Canonical learning state is physically separated beneath the Jade configuration directory:
+
+```text
+production/
+  skill-routes.json
+
+workshop/
+  skill-learning-goals.json
+  candidates/
+
+archive/
+  skill-registry.json
+  verifiable-task-ledger.json
+  case-packs/
+  skill-attribution.jsonl
+```
+
+Production stores only active route references. Skill bodies and verifier evidence live in archive. Workshop state is disposable. Legacy flat files are migrated into canonical stores without deleting the legacy source during migration.
+
+`skill-attribution.jsonl` is append-only and hash chained. Usage is derived from recorded events rather than trusted as a mutable counter.
+
+## Verifiable Task Ledger / case packs
+
+The Ledger owns deterministic `TRAIN`, `VALIDATION` and hidden `SEALED_TEST` cases.
+
+`SEALED_TEST` remains a one-shot final exam:
+
+- individual hidden cases cannot be queried interactively;
+- the hidden set is committed with a private random nonce;
+- a frozen SkillSpec references the exact sealed commitment;
+- the whole hidden set is evaluated internally;
+- public feedback is aggregate PASS/FAIL only;
+- the first final candidate consumes the dataset even on failure;
+- another candidate cannot retry against that hidden set;
+- replay of the exact same candidate is idempotent.
+
+When the canonical 0.1.21 Ledger seals a dataset, it also writes an immutable archive case pack. Existing packs are verified rather than overwritten; tampering is detected.
+
+## Restricted Procedure Runtime
+
+`procedure_runtime.py` executes bounded `JADE_PROCEDURE_DSL_V1` procedures. The language has no primitive for filesystem, network, shell/process, imports/eval/exec, environment, clock, randomness or arbitrary native/Python code. Skill-to-Skill dependencies remain disabled.
+
+The general runtime does not simply trust generated/external-teacher procedures. 0.1.21 permits such an artifact to execute in two tightly controlled contexts only: verifier-owned visible/final evaluation and a persistent registry route whose exact SkillSpec hash already passed the sealed exam.
+
+## Verified Skill Registry
+
+`skill_registry.py` now separates archive from production routing.
+
+Developer Skills retain explicit approval. Learned `EXTERNAL_TEACHER` / `FUTURE_SYNTHESIS` Skills can enter the archive only when the Ledger proves that the exact frozen `spec_sha256` passed the matching hidden exam. Activation of learned procedures is limited to that verified gate.
+
+Selection remains exact by `task_family`; no fuzzy LLM selection or Skill-to-Skill dependency is used in 0.1.21.
+
+## Skill Synthesis Loop
+
+`skill_synthesis_loop.py` provides the causal acquisition core:
+
+```text
+missing exact-family Skill
+-> LearningGoal
+-> teacher proposal
+-> visible TRAIN/VALIDATION execution
+-> first all-visible-passing candidate frozen
+-> one-shot Ledger SEALED_TEST
+-> exact-hash verified retention
+-> production route
+```
+
+The teacher controls only descriptive metadata and the restricted DSL body. Jade owns provenance, evaluation policy, hidden commitment and activation.
+
+The teacher never receives SEALED_TEST inputs/answers or the private seal nonce.
+
+## Ollama teacher
+
+`ollama_skill_teacher.py` uses an installed CODE-profile Ollama model and accepts only `JADE_SKILL_TEACHER_REQUEST_V1`. The model may return only:
+
+```text
+skill_id
+description
+domain
+body
+```
+
+Attempts to return provenance, verifier policy, activation or other forbidden fields fail closed.
+
+## First real learning family
+
+0.1.21 intentionally starts with one boring deterministic family:
+
+`normalize_label_v1`
+
+The Android command `/normalize <text>` is tagged as explicit `REAL_USER` learning traffic and is routed to the VPS workshop. Each unique request can contribute one case until the family is learned.
+
+Dataset partition positions are fixed before the teacher:
+
+```text
+1 TRAIN
+2 TRAIN
+3 VALIDATION
+4 SEALED_TEST
+5 SEALED_TEST
+```
+
+Five cases seal one dataset. At least **three** independently sealed, externally attested and unconsumed datasets are required before the teacher can start.
+
+A failed hidden exam therefore burns one dataset without forcing hidden-set reuse or unsealing.
+
+## External seal attestation
+
+`learning_trial_protocol.py` requires each learning dataset's exact `sealed_set_sha256` to have an attribution record referencing evidence outside the learning workshop before a teacher call.
+
+The software verifies seal/hash/time ordering and requires an `external:` reference. It cannot cryptographically prove that a human-supplied external reference really points to an independent service; the formal trial must preserve that GitHub/runbook evidence separately.
+
+## Night-cycle crank
+
+`skill_learning_cycle.py` connects the first family to the existing VPS Night Cycle. It remains inert unless `learning_trial_enabled` is explicitly enabled.
+
+The cycle checks exact-family coverage, ingests configured external attestations, requires a three-dataset reserve, opens the LearningGoal, invokes the bounded CODE teacher, and delegates visible/final evaluation plus retention to the existing synthesis/Ledger components.
+
+Skill-learning failure is reported separately and does not invalidate work already completed by the main Night Cycle.
+
+## Measured reuse before Ollama
+
+The Node wrapper counts actual Ollama model-list calls and `/api/chat` calls. For a structured exact-family `brain_chat` request it checks the production Skill route immediately before the profiled Ollama path.
+
+A matching verified Skill can therefore return a deterministic result with measured `ollama_calls_delta = 0`. Missing/deactivated routes fall through to the normal counted model path.
+
+This is intentionally a proof-stage integration point. Android has already selected a node and acquired a Resource Lease by then. Moving Skill dispatch upward into the task router is explicit post-proof debt.
+
+## Formal live proof still required
+
+Repository CI proves the mechanism with isolated stores and fake teacher/model boundaries. 0.1.21 is not considered a demonstrated persistent acquisition until the live VPS/Pixel experiment performs:
+
+```text
+real traffic -> sealed+externally attested datasets -> teacher -> hidden exam pass
+-> retained route -> hard Node process restart -> genuinely new real input
+-> same production path selects Skill -> Ollama delta 0
+-> deactivate route -> comparable request returns to counted model path
+```
+
+See `../docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`.
+
+## Safety/source control
+
+Do not commit pairing tokens, private keys, signing material, private seal nonces, hidden case contents or local runtime-state files. Public sealed-set commitments are safe to publish for the experiment; hidden cases remain verifier-owned.

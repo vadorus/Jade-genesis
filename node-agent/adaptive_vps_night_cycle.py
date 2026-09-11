@@ -1,9 +1,10 @@
-"""0.1.18 adaptive layer for the bounded VPS Night Cycle.
+"""Adaptive layer for the bounded VPS Night Cycle.
 
-This wrapper preserves the proven 0.1.17 supervisor and adds one post-cycle
-operation: safe STRATEGY_HINT candidates are persisted in Jade's own adaptive
-strategy registry. Persisting evidence is not promotion. No strategy becomes
-active unless a separate explicit approval calls the registry promotion API.
+This wrapper preserves the proven supervisor, persists safe STRATEGY_HINT
+candidates, and in 0.1.21 adds one narrowly gated post-cycle crank for the first
+real Skill acquisition. Strategy persistence is still not strategy promotion.
+The Skill crank remains disabled unless explicitly enabled and cannot call a
+teacher until multiple sealed datasets have external hash attestations.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from adaptive_strategy_registry import (
     _GLOBAL_REGISTRY,
     adaptive_strategy_registry_status,
 )
+from skill_learning_cycle import run_first_learning_cycle, skill_learning_cycle_status
 from vps_night_cycle import (
     NightCycleJournal,
     VpsNightCycleSupervisor,
@@ -97,7 +99,7 @@ def _assert_safe_learning_snapshot(learning: dict[str, Any]) -> None:
 
 
 class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
-    """Preserve base Night Cycle behavior and persist bounded strategy evidence."""
+    """Preserve base Night Cycle behavior and add bounded post-cycle plumbing."""
 
     def __init__(
         self,
@@ -117,6 +119,7 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
         )
         self.strategy_registry = strategy_registry
         self._last_registry_result: dict[str, Any] = {}
+        self._last_skill_learning_result: dict[str, Any] = {}
 
     def status(self) -> dict[str, Any]:
         result = super().status()
@@ -136,6 +139,8 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
         result["strategy_activation_automatic"] = False
         result["strategy_promotion_automatic"] = False
         result["strategy_model_weight_mutation"] = False
+        result["skill_learning_cycle"] = skill_learning_cycle_status(self.config)
+        result["last_skill_learning_result"] = dict(self._last_skill_learning_result)
         return result
 
     def run_once(
@@ -180,7 +185,54 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
                 error=type(exc).__name__,
                 promotion_performed=False,
             )
+
+        try:
+            skill_learning = self._run_skill_learning_phase(result, now_ms=now_ms)
+            self._last_skill_learning_result = skill_learning
+            result["skill_learning_cycle_status"] = "OK"
+            result["skill_learning_cycle"] = skill_learning
+        except Exception as exc:
+            self._last_skill_learning_result = {
+                "status": "ERROR",
+                "error": type(exc).__name__,
+            }
+            result["skill_learning_cycle_status"] = "ERROR"
+            result["skill_learning_cycle_error"] = type(exc).__name__
+            result["skill_learning_cycle_teacher_unbounded"] = False
+            self._log(
+                "WARN",
+                "skill_learning_cycle_failed",
+                "Le cycle principal reste valide mais la manivelle Skill 0.1.21 a échoué.",
+                error=type(exc).__name__,
+            )
         return result
+
+    def _run_skill_learning_phase(
+        self,
+        cycle_result: dict[str, Any],
+        *,
+        now_ms: int | None,
+    ) -> dict[str, Any]:
+        view = self.state_store.supervision_view()
+        identity_id = str(view.get("identity_id", "")).strip()
+        if not identity_id:
+            return {
+                "status": "BLOCKED",
+                "reason": "shared_state_identity_unbound",
+                "teacher_called": False,
+            }
+        completed_at = max(
+            0,
+            _safe_int(
+                cycle_result.get("completed_at"),
+                _safe_int(now_ms, 0),
+            ),
+        )
+        return run_first_learning_cycle(
+            self.config,
+            identity_id,
+            now_ms=completed_at if completed_at > 0 else now_ms,
+        )
 
     def _persist_latest_strategy_candidates(
         self,
@@ -314,4 +366,5 @@ def supervisor_status(config: dict[str, Any]) -> dict[str, Any]:
         "strategy_activation_automatic": False,
         "strategy_promotion_automatic": False,
         "strategy_model_weight_mutation": False,
+        "skill_learning_cycle": skill_learning_cycle_status(config),
     }

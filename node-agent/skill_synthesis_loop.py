@@ -36,6 +36,21 @@ MAX_GOALS = 128
 MAX_CANDIDATES = 4
 MAX_ID_CHARS = 160
 MAX_REASON_CHARS = 800
+_SOURCE_SPEC_FIELDS = (
+    "schema_version",
+    "skill_id",
+    "skill_version",
+    "task_family",
+    "domain",
+    "description",
+    "input_contract",
+    "output_contract",
+    "body_kind",
+    "body",
+    "dependencies",
+    "provenance",
+    "evaluation_policy",
+)
 CONFIG_DIR = Path(
     os.environ.get("JADE_GENESIS_CONFIG_DIR", str(Path.home() / ".jade-genesis"))
 )
@@ -66,7 +81,16 @@ def _validate_goal_contract(raw: Any, name: str) -> dict[str, Any]:
     if any(key not in allowed for key in raw):
         raise ValueError(f"unsupported_{name}_contract_field")
     contract_type = str(raw.get("type", "any")).strip().lower()
-    allowed_types = {"any", "object", "array", "string", "number", "integer", "boolean", "null"}
+    allowed_types = {
+        "any",
+        "object",
+        "array",
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "null",
+    }
     if contract_type not in allowed_types:
         raise ValueError(f"unsupported_{name}_contract_type")
     required = raw.get("required_fields", [])
@@ -188,7 +212,11 @@ class LearningGoalStore:
         learning = ledger.learning_view(identity_id, dataset_id)
         if str(learning.get("task_family", "")) != family:
             raise ValueError("learning_dataset_family_mismatch")
-        partitions = {str(case.get("partition", "")) for case in learning.get("cases", []) if isinstance(case, dict)}
+        partitions = {
+            str(case.get("partition", ""))
+            for case in learning.get("cases", [])
+            if isinstance(case, dict)
+        }
         if "TRAIN" not in partitions or "VALIDATION" not in partitions:
             raise ValueError("learning_dataset_requires_train_and_validation")
         if not str(learning.get("sealed_set_sha256", "")):
@@ -286,7 +314,9 @@ class LearningGoalStore:
     def status(self) -> dict[str, Any]:
         with self.lock:
             state = self._load()
-            goals = [item for item in state.get("goals", {}).values() if isinstance(item, dict)]
+            goals = [
+                item for item in state.get("goals", {}).values() if isinstance(item, dict)
+            ]
             by_state: dict[str, int] = {}
             for goal in goals:
                 name = str(goal.get("state", "UNKNOWN"))
@@ -339,7 +369,9 @@ class SkillSynthesisLoop:
             "visible_cases": visible_cases,
             "previous_attempts": previous_attempts,
             "sealed_set_sha256": learning_view.get("sealed_set_sha256", ""),
-            "sealed_test_count": max(0, int(learning_view.get("sealed_test_count", 0))),
+            "sealed_test_count": max(
+                0, int(learning_view.get("sealed_test_count", 0))
+            ),
             "sealed_test_inputs_exposed": False,
             "sealed_test_answers_exposed": False,
             "seal_nonce_exposed": False,
@@ -375,8 +407,12 @@ class SkillSynthesisLoop:
             "skill_id": skill_id,
             "skill_version": 1,
             "task_family": goal["task_family"],
-            "domain": _clean_id(proposal.get("domain") or "verifiable_procedure", "domain"),
-            "description": _clean_reason(proposal.get("description") or goal.get("reason", ""))[:500],
+            "domain": _clean_id(
+                proposal.get("domain") or "verifiable_procedure", "domain"
+            ),
+            "description": _clean_reason(
+                proposal.get("description") or goal.get("reason", "")
+            )[:500],
             "input_contract": goal["input_contract"],
             "output_contract": goal["output_contract"],
             "body_kind": BODY_KIND,
@@ -390,12 +426,24 @@ class SkillSynthesisLoop:
             },
             "evaluation_policy": {
                 "verifier_kind": "exact_json_v1",
-                "sealed_set_sha256": str(learning_view.get("sealed_set_sha256", "")),
+                "sealed_set_sha256": str(
+                    learning_view.get("sealed_set_sha256", "")
+                ),
                 "min_pass_rate": 1.0,
                 "max_protected_failures": 0,
             },
         }
         return normalize_skill_spec(raw_spec)
+
+    @staticmethod
+    def _source_contract(candidate: dict[str, Any]) -> dict[str, Any]:
+        """Strip derived normalization fields without changing the frozen payload."""
+
+        source = {key: candidate[key] for key in _SOURCE_SPEC_FIELDS}
+        renormalized = normalize_skill_spec(source)
+        if renormalized != candidate:
+            raise ValueError("frozen_candidate_integrity_mismatch")
+        return source
 
     @staticmethod
     def _visible_evaluation(
@@ -475,7 +523,12 @@ class SkillSynthesisLoop:
         limit = min(MAX_CANDIDATES, max(1, int(max_candidates)))
         base_now = _now_ms() if now_ms is None else max(0, int(now_ms))
         previous_attempts: list[dict[str, Any]] = []
-        self.goals.update(identity_id, goal_id, {"state": "VISIBLE_TESTING"}, base_now)
+        self.goals.update(
+            identity_id,
+            goal_id,
+            {"state": "VISIBLE_TESTING"},
+            base_now,
+        )
 
         frozen: dict[str, Any] | None = None
         for index in range(limit):
@@ -541,6 +594,7 @@ class SkillSynthesisLoop:
                 "teacher_saw_sealed_test": False,
             }
 
+        frozen_source = self._source_contract(frozen)
         self.goals.update(
             identity_id,
             goal_id,
@@ -553,7 +607,7 @@ class SkillSynthesisLoop:
         exam = self.ledger.run_sealed_skill_exam(
             identity_id,
             goal["dataset_id"],
-            frozen,
+            frozen_source,
             now_ms=base_now + len(previous_attempts) + 1,
         )
         if not exam.get("verdict"):
@@ -578,7 +632,7 @@ class SkillSynthesisLoop:
 
         retained = self.registry.register_verified_skill(
             identity_id,
-            frozen,
+            frozen_source,
             ledger=self.ledger,
             dataset_id=goal["dataset_id"],
             activate=True,

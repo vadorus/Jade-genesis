@@ -55,7 +55,12 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         )
 
     @staticmethod
-    def developer_sum_skill(sealed_hash: str, *, bias: int = 0) -> dict:
+    def developer_sum_skill(
+        sealed_hash: str,
+        *,
+        bias: int = 0,
+        source_kind: str = "DEVELOPER",
+    ) -> dict:
         value_expr: dict = {
             "op": "add",
             "args": [
@@ -96,7 +101,7 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
             },
             "dependencies": [],
             "provenance": {
-                "source_kind": "DEVELOPER",
+                "source_kind": source_kind,
                 "source_id": "ledger-test",
                 "source_model": "",
                 "created_at": 1_000,
@@ -280,6 +285,30 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, result)
 
+    def test_external_teacher_candidate_can_run_only_in_sealed_exam(self) -> None:
+        self.add_three_partitions()
+        manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
+        skill = self.developer_sum_skill(
+            manifest["sealed_set_sha256"],
+            source_kind="EXTERNAL_TEACHER",
+        )
+        result = self.ledger.run_sealed_skill_exam(
+            self.identity,
+            self.dataset,
+            skill,
+            now_ms=2_100,
+        )
+        self.assertTrue(result["verdict"])
+        proof = self.ledger.verified_exam_for_candidate(
+            self.identity,
+            self.dataset,
+            result["candidate_spec_sha256"],
+        )
+        self.assertTrue(proof["verdict"])
+        self.assertEqual("synthetic_json_transform", proof["task_family"])
+        self.assertNotIn("passed_count", proof)
+        self.assertNotIn("expected_output", proof)
+
     def test_same_frozen_candidate_replay_is_idempotent(self) -> None:
         self.add_three_partitions()
         manifest = self.ledger.seal_dataset(self.identity, self.dataset, now_ms=2_000)
@@ -382,7 +411,9 @@ class VerifiableTaskLedgerTest(unittest.TestCase):
             "aggregate_pass_fail_only",
             status["sealed_final_exam_feedback"],
         )
-        self.assertFalse(status["learned_code_execution"])
+        self.assertTrue(status["generated_skill_exam_execution"])
+        self.assertFalse(status["generated_skill_general_execution"])
+        self.assertFalse(status["arbitrary_code_execution"])
 
 
 if __name__ == "__main__":

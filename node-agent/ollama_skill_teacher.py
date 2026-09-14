@@ -17,6 +17,7 @@ from skill_teacher_contract import REQUEST_KIND
 
 _ALLOWED_RESPONSE_FIELDS = frozenset({"skill_id", "description", "domain", "body"})
 MAX_TEACHER_TOKENS = 512
+TEACHER_TIMEOUT_SECONDS = 420.0
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -112,7 +113,7 @@ class OllamaSkillTeacher:
                 "options": options,
                 "format": "json",
             },
-            timeout=180.0,
+            timeout=TEACHER_TIMEOUT_SECONDS,
         )
         message = response.get("message", {})
         if not isinstance(message, dict):
@@ -130,6 +131,7 @@ class OllamaSkillTeacher:
             "call_count": self.call_count,
             "last_model": self.last_model,
             "max_teacher_tokens": MAX_TEACHER_TOKENS,
+            "teacher_timeout_seconds": TEACHER_TIMEOUT_SECONDS,
             "controls_provenance": False,
             "controls_verifier": False,
             "controls_sealed_partition": False,

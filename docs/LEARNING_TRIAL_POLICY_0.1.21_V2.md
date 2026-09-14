@@ -14,7 +14,7 @@ V2 is therefore a new explicit protocol revision, not a fifth candidate under V1
 
 ## What changes in V2
 
-Only the teacher-facing visible-learning contract changes:
+Only the teacher-facing visible-learning contract and its fail-closed liveness guards change:
 
 - request kind becomes `JADE_SKILL_TEACHER_REQUEST_V2`;
 - the request includes a machine-readable DSL grammar and operation semantics;
@@ -22,7 +22,8 @@ Only the teacher-facing visible-learning contract changes:
 - failed visible attempts return bounded TRAIN/VALIDATION-only diagnostics;
 - the previous proposed body is returned to the teacher so it can correct rather than blindly repeat it;
 - visible attempt diagnostics are persisted in workshop goal state for auditability;
-- teacher generation is bounded to 512 output tokens to prevent transport-liveness failures caused by runaway generation.
+- teacher generation is bounded to 512 output tokens to prevent transport-liveness failures caused by runaway generation;
+- a persisted `VISIBLE_TESTING` goal observed by a later Night Cycle is treated as an interrupted run and fails closed with no automatic teacher retry, so visible-attempt history and the candidate budget cannot be silently reset.
 
 The Ollama `/api/chat` transport timeout remains **420 seconds**, preserving the transport-only guard that was externally fixed during V1 before its later visible attempts. The shorter 512-token V2 generation cap is the actual new liveness bound; the timeout does not change model choice, prompt evidence, verifier behavior, hidden data, candidate semantics or the one-shot exam rule.
 
@@ -62,6 +63,8 @@ For protocol `0.1.21-first-acquisition-v2`:
 - any later attempt requires another explicit protocol revision and new precommitted rules.
 
 A visible-only failure before candidate freeze does not consume SEALED_TEST, but it also does not authorize silent retries under the same protocol after the candidate limit is reached.
+
+If a process or transport interruption leaves the V2 goal persisted as `VISIBLE_TESTING`, a later Night Cycle must return `GOAL_INTERRUPTED_MANUAL_REVIEW` without calling the teacher and without running SEALED_TEST. Recovery from that state is deliberately not automatic.
 
 ## Formal success chain
 

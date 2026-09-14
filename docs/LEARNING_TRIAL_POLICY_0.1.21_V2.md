@@ -24,6 +24,8 @@ Only the teacher-facing visible-learning contract changes:
 - visible attempt diagnostics are persisted in workshop goal state for auditability;
 - teacher generation is bounded to 512 output tokens to prevent transport-liveness failures caused by runaway generation.
 
+The Ollama `/api/chat` transport timeout remains **420 seconds**, preserving the transport-only guard that was externally fixed during V1 before its later visible attempts. The shorter 512-token V2 generation cap is the actual new liveness bound; the timeout does not change model choice, prompt evidence, verifier behavior, hidden data, candidate semantics or the one-shot exam rule.
+
 The verifier, hidden partition, seal hashes, partition plan, task oracle, production retention rule, one-shot hidden exam and post-restart causal proof remain unchanged.
 
 ## Hidden-data boundary

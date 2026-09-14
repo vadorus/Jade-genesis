@@ -45,7 +45,7 @@ from learning_trial_protocol import (
 )
 from ollama_skill_teacher import OllamaSkillTeacher
 
-GOAL_ID = "first-real-normalize-label-v1"
+GOAL_ID = "first-real-normalize-label-v2"
 
 
 def _truthy(value: Any) -> bool:
@@ -284,7 +284,7 @@ def run_first_learning_cycle(
         identity,
         GOAL_ID,
         teacher,
-        teacher_id="ollama-code-teacher-v1",
+        teacher_id="ollama-code-teacher-v2",
         source_model="ollama-code-profile",
         max_candidates=4,
         now_ms=now_ms,

@@ -62,6 +62,7 @@ jobs:
             node-agent/learning_stores.py \
             node-agent/skill_registry.py \
             node-agent/skill_synthesis_loop.py \
+            node-agent/skill_teacher_contract.py \
             node-agent/ollama_skill_teacher.py \
             node-agent/first_learning_family.py \
             node-agent/learning_trial_protocol.py \
@@ -227,6 +228,9 @@ jobs:
 
           synthesis = health["skill_synthesis"]
           assert synthesis["teacher_role"] == "proposal_only"
+          assert synthesis["teacher_request_kind"] == "JADE_SKILL_TEACHER_REQUEST_V2"
+          assert synthesis["visible_diagnostics_returned_to_teacher"] is True
+          assert synthesis["visible_attempts_persisted"] is True
           assert synthesis["teacher_controls_provenance"] is False
           assert synthesis["teacher_controls_verifier"] is False
           assert synthesis["teacher_controls_activation"] is False
@@ -247,7 +251,8 @@ jobs:
           assert environment["attribution_log_hash_chained"] is True
 
           night_skill = health["night_cycle_supervisor"]["skill_learning_cycle"]
-          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v1"
+          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v2"
+          assert night_skill["goal_id"] == "first-real-normalize-label-v2"
           assert night_skill["task_family"] == "normalize_label_v1"
           assert night_skill["minimum_ready_datasets"] == 3
           assert night_skill["requires_external_hash_attestation"] is True

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from ollama_skill_teacher import OllamaSkillTeacher
+from ollama_skill_teacher import MAX_TEACHER_TOKENS, OllamaSkillTeacher
+from skill_teacher_contract import REQUEST_KIND, teacher_dsl_contract
 
 
 class FakeCore:
@@ -42,7 +43,7 @@ class OllamaSkillTeacherTest(unittest.TestCase):
     @staticmethod
     def request() -> dict:
         return {
-            "request_kind": "JADE_SKILL_TEACHER_REQUEST_V1",
+            "request_kind": REQUEST_KIND,
             "goal_id": "goal-1",
             "task_family": "normalize_label_v1",
             "reason": "Normalize labels.",
@@ -50,6 +51,7 @@ class OllamaSkillTeacherTest(unittest.TestCase):
             "output_contract": {"type": "object", "required_fields": ["text"]},
             "body_kind": "JADE_PROCEDURE_DSL_V1",
             "allowed_ops": ["get", "literal", "lower", "object", "trim"],
+            "dsl_contract": teacher_dsl_contract(),
             "dependencies_allowed": False,
             "visible_cases": [
                 {
@@ -86,9 +88,22 @@ class OllamaSkillTeacherTest(unittest.TestCase):
         self.assertEqual(1, teacher.call_count)
         self.assertEqual("qwen2.5-coder:14b", teacher.last_model)
         self.assertTrue(core.last_payload["format"] == "json")
+        self.assertEqual(MAX_TEACHER_TOKENS, core.last_payload["options"]["num_predict"])
         system = core.last_payload["messages"][0]["content"]
+        self.assertIn("dsl_contract", system)
+        self.assertIn("previous_attempts", system)
         self.assertIn("provenance", system)
         self.assertIn("SEALED_TEST", system)
+
+    def test_teacher_requires_explicit_dsl_contract(self) -> None:
+        core = FakeCore('{}')
+        teacher = OllamaSkillTeacher({}, core)
+        request = self.request()
+        request.pop("dsl_contract")
+        with self.assertRaisesRegex(ValueError, "teacher_dsl_contract_required"):
+            teacher(request)
+        self.assertEqual(0, core.models_calls)
+        self.assertEqual(0, core.chat_calls)
 
     def test_teacher_rejects_forbidden_response_fields(self) -> None:
         core = FakeCore(

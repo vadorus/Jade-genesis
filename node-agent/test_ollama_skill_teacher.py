@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from ollama_skill_teacher import MAX_TEACHER_TOKENS, OllamaSkillTeacher
+from ollama_skill_teacher import (
+    MAX_TEACHER_TOKENS,
+    TEACHER_TIMEOUT_SECONDS,
+    OllamaSkillTeacher,
+)
 from skill_teacher_contract import REQUEST_KIND, teacher_dsl_contract
 
 
@@ -14,6 +18,7 @@ class FakeCore:
         self.models_calls = 0
         self.chat_calls = 0
         self.last_payload = None
+        self.last_timeout = None
 
     @staticmethod
     def normalize_ollama_url(value: str) -> str:
@@ -36,6 +41,7 @@ class FakeCore:
     def _json_request(self, url: str, *, method: str, payload: dict, timeout: float) -> dict:
         self.chat_calls += 1
         self.last_payload = payload
+        self.last_timeout = timeout
         return {"message": {"content": self.content}}
 
 
@@ -89,6 +95,7 @@ class OllamaSkillTeacherTest(unittest.TestCase):
         self.assertEqual("qwen2.5-coder:14b", teacher.last_model)
         self.assertTrue(core.last_payload["format"] == "json")
         self.assertEqual(MAX_TEACHER_TOKENS, core.last_payload["options"]["num_predict"])
+        self.assertEqual(TEACHER_TIMEOUT_SECONDS, core.last_timeout)
         system = core.last_payload["messages"][0]["content"]
         self.assertIn("dsl_contract", system)
         self.assertIn("previous_attempts", system)

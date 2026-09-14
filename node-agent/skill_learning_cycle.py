@@ -150,6 +150,44 @@ def _existing_goal(identity_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _interrupted_visible_goal_status(
+    goal: dict[str, Any] | None,
+    *,
+    ready_attested_dataset_count: int,
+) -> dict[str, Any] | None:
+    """Fail closed when a persisted VISIBLE_TESTING goal is re-entered.
+
+    A normal learning invocation transitions OPEN -> VISIBLE_TESTING internally
+    and completes within that same call. Observing VISIBLE_TESTING at the start
+    of a later Night Cycle therefore means the prior invocation was interrupted.
+    Automatic re-entry is forbidden so persisted attempts/candidate budget can
+    never be silently reset after a transport or process failure.
+    """
+
+    if not isinstance(goal, dict) or str(goal.get("state", "")) != "VISIBLE_TESTING":
+        return None
+    attempts = goal.get("visible_attempts", [])
+    if not isinstance(attempts, list):
+        attempts = []
+    try:
+        candidate_count = max(0, int(goal.get("candidate_count", 0)))
+    except (TypeError, ValueError):
+        candidate_count = len(attempts)
+    return {
+        "status": "GOAL_INTERRUPTED_MANUAL_REVIEW",
+        "reason": "visible_learning_interrupted_fail_closed",
+        "task_family": TASK_FAMILY,
+        "goal_id": GOAL_ID,
+        "goal_state": "VISIBLE_TESTING",
+        "candidate_count": candidate_count,
+        "persisted_visible_attempt_count": len(attempts),
+        "ready_attested_dataset_count": max(0, int(ready_attested_dataset_count)),
+        "automatic_retry_allowed": False,
+        "teacher_called": False,
+        "sealed_exam_run": False,
+    }
+
+
 def _gap_score(identity_id: str) -> dict[str, Any]:
     status = family_status(identity_id)
     frequency = max(
@@ -238,6 +276,13 @@ def run_first_learning_cycle(
     else:
         goal_state = str(goal.get("state", ""))
 
+    interrupted = _interrupted_visible_goal_status(
+        goal,
+        ready_attested_dataset_count=len(pool),
+    )
+    if interrupted is not None:
+        return interrupted
+
     if goal_state == "RETAINED":
         return {
             "status": "ALREADY_RETAINED",
@@ -255,7 +300,7 @@ def run_first_learning_cycle(
             "remaining_reserve_is_retry_budget": False,
             "teacher_called": False,
         }
-    if goal_state not in {"OPEN", "VISIBLE_TESTING"}:
+    if goal_state != "OPEN":
         return {
             "status": "GOAL_NOT_RETRYABLE",
             "task_family": TASK_FAMILY,
@@ -321,6 +366,7 @@ def skill_learning_cycle_status(config: dict[str, Any]) -> dict[str, Any]:
         ),
         "family_terminal_after_sealed_failure": FAMILY_TERMINAL_AFTER_SEALED_FAILURE,
         "remaining_reserve_is_retry_budget": False,
+        "visible_testing_reentry_auto_retry_allowed": False,
         "initial_acquisition_is_mastery_claim": False,
         "post_demo_confirmatory_fresh_datasets_required": (
             POST_DEMO_CONFIRMATORY_FRESH_DATASETS

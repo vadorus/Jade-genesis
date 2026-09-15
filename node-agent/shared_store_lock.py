@@ -9,6 +9,10 @@ for atomic replacement so concurrent writers never contend on one fixed `.tmp`.
 The lock is deliberately process-local. Production Night Cycle and HTTP request
 threads run in the same Node Runtime process; operator one-off maintenance
 processes must still avoid concurrent writes to the live runtime.
+
+Proof-critical stores use explicit private modes. Existing files are tightened
+in place without reading or rewriting their contents; newly replaced files are
+created with the requested mode before the atomic rename.
 """
 
 from __future__ import annotations
@@ -47,6 +51,29 @@ def _target_mode(path: Path) -> int:
         return 0o600
 
 
+def ensure_private_store_path(
+    path: Path | str,
+    *,
+    file_mode: int = 0o600,
+    directory_mode: int = 0o700,
+) -> None:
+    """Tighten one store and its sibling backup directory without reading data."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(target.parent, directory_mode)
+    except OSError:
+        pass
+    for candidate in (target, target.with_suffix(target.suffix + ".bak")):
+        if not candidate.exists():
+            continue
+        try:
+            os.chmod(candidate, file_mode)
+        except OSError:
+            pass
+
+
 def _fsync_parent(path: Path) -> None:
     """Best-effort directory fsync on platforms that support directory FDs."""
 
@@ -64,12 +91,17 @@ def _fsync_parent(path: Path) -> None:
         os.close(fd)
 
 
-def atomic_write_text(path: Path | str, content: str) -> None:
+def atomic_write_text(
+    path: Path | str,
+    content: str,
+    *,
+    mode: int | None = None,
+) -> None:
     """Write UTF-8 text through a unique sibling temp and os.replace()."""
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    mode = _target_mode(target)
+    target_mode = _target_mode(target) if mode is None else int(mode)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{target.name}.",
         suffix=".tmp",
@@ -82,7 +114,7 @@ def atomic_write_text(path: Path | str, content: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.chmod(temp, mode)
+            os.chmod(temp, target_mode)
         except OSError:
             pass
         os.replace(temp, target)
@@ -95,12 +127,17 @@ def atomic_write_text(path: Path | str, content: str) -> None:
         raise
 
 
-def atomic_write_bytes(path: Path | str, content: bytes) -> None:
+def atomic_write_bytes(
+    path: Path | str,
+    content: bytes,
+    *,
+    mode: int | None = None,
+) -> None:
     """Write bytes through a unique sibling temp and os.replace()."""
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    mode = _target_mode(target)
+    target_mode = _target_mode(target) if mode is None else int(mode)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{target.name}.",
         suffix=".tmp",
@@ -113,7 +150,7 @@ def atomic_write_bytes(path: Path | str, content: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         try:
-            os.chmod(temp, mode)
+            os.chmod(temp, target_mode)
         except OSError:
             pass
         os.replace(temp, target)
@@ -126,5 +163,10 @@ def atomic_write_bytes(path: Path | str, content: bytes) -> None:
         raise
 
 
-def atomic_copy_file(source: Path | str, destination: Path | str) -> None:
-    atomic_write_bytes(destination, Path(source).read_bytes())
+def atomic_copy_file(
+    source: Path | str,
+    destination: Path | str,
+    *,
+    mode: int | None = None,
+) -> None:
+    atomic_write_bytes(destination, Path(source).read_bytes(), mode=mode)

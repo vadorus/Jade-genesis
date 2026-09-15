@@ -10,19 +10,21 @@ pack whenever a dataset becomes sealed. The materialized ledger may evolve, but
 the sealed evidence behind an exam is preserved under archive/case-packs/.
 
 Production factories deliberately share one re-entrant lock per canonical file
-path. Reopening a store must not create an independent lock around the same JSON
-file. The archive ledger also uses unique atomic replacement files so concurrent
-writers never fight over one fixed `.tmp` pathname.
+path. Proof-critical reads fail closed: neither a transient OSError nor readable
+corruption may silently restore revision N-1 from a backup. Backups are retained
+for explicit operator recovery only.
 """
 
 from __future__ import annotations
 
-import json
+import shutil
 from pathlib import Path
 from typing import Any
 
+import skill_registry as _skill_registry_module
 from case_pack_archive import archive_sealed_case_pack
 from learning_environment import (
+    ARCHIVE_ATTRIBUTION_LOG_PATH,
     ARCHIVE_SKILL_REGISTRY_PATH,
     ARCHIVE_TASK_LEDGER_PATH,
     CONFIG_DIR,
@@ -30,9 +32,18 @@ from learning_environment import (
     WORKSHOP_GOALS_PATH,
     ensure_learning_environment,
 )
-from shared_store_lock import atomic_copy_file, atomic_write_text, shared_path_lock
-from skill_registry import SkillRegistry
-from skill_synthesis_loop import LearningGoalStore, SkillSynthesisLoop
+from proof_store_hardening import (
+    HardenedLearningGoalStore,
+    HardenedSkillRegistry,
+    secure_json_save,
+    strict_json_load,
+)
+from resilient_skill_synthesis import ResilientSkillSynthesisLoop
+from shared_store_lock import (
+    atomic_copy_file,
+    ensure_private_store_path,
+    shared_path_lock,
+)
 from verifiable_task_ledger import VerifiableTaskLedger
 
 LEGACY_TASK_LEDGER_PATH = CONFIG_DIR / "verifiable-task-ledger.json"
@@ -47,46 +58,37 @@ def _migrate_file_once(source: Path, destination: Path) -> bool:
         if destination.exists() or not source.exists():
             return False
         destination.parent.mkdir(parents=True, exist_ok=True)
-        atomic_copy_file(source, destination)
+        atomic_copy_file(source, destination, mode=0o600)
+        ensure_private_store_path(destination)
         return True
 
 
 class ArchiveVerifiableTaskLedger(VerifiableTaskLedger):
-    """Canonical verifier ledger with shared locking and write-once case packs."""
+    """Canonical verifier ledger with shared locking and fail-closed reads."""
 
     def __init__(self, path: Path = ARCHIVE_TASK_LEDGER_PATH):
         super().__init__(path)
         self.lock = shared_path_lock(self.path)
+        ensure_private_store_path(self.path)
+
+    @staticmethod
+    def _valid_state(raw: dict[str, Any]) -> bool:
+        return (
+            raw.get("schema_version") == 1
+            and isinstance(raw.get("datasets", {}), dict)
+            and isinstance(raw.get("attempts", []), list)
+        )
 
     def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return self._empty()
-        primary = self._decode(self.path)
-        if primary is not None:
-            return primary
-        backup = self._decode(self.backup_path)
-        if backup is not None:
-            try:
-                atomic_copy_file(self.backup_path, self.path)
-            except OSError:
-                pass
-            return backup
-        raise RuntimeError("verifiable_task_ledger_corrupt")
+        return strict_json_load(
+            self.path,
+            empty_factory=self._empty,
+            validator=self._valid_state,
+            error_prefix="verifiable_task_ledger",
+        )
 
     def _save(self, state: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        encoded = json.dumps(
-            state,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        if self.path.exists() and self._decode(self.path) is not None:
-            try:
-                atomic_copy_file(self.path, self.backup_path)
-            except OSError:
-                pass
-        atomic_write_text(self.path, encoded)
+        secure_json_save(self.path, self.backup_path, state)
 
     def seal_dataset(
         self,
@@ -113,33 +115,28 @@ def open_archive_ledger() -> ArchiveVerifiableTaskLedger:
     return ArchiveVerifiableTaskLedger(ARCHIVE_TASK_LEDGER_PATH)
 
 
-def open_workshop_goals() -> LearningGoalStore:
+def open_workshop_goals() -> HardenedLearningGoalStore:
     ensure_learning_environment()
     _migrate_file_once(LEGACY_LEARNING_GOALS_PATH, WORKSHOP_GOALS_PATH)
-    lock = shared_path_lock(WORKSHOP_GOALS_PATH)
-    with lock:
-        goals = LearningGoalStore(WORKSHOP_GOALS_PATH)
-        goals.lock = lock
-        return goals
+    return HardenedLearningGoalStore(WORKSHOP_GOALS_PATH)
 
 
-def open_archive_skill_registry() -> SkillRegistry:
+def open_archive_skill_registry() -> HardenedSkillRegistry:
     ensure_learning_environment()
-    # SkillRegistry owns its own legacy migration because its old file also
-    # contained production routes that now need to be split safely. Serialize
-    # construction as well because migration itself may write both files.
-    registry_lock = shared_path_lock(ARCHIVE_SKILL_REGISTRY_PATH)
-    route_lock = shared_path_lock(PRODUCTION_SKILL_ROUTES_PATH)
-    with registry_lock:
-        with route_lock:
-            registry = SkillRegistry()
-            registry.lock = registry_lock
-            registry.routes.lock = route_lock
-            return registry
+    registry = HardenedSkillRegistry(
+        ARCHIVE_SKILL_REGISTRY_PATH,
+        route_path=PRODUCTION_SKILL_ROUTES_PATH,
+        attribution_path=ARCHIVE_ATTRIBUTION_LOG_PATH,
+    )
+    # skill_registry_status() owns a module-global instance created during its
+    # import. Point it at the same hardened implementation so /health cannot
+    # bypass shared locking or fail-closed read semantics.
+    _skill_registry_module._GLOBAL_SKILL_REGISTRY = registry
+    return registry
 
 
-def open_skill_synthesis_loop() -> SkillSynthesisLoop:
-    return SkillSynthesisLoop(
+def open_skill_synthesis_loop() -> ResilientSkillSynthesisLoop:
+    return ResilientSkillSynthesisLoop(
         open_archive_ledger(),
         open_archive_skill_registry(),
         open_workshop_goals(),
@@ -161,7 +158,12 @@ def zone_store_status() -> dict[str, Any]:
         "skill_archive_separate_from_production": registry.path != registry.routes.path,
         "sealed_case_pack_write_once": True,
         "shared_lock_per_canonical_path": True,
+        "proof_store_reads_fail_closed": True,
+        "automatic_backup_rollback": False,
         "ledger_unique_atomic_temp": True,
+        "proof_store_private_mode": True,
+        "frozen_candidate_persisted_before_exam": True,
+        "registry_preflight_before_exam": True,
         "legacy_ledger_preserved": LEGACY_TASK_LEDGER_PATH.exists(),
         "legacy_goals_preserved": LEGACY_LEARNING_GOALS_PATH.exists(),
     }

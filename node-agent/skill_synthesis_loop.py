@@ -30,12 +30,14 @@ from typing import Any, Callable
 
 from procedure_runtime import execute_skill
 from skill_spec import ALLOWED_OPS, BODY_KIND, normalize_skill_spec
+from skill_teacher_contract import REQUEST_KIND, teacher_dsl_contract
 
 SCHEMA_VERSION = 1
 MAX_GOALS = 128
 MAX_CANDIDATES = 4
 MAX_ID_CHARS = 160
 MAX_REASON_CHARS = 800
+MAX_FEEDBACK_BODY_BYTES = 8_192
 _SOURCE_SPEC_FIELDS = (
     "schema_version",
     "skill_id",
@@ -242,6 +244,7 @@ class LearningGoalStore:
                 "output_contract": output_contract,
                 "state": "OPEN",
                 "candidate_count": 0,
+                "visible_attempts": [],
                 "selected_spec_sha256": "",
                 "sealed_exam_id": "",
                 "retained_skill_id": "",
@@ -275,6 +278,7 @@ class LearningGoalStore:
         allowed = {
             "state",
             "candidate_count",
+            "visible_attempts",
             "selected_spec_sha256",
             "sealed_exam_id",
             "retained_skill_id",
@@ -296,6 +300,9 @@ class LearningGoalStore:
 
     @staticmethod
     def _public(goal: dict[str, Any]) -> dict[str, Any]:
+        attempts = goal.get("visible_attempts", [])
+        if not isinstance(attempts, list):
+            attempts = []
         return {
             "goal_id": goal.get("goal_id", ""),
             "task_family": goal.get("task_family", ""),
@@ -303,6 +310,7 @@ class LearningGoalStore:
             "reason": goal.get("reason", ""),
             "state": goal.get("state", ""),
             "candidate_count": max(0, int(goal.get("candidate_count", 0))),
+            "visible_attempts": json.loads(json.dumps(attempts)),
             "selected_spec_sha256": goal.get("selected_spec_sha256", ""),
             "sealed_exam_id": goal.get("sealed_exam_id", ""),
             "retained_skill_id": goal.get("retained_skill_id", ""),
@@ -357,7 +365,7 @@ class SkillSynthesisLoop:
             and case.get("partition") in {"TRAIN", "VALIDATION"}
         ]
         return {
-            "request_kind": "JADE_SKILL_TEACHER_REQUEST_V1",
+            "request_kind": REQUEST_KIND,
             "goal_id": goal["goal_id"],
             "task_family": goal["task_family"],
             "reason": goal.get("reason", ""),
@@ -365,6 +373,7 @@ class SkillSynthesisLoop:
             "output_contract": goal["output_contract"],
             "body_kind": BODY_KIND,
             "allowed_ops": sorted(ALLOWED_OPS),
+            "dsl_contract": teacher_dsl_contract(),
             "dependencies_allowed": False,
             "visible_cases": visible_cases,
             "previous_attempts": previous_attempts,
@@ -446,41 +455,77 @@ class SkillSynthesisLoop:
         return source
 
     @staticmethod
+    def _proposal_feedback_body(proposal: Any) -> dict[str, Any] | None:
+        if not isinstance(proposal, dict) or not isinstance(proposal.get("body"), dict):
+            return None
+        encoded = json.dumps(
+            proposal["body"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if len(encoded.encode("utf-8")) > MAX_FEEDBACK_BODY_BYTES:
+            return {"omitted": "proposal_body_too_large"}
+        return json.loads(encoded)
+
+    @staticmethod
     def _visible_evaluation(
         candidate: dict[str, Any],
         learning_view: dict[str, Any],
     ) -> dict[str, Any]:
-        summary = {
+        summary: dict[str, Any] = {
             "TRAIN": {"passed": 0, "total": 0, "execution_failures": 0},
             "VALIDATION": {"passed": 0, "total": 0, "execution_failures": 0},
+            "visible_failures": [],
         }
         for case in learning_view.get("cases", []):
             if not isinstance(case, dict):
                 continue
             partition = str(case.get("partition", ""))
-            if partition not in summary:
+            if partition not in {"TRAIN", "VALIDATION"}:
                 continue
             summary[partition]["total"] += 1
+            expected = case.get("expected_output")
             try:
                 execution = execute_skill(
                     candidate,
                     case.get("input"),
                     allowed_source_kinds={"EXTERNAL_TEACHER", "FUTURE_SYNTHESIS"},
                 )
+                actual = execution["result"]
                 passed = json.dumps(
-                    execution["result"],
+                    actual,
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
                 ) == json.dumps(
-                    case.get("expected_output"),
+                    expected,
                     ensure_ascii=False,
                     separators=(",", ":"),
                     sort_keys=True,
                 )
-            except Exception:
+                if not passed:
+                    summary["visible_failures"].append(
+                        {
+                            "case_id": case.get("case_id", ""),
+                            "partition": partition,
+                            "failure_kind": "OUTPUT_MISMATCH",
+                            "expected_output": expected,
+                            "actual_output": actual,
+                        }
+                    )
+            except Exception as exc:
                 passed = False
                 summary[partition]["execution_failures"] += 1
+                summary["visible_failures"].append(
+                    {
+                        "case_id": case.get("case_id", ""),
+                        "partition": partition,
+                        "failure_kind": "EXECUTION_ERROR",
+                        "error_type": type(exc).__name__,
+                        "error_code": str(exc)[:240],
+                    }
+                )
             if passed:
                 summary[partition]["passed"] += 1
         for partition in ("TRAIN", "VALIDATION"):
@@ -526,7 +571,7 @@ class SkillSynthesisLoop:
         self.goals.update(
             identity_id,
             goal_id,
-            {"state": "VISIBLE_TESTING"},
+            {"state": "VISIBLE_TESTING", "visible_attempts": []},
             base_now,
         )
 
@@ -534,6 +579,7 @@ class SkillSynthesisLoop:
         for index in range(limit):
             request = self._teacher_request(goal, learning_view, previous_attempts)
             proposal = teacher(json.loads(json.dumps(request)))
+            proposal_body = self._proposal_feedback_body(proposal)
             try:
                 candidate = self._build_candidate(
                     goal,
@@ -547,12 +593,14 @@ class SkillSynthesisLoop:
                 feedback = {
                     "candidate_number": index + 1,
                     "candidate_spec_sha256": candidate["spec_sha256"],
+                    "proposal_body": proposal_body,
                     "train_pass_rate": visible["TRAIN"]["pass_rate"],
                     "validation_pass_rate": visible["VALIDATION"]["pass_rate"],
                     "visible_execution_failures": (
                         visible["TRAIN"]["execution_failures"]
                         + visible["VALIDATION"]["execution_failures"]
                     ),
+                    "visible_failures": visible["visible_failures"],
                     "all_visible_passed": bool(visible["all_visible_passed"]),
                 }
             except Exception as exc:
@@ -560,17 +608,23 @@ class SkillSynthesisLoop:
                 feedback = {
                     "candidate_number": index + 1,
                     "candidate_spec_sha256": "",
+                    "proposal_body": proposal_body,
                     "train_pass_rate": 0.0,
                     "validation_pass_rate": 0.0,
                     "visible_execution_failures": 1,
+                    "visible_failures": [],
                     "all_visible_passed": False,
                     "proposal_rejected": type(exc).__name__,
+                    "proposal_error": str(exc)[:240],
                 }
             previous_attempts.append(feedback)
             self.goals.update(
                 identity_id,
                 goal_id,
-                {"candidate_count": index + 1},
+                {
+                    "candidate_count": index + 1,
+                    "visible_attempts": previous_attempts,
+                },
                 base_now + index,
             )
             if candidate is not None and feedback["all_visible_passed"]:
@@ -624,6 +678,7 @@ class SkillSynthesisLoop:
                 "goal_id": goal_id,
                 "state": "SEALED_FAILED",
                 "candidate_count": len(previous_attempts),
+                "visible_attempts": previous_attempts,
                 "selected_spec_sha256": frozen["spec_sha256"],
                 "sealed_exam": exam,
                 "skill_retained": False,
@@ -653,6 +708,7 @@ class SkillSynthesisLoop:
             "goal_id": goal_id,
             "state": "RETAINED",
             "candidate_count": len(previous_attempts),
+            "visible_attempts": previous_attempts,
             "selected_spec_sha256": frozen["spec_sha256"],
             "sealed_exam": exam,
             "retained_skill": retained,
@@ -673,10 +729,13 @@ def skill_synthesis_status(goals: LearningGoalStore | None = None) -> dict[str, 
         "schema_version": SCHEMA_VERSION,
         "learning_goal_store": goal_status,
         "teacher_role": "proposal_only",
+        "teacher_request_kind": REQUEST_KIND,
         "teacher_controls_provenance": False,
         "teacher_controls_verifier": False,
         "teacher_controls_activation": False,
         "visible_iteration_partitions": ["TRAIN", "VALIDATION"],
+        "visible_diagnostics_returned_to_teacher": True,
+        "visible_attempts_persisted": True,
         "sealed_test_visible_to_teacher": False,
         "sealed_test_final_exam_single_use": True,
         "candidate_dependencies_allowed": False,

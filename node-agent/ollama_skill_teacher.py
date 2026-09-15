@@ -1,7 +1,7 @@
 """Bounded Ollama teacher adapter for Jade Genesis 0.1.21.
 
 The teacher is deliberately weaker than the verifier. It receives only the
-JADE_SKILL_TEACHER_REQUEST_V1 visible learning request and may return only four
+JADE_SKILL_TEACHER_REQUEST_V2 visible learning request and may return only four
 proposal fields: skill_id, description, domain and body. Provenance, verifier
 policy, sealed commitment, dependencies and activation are owned by Jade's
 SkillSynthesisLoop and cannot be supplied by the model.
@@ -13,8 +13,11 @@ import json
 from typing import Any
 
 from brain_profiles import profile_options, select_profile_model
+from skill_teacher_contract import REQUEST_KIND
 
 _ALLOWED_RESPONSE_FIELDS = frozenset({"skill_id", "description", "domain", "body"})
+MAX_TEACHER_TOKENS = 512
+TEACHER_TIMEOUT_SECONDS = 420.0
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -54,8 +57,10 @@ class OllamaSkillTeacher:
         self.call_count = 0
 
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(request, dict) or request.get("request_kind") != "JADE_SKILL_TEACHER_REQUEST_V1":
+        if not isinstance(request, dict) or request.get("request_kind") != REQUEST_KIND:
             raise ValueError("teacher_request_kind_invalid")
+        if not isinstance(request.get("dsl_contract"), dict):
+            raise ValueError("teacher_dsl_contract_required")
         if request.get("sealed_test_inputs_exposed") is not False:
             raise PermissionError("teacher_sealed_inputs_must_remain_hidden")
         if request.get("sealed_test_answers_exposed") is not False:
@@ -77,11 +82,16 @@ class OllamaSkillTeacher:
         system = (
             "Tu es un professeur de procédures Jade Genesis. Réponds avec UN objet JSON brut, "
             "sans markdown et sans texte autour. Champs autorisés uniquement: skill_id, "
-            "description, domain, body. body doit être un AST JADE_PROCEDURE_DSL_V1 utilisant "
-            "uniquement allowed_ops. Tu ne contrôles jamais provenance, dependencies, "
-            "evaluation_policy, sealed_set_sha256, activation ou verdict. Utilise seulement les "
-            "cas TRAIN/VALIDATION visibles. Ne devine jamais les cas SEALED_TEST."
+            "description, domain, body. Le champ dsl_contract décrit exactement la grammaire, "
+            "l'arité et la sémantique de JADE_PROCEDURE_DSL_V1; respecte-le littéralement et "
+            "utilise uniquement allowed_ops. Les generic_examples montrent seulement la syntaxe, "
+            "pas la solution de la tâche. previous_attempts contient uniquement des diagnostics "
+            "TRAIN/VALIDATION visibles: corrige les erreurs signalées au lieu de répéter le même "
+            "AST. Tu ne contrôles jamais provenance, dependencies, evaluation_policy, "
+            "sealed_set_sha256, activation ou verdict. Ne devine jamais les cas SEALED_TEST."
         )
+        options = dict(profile_options("code"))
+        options["num_predict"] = MAX_TEACHER_TOKENS
         response = self.core._json_request(
             f"{base}/api/chat",
             method="POST",
@@ -100,10 +110,10 @@ class OllamaSkillTeacher:
                         ),
                     },
                 ],
-                "options": profile_options("code"),
+                "options": options,
                 "format": "json",
             },
-            timeout=180.0,
+            timeout=TEACHER_TIMEOUT_SECONDS,
         )
         message = response.get("message", {})
         if not isinstance(message, dict):
@@ -116,9 +126,12 @@ class OllamaSkillTeacher:
     def status(self) -> dict[str, Any]:
         return {
             "teacher_kind": "ollama_code_profile",
+            "request_kind": REQUEST_KIND,
             "proposal_only": True,
             "call_count": self.call_count,
             "last_model": self.last_model,
+            "max_teacher_tokens": MAX_TEACHER_TOKENS,
+            "teacher_timeout_seconds": TEACHER_TIMEOUT_SECONDS,
             "controls_provenance": False,
             "controls_verifier": False,
             "controls_sealed_partition": False,

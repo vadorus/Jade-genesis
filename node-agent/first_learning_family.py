@@ -108,75 +108,81 @@ def record_real_case(
     *,
     now_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Add one unique real production input to the next pre-partitioned dataset."""
+    """Atomically enroll one unique real input into the fixed partition stream.
+
+    Duplicate detection, dataset selection/creation, position assignment, case
+    insertion and optional sealing are one transaction under the canonical
+    ledger RLock. Every factory instance for the same path shares that lock.
+    """
 
     expected = expected_output(input_value)
     ledger = open_archive_ledger()
-    datasets = _family_datasets(ledger, identity_id)
-    if _input_already_used(datasets, input_value):
-        return {
-            "recorded": False,
-            "reason": "duplicate_real_input",
+    sealed_event_payload: dict[str, Any] | None = None
+
+    with ledger.lock:
+        datasets = _family_datasets(ledger, identity_id)
+        if _input_already_used(datasets, input_value):
+            return {
+                "recorded": False,
+                "reason": "duplicate_real_input",
+                "task_family": TASK_FAMILY,
+            }
+
+        current = next(
+            (
+                item
+                for item in reversed(datasets)
+                if item.get("sealed") is not True
+                and len(item.get("cases", {})) < CASES_PER_DATASET
+            ),
+            None,
+        )
+        if current is None:
+            dataset_id = _next_dataset_id(datasets)
+            ledger.create_dataset(identity_id, dataset_id, TASK_FAMILY, now_ms=now_ms)
+            position = 0
+        else:
+            dataset_id = str(current["dataset_id"])
+            position = len(current.get("cases", {}))
+
+        if position < 0 or position >= CASES_PER_DATASET:
+            raise RuntimeError("normalize_label_dataset_position_invalid")
+        partition = PARTITION_PLAN[position]
+        case_id = f"real-{position + 1:02d}"
+        ledger.add_case(
+            identity_id,
+            dataset_id,
+            case_id,
+            partition,
+            input_value,
+            expected,
+            source="real_production_brain_chat",
+            now_ms=now_ms,
+        )
+        result: dict[str, Any] = {
+            "recorded": True,
             "task_family": TASK_FAMILY,
+            "dataset_id": dataset_id,
+            "case_id": case_id,
+            "partition": partition,
+            "dataset_sealed": False,
+            "real_production_traffic": True,
         }
 
-    current = next(
-        (
-            item
-            for item in reversed(datasets)
-            if item.get("sealed") is not True
-            and len(item.get("cases", {})) < CASES_PER_DATASET
-        ),
-        None,
-    )
-    if current is None:
-        dataset_id = _next_dataset_id(datasets)
-        ledger.create_dataset(identity_id, dataset_id, TASK_FAMILY, now_ms=now_ms)
-        position = 0
-    else:
-        dataset_id = str(current["dataset_id"])
-        position = len(current.get("cases", {}))
-
-    if position < 0 or position >= CASES_PER_DATASET:
-        raise RuntimeError("normalize_label_dataset_position_invalid")
-    partition = PARTITION_PLAN[position]
-    case_id = f"real-{position + 1:02d}"
-    ledger.add_case(
-        identity_id,
-        dataset_id,
-        case_id,
-        partition,
-        input_value,
-        expected,
-        source="real_production_brain_chat",
-        now_ms=now_ms,
-    )
-    result: dict[str, Any] = {
-        "recorded": True,
-        "task_family": TASK_FAMILY,
-        "dataset_id": dataset_id,
-        "case_id": case_id,
-        "partition": partition,
-        "dataset_sealed": False,
-        "real_production_traffic": True,
-    }
-
-    if position + 1 == CASES_PER_DATASET:
-        manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
-        result.update(
-            {
-                "dataset_sealed": True,
-                "sealed_set_sha256": manifest["sealed_set_sha256"],
-                "sealed_test_count": manifest["sealed_test_count"],
-                "case_count": CASES_PER_DATASET,
-                "partition_plan": list(PARTITION_PLAN),
-                "partition_counts": dict(PARTITION_COUNTS),
-                "external_attestation_required": True,
-            }
-        )
-        append_attribution_event(
-            "real_dataset_sealed",
-            {
+        if position + 1 == CASES_PER_DATASET:
+            manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
+            result.update(
+                {
+                    "dataset_sealed": True,
+                    "sealed_set_sha256": manifest["sealed_set_sha256"],
+                    "sealed_test_count": manifest["sealed_test_count"],
+                    "case_count": CASES_PER_DATASET,
+                    "partition_plan": list(PARTITION_PLAN),
+                    "partition_counts": dict(PARTITION_COUNTS),
+                    "external_attestation_required": True,
+                }
+            )
+            sealed_event_payload = {
                 "identity_id": identity_id,
                 "task_family": TASK_FAMILY,
                 "dataset_id": dataset_id,
@@ -187,7 +193,14 @@ def record_real_case(
                 "partition_plan_fixed_before_teacher": True,
                 "real_production_traffic": True,
                 "external_attestation_required": True,
-            },
+            }
+
+    # The attribution journal is a separate store. The ledger transaction is
+    # already durable before this append and no hidden case content is emitted.
+    if sealed_event_payload is not None:
+        append_attribution_event(
+            "real_dataset_sealed",
+            sealed_event_payload,
             now_ms=now_ms,
         )
     return result

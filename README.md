@@ -8,7 +8,7 @@ The project is **not** designed around one permanent LLM as Jade's identity or c
 >
 > Current dependency-free Node Runtime version: **0.1.8** / protocol `jade-genesis-node/0.0.6`
 >
-> Status: **experimental / personal research project**. The 0.1.21 mechanism for verified procedural acquisition is implemented and tested in CI. The decisive live VPS/Pixel restart-and-reuse proof is still required before claiming that Jade has demonstrated persistent acquisition in production.
+> Status: **experimental / personal research project**. The 0.1.21 mechanism for verified procedural acquisition is implemented and tested in CI. On 2026-09-16, protocol V3 completed the live VPS/Pixel chain (hidden exam PASS, real restart, real reuse with Ollama delta 0, negative control): Jade demonstrated persistent acquisition and reuse of one bounded procedure, assembled by typed search from LLM hints. See issue #27 and [`docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md`](docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md).
 
 ## What exists today
 

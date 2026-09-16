@@ -43,9 +43,10 @@ from learning_trial_protocol import (
     ready_dataset_pool,
     run_attested_learning,
 )
+from hybrid_skill_teacher import HybridSkillTeacher
 from ollama_skill_teacher import OllamaSkillTeacher
 
-GOAL_ID = "first-real-normalize-label-v2"
+GOAL_ID = "first-real-normalize-label-v3"
 
 
 def _truthy(value: Any) -> bool:
@@ -309,7 +310,7 @@ def run_first_learning_cycle(
             "teacher_called": False,
         }
 
-    teacher = OllamaSkillTeacher(config, core)
+    teacher = HybridSkillTeacher(OllamaSkillTeacher(config, core))
     append_attribution_event(
         "night_skill_learning_triggered",
         {
@@ -329,8 +330,8 @@ def run_first_learning_cycle(
         identity,
         GOAL_ID,
         teacher,
-        teacher_id="ollama-code-teacher-v2",
-        source_model="ollama-code-profile",
+        teacher_id="hybrid-teacher-v3",
+        source_model="ollama-code-profile+typed-search",
         max_candidates=4,
         now_ms=now_ms,
     )
@@ -372,7 +373,7 @@ def skill_learning_cycle_status(config: dict[str, Any]) -> dict[str, Any]:
             POST_DEMO_CONFIRMATORY_FRESH_DATASETS
         ),
         "post_demo_total_hidden_case_target": POST_DEMO_TOTAL_HIDDEN_CASE_TARGET,
-        "teacher": "ollama_code_profile",
+        "teacher": "hybrid_llm_typed_search",
         "teacher_trigger": "vps_night_cycle_only",
         "remote_learning_task_exposed": False,
         "router_level_skill_dispatch_pending": True,

@@ -18,6 +18,20 @@ from skill_teacher_contract import REQUEST_KIND
 _ALLOWED_RESPONSE_FIELDS = frozenset({"skill_id", "description", "domain", "body"})
 MAX_TEACHER_TOKENS = 512
 TEACHER_TIMEOUT_SECONDS = 420.0
+# V3: a strict response schema replaces plain "json" mode. Under plain JSON
+# mode, small models echoed the DSL contract until the 512-token cap and the
+# truncated object was unparseable (reproduced locally on 2026-09-16).
+RESPONSE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["skill_id", "description", "domain", "body"],
+    "properties": {
+        "skill_id": {"type": "string", "maxLength": 64},
+        "description": {"type": "string", "maxLength": 200},
+        "domain": {"type": "string", "maxLength": 64},
+        "body": {"type": "object"},
+    },
+}
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -54,6 +68,7 @@ class OllamaSkillTeacher:
         self.config = config
         self.core = core
         self.last_model = ""
+        self.last_url = ""
         self.call_count = 0
 
     def __call__(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -68,16 +83,26 @@ class OllamaSkillTeacher:
         if request.get("seal_nonce_exposed") is not False:
             raise PermissionError("teacher_seal_nonce_must_remain_hidden")
 
-        models = self.core.ollama_models(self.config, timeout=1.2)
+        # V3: the teacher may run on another node (e.g. the PC GPU over
+        # Tailscale). Local GPU telemetry does not describe that node, so an
+        # explicit teacher_model is used for selection when configured.
+        teacher_config = dict(self.config)
+        teacher_url = str(self.config.get("teacher_ollama_url", "")).strip()
+        if teacher_url:
+            teacher_config["ollama_url"] = teacher_url
+        teacher_model = str(self.config.get("teacher_model", "")).strip()
+        if teacher_model:
+            teacher_config["brain_model_code"] = teacher_model
+        models = self.core.ollama_models(teacher_config, timeout=1.2)
         gpu = self.core.gpu_telemetry()
         free_vram = float(gpu.get("gpu_vram_free_gb", 0.0) or 0.0)
-        selection = select_profile_model(self.config, models, "code", free_vram)
+        selection = select_profile_model(teacher_config, models, "code", free_vram)
         if selection is None:
             raise RuntimeError("teacher_code_model_unavailable")
 
         model = str(selection["model"])
         base = self.core.normalize_ollama_url(
-            str(self.config.get("ollama_url", self.core.DEFAULT_OLLAMA_URL))
+            str(teacher_config.get("ollama_url", self.core.DEFAULT_OLLAMA_URL))
         )
         system = (
             "Tu es un professeur de procédures Jade Genesis. Réponds avec UN objet JSON brut, "
@@ -111,7 +136,8 @@ class OllamaSkillTeacher:
                     },
                 ],
                 "options": options,
-                "format": "json",
+                "format": RESPONSE_SCHEMA,
+                "think": False,
             },
             timeout=TEACHER_TIMEOUT_SECONDS,
         )
@@ -121,6 +147,7 @@ class OllamaSkillTeacher:
         proposal = _extract_json_object(str(message.get("content", "")))
         self.call_count += 1
         self.last_model = model
+        self.last_url = base
         return proposal
 
     def status(self) -> dict[str, Any]:
@@ -130,6 +157,8 @@ class OllamaSkillTeacher:
             "proposal_only": True,
             "call_count": self.call_count,
             "last_model": self.last_model,
+            "last_url": self.last_url,
+            "response_format": "json_schema",
             "max_teacher_tokens": MAX_TEACHER_TOKENS,
             "teacher_timeout_seconds": TEACHER_TIMEOUT_SECONDS,
             "controls_provenance": False,

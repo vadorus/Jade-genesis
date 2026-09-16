@@ -182,9 +182,19 @@ class ResilientSkillSynthesisLoop(SkillSynthesisLoop):
         frozen_source: dict[str, Any] | None = None
         for index in range(limit):
             request = self._teacher_request(goal, learning_view, previous_attempts)
-            proposal = teacher(json.loads(json.dumps(request)))
+            # A malformed or truncated teacher response is a rejected candidate,
+            # not an interrupted run (V2 live failure, 2026-09-16). Transport,
+            # availability and hidden-data guard errors still fail closed.
+            proposal_error: ValueError | None = None
+            try:
+                proposal = teacher(json.loads(json.dumps(request)))
+            except ValueError as exc:
+                proposal = None
+                proposal_error = exc
             proposal_body = self._proposal_feedback_body(proposal)
             try:
+                if proposal_error is not None:
+                    raise proposal_error
                 candidate = self._build_candidate(
                     goal,
                     learning_view,

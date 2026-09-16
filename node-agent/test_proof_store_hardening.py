@@ -287,6 +287,64 @@ class ProofStoreHardeningTest(unittest.TestCase):
         self.assertEqual(1, teacher_calls)
         self.assertEqual("RETAINED", goals.get(self.identity, "goal-proof")["state"])
 
+    def test_malformed_teacher_response_is_a_rejected_candidate(self) -> None:
+        ledger = self.make_base_ledger()
+        registry = self.make_hardened_registry()
+        goals = self.make_goals(ledger, registry)
+        loop = ResilientSkillSynthesisLoop(ledger, registry, goals)
+        calls = 0
+
+        def teacher(request: dict) -> dict:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ValueError("teacher_response_json_object_required")
+            self.assertEqual(
+                "ValueError",
+                request["previous_attempts"][0]["proposal_rejected"],
+            )
+            return {
+                "skill_id": "proof-sum",
+                "description": "Sum.",
+                "domain": "verifiable_procedure",
+                "body": self.correct_body(),
+            }
+
+        result = loop.learn(
+            self.identity,
+            "goal-proof",
+            teacher,
+            teacher_id="teacher-test",
+            now_ms=70,
+        )
+        self.assertEqual("RETAINED", result["state"])
+        self.assertEqual(2, calls)
+        self.assertEqual(2, result["candidate_count"])
+        first = result["visible_attempts"][0]
+        self.assertIsNone(first["proposal_body"])
+        self.assertIn("json_object_required", first["proposal_error"])
+
+    def test_teacher_transport_failure_still_fails_closed(self) -> None:
+        ledger = self.make_base_ledger()
+        registry = self.make_hardened_registry()
+        goals = self.make_goals(ledger, registry)
+        loop = ResilientSkillSynthesisLoop(ledger, registry, goals)
+
+        def teacher(_: dict) -> dict:
+            raise RuntimeError("teacher_code_model_unavailable")
+
+        with self.assertRaisesRegex(RuntimeError, "teacher_code_model_unavailable"):
+            loop.learn(
+                self.identity,
+                "goal-proof",
+                teacher,
+                teacher_id="teacher-test",
+                now_ms=70,
+            )
+        persisted = goals.get(self.identity, "goal-proof")
+        self.assertEqual("VISIBLE_TESTING", persisted["state"])
+        self.assertFalse(ledger.sealed_manifest(self.identity, self.dataset)["sealed_exam_consumed"])
+
     def test_visible_testing_direct_reentry_does_not_reset_budget(self) -> None:
         ledger = self.make_base_ledger()
         registry = self.make_hardened_registry()

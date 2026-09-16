@@ -102,105 +102,220 @@ def _next_dataset_id(datasets: list[dict[str, Any]]) -> str:
     return f"normalize-label-real-{highest + 1:04d}"
 
 
+def _sealed_event_payload(
+    identity_id: str,
+    dataset_id: str,
+    manifest: dict[str, Any],
+    *,
+    recovered_after_interruption: bool,
+) -> dict[str, Any]:
+    return {
+        "identity_id": identity_id,
+        "task_family": TASK_FAMILY,
+        "dataset_id": dataset_id,
+        "sealed_set_sha256": manifest["sealed_set_sha256"],
+        "case_count": CASES_PER_DATASET,
+        "partition_plan": list(PARTITION_PLAN),
+        "partition_counts": dict(PARTITION_COUNTS),
+        "partition_plan_fixed_before_teacher": True,
+        "real_production_traffic": True,
+        "external_attestation_required": True,
+        "recovered_after_interruption": recovered_after_interruption,
+    }
+
+
+def _validate_completed_unsealed_dataset(dataset: dict[str, Any]) -> str:
+    """Fail closed unless an interrupted five-case dataset is exactly recoverable."""
+
+    dataset_id = str(dataset.get("dataset_id", ""))
+    cases = dataset.get("cases", {})
+    if not dataset_id or not isinstance(cases, dict):
+        raise RuntimeError("normalize_label_recovery_dataset_invalid")
+    if len(cases) != CASES_PER_DATASET:
+        raise RuntimeError("normalize_label_recovery_case_count_invalid")
+
+    expected_ids = {f"real-{position + 1:02d}" for position in range(CASES_PER_DATASET)}
+    if set(cases) != expected_ids:
+        raise RuntimeError("normalize_label_recovery_case_ids_invalid")
+
+    for position, partition in enumerate(PARTITION_PLAN):
+        case_id = f"real-{position + 1:02d}"
+        case = cases.get(case_id)
+        if not isinstance(case, dict):
+            raise RuntimeError("normalize_label_recovery_case_invalid")
+        if case.get("partition") != partition:
+            raise RuntimeError("normalize_label_recovery_partition_invalid")
+        if case.get("source") != "real_production_brain_chat":
+            raise RuntimeError("normalize_label_recovery_source_invalid")
+        try:
+            expected = expected_output(case.get("input"))
+        except ValueError as exc:
+            raise RuntimeError("normalize_label_recovery_input_invalid") from exc
+        if _canonical(case.get("expected_output")) != _canonical(expected):
+            raise RuntimeError("normalize_label_recovery_expected_output_invalid")
+    return dataset_id
+
+
+def _recover_completed_unsealed_datasets(
+    ledger: Any,
+    identity_id: str,
+    datasets: list[dict[str, Any]],
+    *,
+    now_ms: int | None,
+) -> list[dict[str, Any]]:
+    """Seal datasets whose fifth case was durable but whose seal write was interrupted."""
+
+    events: list[dict[str, Any]] = []
+    for dataset in datasets:
+        if dataset.get("sealed") is True:
+            continue
+        cases = dataset.get("cases", {})
+        if not isinstance(cases, dict):
+            raise RuntimeError("normalize_label_dataset_cases_invalid")
+        if len(cases) < CASES_PER_DATASET:
+            continue
+        if len(cases) > CASES_PER_DATASET:
+            raise RuntimeError("normalize_label_dataset_overfilled")
+        dataset_id = _validate_completed_unsealed_dataset(dataset)
+        manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
+        events.append(
+            _sealed_event_payload(
+                identity_id,
+                dataset_id,
+                manifest,
+                recovered_after_interruption=True,
+            )
+        )
+    return events
+
+
+def _public_recovered_receipts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "dataset_id": event["dataset_id"],
+            "sealed_set_sha256": event["sealed_set_sha256"],
+            "case_count": event["case_count"],
+            "partition_plan": list(event["partition_plan"]),
+            "partition_counts": dict(event["partition_counts"]),
+            "external_attestation_required": True,
+        }
+        for event in events
+    ]
+
+
 def record_real_case(
     identity_id: str,
     input_value: Any,
     *,
     now_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Atomically enroll one unique real input into the fixed partition stream.
+    """Crash-recoverably enroll one unique real input in the fixed partition stream.
 
-    Duplicate detection, dataset selection/creation, position assignment, case
-    insertion and optional sealing are one transaction under the canonical
-    ledger RLock. Every factory instance for the same path shares that lock.
+    The fifth case and dataset seal are two durable ledger writes. Before any new
+    enrollment, a complete-but-unsealed five-case dataset is validated against
+    the fixed partition/source/oracle contract and sealed. This closes the crash
+    window between the fifth case write and the seal write without changing any
+    already sealed dataset or hidden case content.
     """
 
     expected = expected_output(input_value)
     ledger = open_archive_ledger()
-    sealed_event_payload: dict[str, Any] | None = None
+    sealed_event_payloads: list[dict[str, Any]] = []
 
     with ledger.lock:
         datasets = _family_datasets(ledger, identity_id)
+        sealed_event_payloads.extend(
+            _recover_completed_unsealed_datasets(
+                ledger,
+                identity_id,
+                datasets,
+                now_ms=now_ms,
+            )
+        )
+        if sealed_event_payloads:
+            datasets = _family_datasets(ledger, identity_id)
+        recovered_receipts = _public_recovered_receipts(sealed_event_payloads)
+
         if _input_already_used(datasets, input_value):
-            return {
+            result: dict[str, Any] = {
                 "recorded": False,
                 "reason": "duplicate_real_input",
                 "task_family": TASK_FAMILY,
             }
-
-        current = next(
-            (
-                item
-                for item in reversed(datasets)
-                if item.get("sealed") is not True
-                and len(item.get("cases", {})) < CASES_PER_DATASET
-            ),
-            None,
-        )
-        if current is None:
-            dataset_id = _next_dataset_id(datasets)
-            ledger.create_dataset(identity_id, dataset_id, TASK_FAMILY, now_ms=now_ms)
-            position = 0
+            if recovered_receipts:
+                result["recovered_dataset_seals"] = recovered_receipts
         else:
-            dataset_id = str(current["dataset_id"])
-            position = len(current.get("cases", {}))
-
-        if position < 0 or position >= CASES_PER_DATASET:
-            raise RuntimeError("normalize_label_dataset_position_invalid")
-        partition = PARTITION_PLAN[position]
-        case_id = f"real-{position + 1:02d}"
-        ledger.add_case(
-            identity_id,
-            dataset_id,
-            case_id,
-            partition,
-            input_value,
-            expected,
-            source="real_production_brain_chat",
-            now_ms=now_ms,
-        )
-        result: dict[str, Any] = {
-            "recorded": True,
-            "task_family": TASK_FAMILY,
-            "dataset_id": dataset_id,
-            "case_id": case_id,
-            "partition": partition,
-            "dataset_sealed": False,
-            "real_production_traffic": True,
-        }
-
-        if position + 1 == CASES_PER_DATASET:
-            manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
-            result.update(
-                {
-                    "dataset_sealed": True,
-                    "sealed_set_sha256": manifest["sealed_set_sha256"],
-                    "sealed_test_count": manifest["sealed_test_count"],
-                    "case_count": CASES_PER_DATASET,
-                    "partition_plan": list(PARTITION_PLAN),
-                    "partition_counts": dict(PARTITION_COUNTS),
-                    "external_attestation_required": True,
-                }
+            current = next(
+                (
+                    item
+                    for item in reversed(datasets)
+                    if item.get("sealed") is not True
+                    and len(item.get("cases", {})) < CASES_PER_DATASET
+                ),
+                None,
             )
-            sealed_event_payload = {
-                "identity_id": identity_id,
+            if current is None:
+                dataset_id = _next_dataset_id(datasets)
+                ledger.create_dataset(identity_id, dataset_id, TASK_FAMILY, now_ms=now_ms)
+                position = 0
+            else:
+                dataset_id = str(current["dataset_id"])
+                position = len(current.get("cases", {}))
+
+            if position < 0 or position >= CASES_PER_DATASET:
+                raise RuntimeError("normalize_label_dataset_position_invalid")
+            partition = PARTITION_PLAN[position]
+            case_id = f"real-{position + 1:02d}"
+            ledger.add_case(
+                identity_id,
+                dataset_id,
+                case_id,
+                partition,
+                input_value,
+                expected,
+                source="real_production_brain_chat",
+                now_ms=now_ms,
+            )
+            result = {
+                "recorded": True,
                 "task_family": TASK_FAMILY,
                 "dataset_id": dataset_id,
-                "sealed_set_sha256": manifest["sealed_set_sha256"],
-                "case_count": CASES_PER_DATASET,
-                "partition_plan": list(PARTITION_PLAN),
-                "partition_counts": dict(PARTITION_COUNTS),
-                "partition_plan_fixed_before_teacher": True,
+                "case_id": case_id,
+                "partition": partition,
+                "dataset_sealed": False,
                 "real_production_traffic": True,
-                "external_attestation_required": True,
             }
+            if recovered_receipts:
+                result["recovered_dataset_seals"] = recovered_receipts
+
+            if position + 1 == CASES_PER_DATASET:
+                manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
+                result.update(
+                    {
+                        "dataset_sealed": True,
+                        "sealed_set_sha256": manifest["sealed_set_sha256"],
+                        "sealed_test_count": manifest["sealed_test_count"],
+                        "case_count": CASES_PER_DATASET,
+                        "partition_plan": list(PARTITION_PLAN),
+                        "partition_counts": dict(PARTITION_COUNTS),
+                        "external_attestation_required": True,
+                    }
+                )
+                sealed_event_payloads.append(
+                    _sealed_event_payload(
+                        identity_id,
+                        dataset_id,
+                        manifest,
+                        recovered_after_interruption=False,
+                    )
+                )
 
     # The attribution journal is a separate store. The ledger transaction is
-    # already durable before this append and no hidden case content is emitted.
-    if sealed_event_payload is not None:
+    # already durable before these appends and no hidden case content is emitted.
+    for payload in sealed_event_payloads:
         append_attribution_event(
             "real_dataset_sealed",
-            sealed_event_payload,
+            payload,
             now_ms=now_ms,
         )
     return result

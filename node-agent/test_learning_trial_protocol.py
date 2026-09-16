@@ -209,6 +209,115 @@ class LearningTrialProtocolTest(unittest.TestCase):
                     + completed.stderr
                 )
 
+    def test_fifth_case_interruption_is_recovered_before_next_enrollment(self) -> None:
+        node_dir = Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory(prefix="jade-case-recovery-") as config_dir:
+            script = textwrap.dedent(
+                r'''
+                import os
+                import sys
+                os.environ["JADE_GENESIS_CONFIG_DIR"] = sys.argv[2]
+                sys.path.insert(0, sys.argv[1])
+
+                from first_learning_family import (
+                    PARTITION_PLAN,
+                    TASK_FAMILY,
+                    expected_output,
+                    family_status,
+                    record_real_case,
+                )
+                from learning_environment import read_attribution_events
+                from learning_stores import open_archive_ledger
+
+                identity = "jade-case-recovery"
+                ledger = open_archive_ledger()
+                dataset_id = "normalize-label-real-0001"
+                ledger.create_dataset(identity, dataset_id, TASK_FAMILY, now_ms=1_000)
+                values = [" Alpha ", "BETA ", " Gamma", "DELTA", " Epsilon "]
+
+                # Simulate the exact crash window: the fifth add_case is durable,
+                # but seal_dataset has not executed yet.
+                for index, text in enumerate(values):
+                    input_value = {"text": text}
+                    ledger.add_case(
+                        identity,
+                        dataset_id,
+                        f"real-{index + 1:02d}",
+                        PARTITION_PLAN[index],
+                        input_value,
+                        expected_output(input_value),
+                        source="real_production_brain_chat",
+                        now_ms=1_100 + index,
+                    )
+
+                before = ledger.sealed_manifest(identity, dataset_id)
+                assert before["sealed"] is False, before
+                with ledger.lock:
+                    state = ledger._load()
+                    assert len(state["datasets"][dataset_id]["cases"]) == 5, state
+
+                # Retrying the fifth input must recover/seal first, then report
+                # the input as duplicate. It must not create dataset 0002 yet.
+                recovered = record_real_case(
+                    identity,
+                    {"text": values[-1]},
+                    now_ms=2_000,
+                )
+                assert recovered["recorded"] is False, recovered
+                assert recovered["reason"] == "duplicate_real_input", recovered
+                receipts = recovered["recovered_dataset_seals"]
+                assert len(receipts) == 1, receipts
+                assert receipts[0]["dataset_id"] == dataset_id, receipts
+                assert receipts[0]["case_count"] == 5, receipts
+                assert receipts[0]["partition_plan"] == list(PARTITION_PLAN), receipts
+
+                after = ledger.sealed_manifest(identity, dataset_id)
+                assert after["sealed"] is True, after
+                assert after["sealed_set_sha256"] == receipts[0]["sealed_set_sha256"], after
+                assert after["sealed_test_count"] == 2, after
+
+                status = family_status(identity)
+                assert status["dataset_count"] == 1, status
+                assert status["sealed_dataset_count"] == 1, status
+
+                sealed_events = [
+                    event for event in read_attribution_events()
+                    if event["event_kind"] == "real_dataset_sealed"
+                ]
+                assert len(sealed_events) == 1, sealed_events
+                assert sealed_events[0]["payload"]["dataset_id"] == dataset_id
+                assert sealed_events[0]["payload"]["recovered_after_interruption"] is True
+
+                # The next genuinely new input starts the next dataset cleanly.
+                next_result = record_real_case(
+                    identity,
+                    {"text": " Zeta "},
+                    now_ms=2_100,
+                )
+                assert next_result["recorded"] is True, next_result
+                assert next_result["dataset_id"] == "normalize-label-real-0002", next_result
+                assert next_result["case_id"] == "real-01", next_result
+                assert "recovered_dataset_seals" not in next_result, next_result
+
+                final_status = family_status(identity)
+                assert final_status["dataset_count"] == 2, final_status
+                assert final_status["sealed_dataset_count"] == 1, final_status
+                '''
+            )
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(node_dir), config_dir],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if completed.returncode != 0:
+                self.fail(
+                    "isolated fifth-case recovery failed:\n"
+                    + completed.stdout
+                    + "\n"
+                    + completed.stderr
+                )
+
     def test_one_sealed_failure_terminates_trial_and_forbids_fresh_dataset_retry(self) -> None:
         node_dir = Path(__file__).resolve().parent
         with tempfile.TemporaryDirectory(prefix="jade-terminal-trial-") as config_dir:

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,22 @@ def _pack_digest(pack_without_digest: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _fsync_directory(path: Path) -> None:
+    """Best-effort directory fsync after publishing an immutable pack."""
+
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+    finally:
+        os.close(fd)
+
+
 def archive_sealed_case_pack(
     ledger: Any,
     identity_id: str,
@@ -54,7 +71,13 @@ def archive_sealed_case_pack(
     *,
     archive_dir: Path = ARCHIVE_CASE_PACK_DIR,
 ) -> dict[str, Any]:
-    """Write or verify one immutable complete case pack for a sealed dataset."""
+    """Write or verify one immutable complete case pack for a sealed dataset.
+
+    Publication is crash-safe: the complete pack is fsynced into a private
+    unique temp file first, then hard-linked into its immutable final name. A
+    crash can therefore leave an orphan temp file, but never a partially written
+    final case-pack path. Replays verify exact bytes and never overwrite a pack.
+    """
 
     clean_identity = str(identity_id or "").strip()
     clean_dataset = str(dataset_id or "").strip()
@@ -119,29 +142,46 @@ def archive_sealed_case_pack(
         existing = target.read_bytes()
         if existing != encoded:
             raise RuntimeError("case_pack_immutable_conflict")
+        try:
+            os.chmod(target, 0o400)
+        except OSError:
+            pass
         return case_pack_public_manifest(target, pack, replayed=True)
 
+    temp = archive_dir / (
+        f".{filename}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    )
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    fd = os.open(target, flags, 0o600)
+    fd = os.open(temp, flags, 0o600)
     try:
         with os.fdopen(fd, "wb", closefd=True) as handle:
             handle.write(encoded)
             handle.flush()
-            try:
-                os.fsync(handle.fileno())
-            except OSError:
-                pass
-    except Exception:
+            os.fsync(handle.fileno())
         try:
-            target.unlink(missing_ok=True)
+            os.chmod(temp, 0o400)
         except OSError:
             pass
-        raise
-    try:
-        os.chmod(target, 0o400)
-    except OSError:
-        pass
-    return case_pack_public_manifest(target, pack, replayed=False)
+
+        try:
+            os.link(temp, target)
+            replayed = False
+            _fsync_directory(archive_dir)
+        except FileExistsError:
+            existing = target.read_bytes()
+            if existing != encoded:
+                raise RuntimeError("case_pack_immutable_conflict")
+            replayed = True
+        try:
+            os.chmod(target, 0o400)
+        except OSError:
+            pass
+        return case_pack_public_manifest(target, pack, replayed=replayed)
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def verify_case_pack(path: Path) -> dict[str, Any]:

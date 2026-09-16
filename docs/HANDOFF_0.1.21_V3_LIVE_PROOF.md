@@ -74,7 +74,7 @@ VPS (`jade-genesis-vps`, Tailscale `100.79.99.100`; SSH settings in the JADE Hub
 
 ## 7. Open items (not done)
 
-- **PR:** V3 branch is pushed but no PR is open; draft PR #29 (V2) is superseded by V3 and should be closed or replaced. Nothing is merged to `main`.
+- **PR:** draft PR #30 (this branch) supersedes draft PR #29 (V2), which is still open and should be closed once #30 is reviewed. Nothing is merged to `main`.
 - **Goal V2** remains `VISIBLE_TESTING` (historical, intentionally untouched).
 - **Durability issue** noted in #27 before V2: real-case collection can fail between fifth-case persistence, case-pack materialization and attribution append. Must be fixed before collecting confirmatory datasets.
 - **Post-demo confirmation** required by policy: 4 fresh confirmatory datasets / 10 hidden cases before any stronger claim; 0002/0003 stay sealed and unconsumed.

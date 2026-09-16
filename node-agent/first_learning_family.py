@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from learning_environment import append_attribution_event
+from learning_environment import append_attribution_event_once
 from learning_stores import open_archive_ledger
 
 TASK_FAMILY = "normalize_label_v1"
@@ -124,8 +124,27 @@ def _sealed_event_payload(
     }
 
 
-def _validate_completed_unsealed_dataset(dataset: dict[str, Any]) -> str:
-    """Fail closed unless an interrupted five-case dataset is exactly recoverable."""
+def _append_sealed_event_once(
+    payload: dict[str, Any],
+    *,
+    now_ms: int | None,
+) -> dict[str, Any]:
+    return append_attribution_event_once(
+        "real_dataset_sealed",
+        payload,
+        key_fields=("identity_id", "task_family", "dataset_id"),
+        verify_fields=(
+            "sealed_set_sha256",
+            "case_count",
+            "partition_plan",
+            "partition_counts",
+        ),
+        now_ms=now_ms,
+    )
+
+
+def _validate_completed_dataset(dataset: dict[str, Any]) -> str:
+    """Fail closed unless one five-case dataset exactly matches this family contract."""
 
     dataset_id = str(dataset.get("dataset_id", ""))
     cases = dataset.get("cases", {})
@@ -176,7 +195,45 @@ def _recover_completed_unsealed_datasets(
             continue
         if len(cases) > CASES_PER_DATASET:
             raise RuntimeError("normalize_label_dataset_overfilled")
-        dataset_id = _validate_completed_unsealed_dataset(dataset)
+        dataset_id = _validate_completed_dataset(dataset)
+        manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
+        events.append(
+            _sealed_event_payload(
+                identity_id,
+                dataset_id,
+                manifest,
+                recovered_after_interruption=True,
+            )
+        )
+    return events
+
+
+def _reconcile_completed_sealed_datasets(
+    ledger: Any,
+    identity_id: str,
+    datasets: list[dict[str, Any]],
+    *,
+    now_ms: int | None,
+) -> list[dict[str, Any]]:
+    """Re-materialize/verify case packs and repair missing seal attribution.
+
+    ``ArchiveVerifiableTaskLedger.seal_dataset`` is idempotent for an already
+    sealed dataset and always verifies/materializes its immutable case pack. By
+    returning an idempotent attribution payload for every valid sealed dataset,
+    a later enrollment can finish work interrupted after the ledger seal but
+    before case-pack publication or journal append.
+    """
+
+    events: list[dict[str, Any]] = []
+    for dataset in datasets:
+        if dataset.get("sealed") is not True:
+            continue
+        cases = dataset.get("cases", {})
+        if not isinstance(cases, dict):
+            raise RuntimeError("normalize_label_dataset_cases_invalid")
+        if len(cases) != CASES_PER_DATASET:
+            raise RuntimeError("normalize_label_recovery_case_count_invalid")
+        dataset_id = _validate_completed_dataset(dataset)
         manifest = ledger.seal_dataset(identity_id, dataset_id, now_ms=now_ms)
         events.append(
             _sealed_event_payload(
@@ -211,11 +268,10 @@ def record_real_case(
 ) -> dict[str, Any]:
     """Crash-recoverably enroll one unique real input in the fixed partition stream.
 
-    The fifth case and dataset seal are two durable ledger writes. Before any new
-    enrollment, a complete-but-unsealed five-case dataset is validated against
-    the fixed partition/source/oracle contract and sealed. This closes the crash
-    window between the fifth case write and the seal write without changing any
-    already sealed dataset or hidden case content.
+    Before a new enrollment, complete datasets are reconciled across the ledger,
+    immutable case-pack archive and attribution journal. This closes the crash
+    windows after the fifth case, after the ledger seal and after case-pack
+    publication while preserving the fixed hidden partition and existing hashes.
     """
 
     expected = expected_output(input_value)
@@ -225,16 +281,23 @@ def record_real_case(
     with ledger.lock:
         datasets = _family_datasets(ledger, identity_id)
         sealed_event_payloads.extend(
-            _recover_completed_unsealed_datasets(
+            _reconcile_completed_sealed_datasets(
                 ledger,
                 identity_id,
                 datasets,
                 now_ms=now_ms,
             )
         )
-        if sealed_event_payloads:
+        recovered_seal_payloads = _recover_completed_unsealed_datasets(
+            ledger,
+            identity_id,
+            datasets,
+            now_ms=now_ms,
+        )
+        sealed_event_payloads.extend(recovered_seal_payloads)
+        if recovered_seal_payloads:
             datasets = _family_datasets(ledger, identity_id)
-        recovered_receipts = _public_recovered_receipts(sealed_event_payloads)
+        recovered_receipts = _public_recovered_receipts(recovered_seal_payloads)
 
         if _input_already_used(datasets, input_value):
             result: dict[str, Any] = {
@@ -310,14 +373,11 @@ def record_real_case(
                     )
                 )
 
-    # The attribution journal is a separate store. The ledger transaction is
-    # already durable before these appends and no hidden case content is emitted.
+    # The ledger/case-pack work is durable before journal reconciliation. If the
+    # process stops during this separate append, the next real enrollment scans
+    # the sealed datasets again and idempotently finishes the missing event.
     for payload in sealed_event_payloads:
-        append_attribution_event(
-            "real_dataset_sealed",
-            payload,
-            now_ms=now_ms,
-        )
+        _append_sealed_event_once(payload, now_ms=now_ms)
     return result
 
 

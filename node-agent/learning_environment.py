@@ -18,7 +18,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 CONFIG_DIR = Path(
     os.environ.get("JADE_GENESIS_CONFIG_DIR", str(Path.home() / ".jade-genesis"))
@@ -59,6 +59,13 @@ def _canonical_json(value: Any) -> str:
     )
 
 
+def _clean_event_kind(event_kind: str) -> str:
+    clean_kind = " ".join(str(event_kind or "").split())[:120]
+    if not clean_kind:
+        raise ValueError("missing_attribution_event_kind")
+    return clean_kind
+
+
 def append_attribution_event(
     event_kind: str,
     payload: dict[str, Any],
@@ -75,9 +82,7 @@ def append_attribution_event(
 
     if not isinstance(payload, dict):
         raise ValueError("attribution_payload_must_be_object")
-    clean_kind = " ".join(str(event_kind or "").split())[:120]
-    if not clean_kind:
-        raise ValueError("missing_attribution_event_kind")
+    clean_kind = _clean_event_kind(event_kind)
     now = int(time.time() * 1_000) if now_ms is None else max(0, int(now_ms))
 
     with _ATTRIBUTION_LOCK:
@@ -109,14 +114,73 @@ def append_attribution_event(
         digest = hashlib.sha256(_canonical_json(body).encode("utf-8")).hexdigest()
         record = {**body, "event_sha256": digest}
         with path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(_canonical_json(record))
-            handle.write("\n")
+            handle.write(_canonical_json(record) + "\n")
             handle.flush()
             try:
                 os.fsync(handle.fileno())
             except OSError:
                 pass
         return record
+
+
+def append_attribution_event_once(
+    event_kind: str,
+    payload: dict[str, Any],
+    *,
+    key_fields: Iterable[str],
+    verify_fields: Iterable[str] = (),
+    path: Path = ARCHIVE_ATTRIBUTION_LOG_PATH,
+    now_ms: int | None = None,
+) -> dict[str, Any]:
+    """Append one event idempotently using stable payload identity fields.
+
+    This is intended for crash-recovery paths spanning more than one durable
+    store. If an equivalent event is already present, the existing immutable
+    record is returned instead of appending a duplicate. Selected verify fields
+    must still match exactly; a mismatch fails closed as an identity conflict.
+    The returned ``idempotent_replay`` flag is transient and is not persisted.
+    """
+
+    if not isinstance(payload, dict):
+        raise ValueError("attribution_payload_must_be_object")
+    clean_kind = _clean_event_kind(event_kind)
+    keys = tuple(str(field or "").strip() for field in key_fields)
+    checks = tuple(str(field or "").strip() for field in verify_fields)
+    if not keys or any(not field for field in keys):
+        raise ValueError("attribution_idempotency_key_fields_required")
+    if any(not field for field in checks):
+        raise ValueError("attribution_idempotency_verify_fields_invalid")
+    for field in (*keys, *checks):
+        if field not in payload:
+            raise ValueError(f"attribution_idempotency_field_missing:{field}")
+
+    with _ATTRIBUTION_LOCK:
+        for event in read_attribution_events(path=path):
+            if event.get("event_kind") != clean_kind:
+                continue
+            existing_payload = event.get("payload", {})
+            if not isinstance(existing_payload, dict):
+                raise RuntimeError("attribution_archive_corrupt")
+            if not all(
+                _canonical_json(existing_payload.get(field))
+                == _canonical_json(payload.get(field))
+                for field in keys
+            ):
+                continue
+            for field in checks:
+                if _canonical_json(existing_payload.get(field)) != _canonical_json(
+                    payload.get(field)
+                ):
+                    raise RuntimeError("attribution_idempotency_conflict")
+            return {**event, "idempotent_replay": True}
+
+        record = append_attribution_event(
+            clean_kind,
+            payload,
+            path=path,
+            now_ms=now_ms,
+        )
+        return {**record, "idempotent_replay": False}
 
 
 def read_attribution_events(

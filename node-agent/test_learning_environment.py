@@ -4,10 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from case_pack_archive import archive_sealed_case_pack, verify_case_pack
 from learning_environment import (
     append_attribution_event,
+    append_attribution_event_once,
     attribution_summary,
     read_attribution_events,
 )
@@ -109,6 +111,33 @@ class LearningEnvironmentTest(unittest.TestCase):
             [case["input"] for case in learning["cases"]],
         )
 
+    def test_case_pack_publish_failure_never_leaves_partial_final_file(self) -> None:
+        self._sealed_dataset()
+        pack_dir = self.root / "archive" / "case-packs"
+
+        with patch("case_pack_archive.os.link", side_effect=OSError("publish failed")):
+            with self.assertRaisesRegex(OSError, "publish failed"):
+                archive_sealed_case_pack(
+                    self.ledger,
+                    self.identity,
+                    self.dataset,
+                    archive_dir=pack_dir,
+                )
+
+        self.assertEqual([], list(pack_dir.glob("*.case-pack.json")))
+        self.assertEqual([], list(pack_dir.glob(".*.tmp")))
+
+        recovered = archive_sealed_case_pack(
+            self.ledger,
+            self.identity,
+            self.dataset,
+            archive_dir=pack_dir,
+        )
+        self.assertFalse(recovered["replayed"])
+        files = list(pack_dir.glob("*.case-pack.json"))
+        self.assertEqual(1, len(files))
+        verify_case_pack(files[0])
+
     def test_case_pack_tamper_is_detected(self) -> None:
         self._sealed_dataset()
         pack_dir = self.root / "archive" / "case-packs"
@@ -178,6 +207,47 @@ class LearningEnvironmentTest(unittest.TestCase):
         self.assertEqual("EXTERNAL_TEACHER", summary["provenance"]["source_kind"])
         self.assertEqual(1.0, summary["measured_gain"]["delta"])
         self.assertEqual(3, summary["event_count"])
+
+    def test_attribution_event_once_replays_and_detects_conflict(self) -> None:
+        log = self.root / "archive" / "skill-attribution.jsonl"
+        payload = {
+            "identity_id": "jade-test",
+            "task_family": "normalize_label_v1",
+            "dataset_id": "normalize-label-real-0004",
+            "sealed_set_sha256": "a" * 64,
+            "case_count": 5,
+        }
+        first = append_attribution_event_once(
+            "real_dataset_sealed",
+            payload,
+            key_fields=("identity_id", "task_family", "dataset_id"),
+            verify_fields=("sealed_set_sha256", "case_count"),
+            path=log,
+            now_ms=1_000,
+        )
+        replay = append_attribution_event_once(
+            "real_dataset_sealed",
+            {**payload, "recovered_after_interruption": True},
+            key_fields=("identity_id", "task_family", "dataset_id"),
+            verify_fields=("sealed_set_sha256", "case_count"),
+            path=log,
+            now_ms=2_000,
+        )
+
+        self.assertFalse(first["idempotent_replay"])
+        self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(first["event_sha256"], replay["event_sha256"])
+        self.assertEqual(1, len(read_attribution_events(path=log)))
+
+        with self.assertRaisesRegex(RuntimeError, "attribution_idempotency_conflict"):
+            append_attribution_event_once(
+                "real_dataset_sealed",
+                {**payload, "sealed_set_sha256": "b" * 64},
+                key_fields=("identity_id", "task_family", "dataset_id"),
+                verify_fields=("sealed_set_sha256", "case_count"),
+                path=log,
+                now_ms=3_000,
+            )
 
     def test_attribution_tamper_breaks_chain_verification(self) -> None:
         log = self.root / "archive" / "skill-attribution.jsonl"

@@ -81,7 +81,7 @@ class LearningStoreConcurrencyTest(unittest.TestCase):
 
             with (
                 patch.object(family, "open_archive_ledger", side_effect=open_test_ledger),
-                patch.object(family, "append_attribution_event", return_value={}),
+                patch.object(family, "_append_sealed_event_once", return_value={}),
                 patch.object(learning_stores, "archive_sealed_case_pack", side_effect=fake_case_pack),
             ):
                 with ThreadPoolExecutor(max_workers=count) as executor:
@@ -140,7 +140,7 @@ class LearningStoreConcurrencyTest(unittest.TestCase):
 
             with (
                 patch.object(family, "open_archive_ledger", side_effect=open_test_ledger),
-                patch.object(family, "append_attribution_event", return_value={}),
+                patch.object(family, "_append_sealed_event_once", return_value={}),
             ):
                 with ThreadPoolExecutor(max_workers=count) as executor:
                     results = list(executor.map(enroll, range(count)))
@@ -159,6 +159,86 @@ class LearningStoreConcurrencyTest(unittest.TestCase):
                 datasets = list(state["datasets"].values())
                 self.assertEqual(1, len(datasets))
                 self.assertEqual(1, len(datasets[0]["cases"]))
+
+    def test_sealed_dataset_artifacts_are_reconciled_after_pack_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "artifact-recovery-ledger.json"
+            identity = "identity-artifact-recovery"
+
+            def open_test_ledger() -> ArchiveVerifiableTaskLedger:
+                return ArchiveVerifiableTaskLedger(path)
+
+            def fake_case_pack(*args, **kwargs) -> dict:
+                return {"case_pack_sha256": "f" * 64}
+
+            with (
+                patch.object(family, "open_archive_ledger", side_effect=open_test_ledger),
+                patch.object(family, "_append_sealed_event_once", return_value={}),
+                patch.object(learning_stores, "archive_sealed_case_pack", side_effect=fake_case_pack),
+            ):
+                for index in range(4):
+                    result = family.record_real_case(
+                        identity,
+                        {"text": f" Value-{index} "},
+                        now_ms=3_000 + index,
+                    )
+                    self.assertTrue(result["recorded"])
+                    self.assertFalse(result["dataset_sealed"])
+
+            with (
+                patch.object(family, "open_archive_ledger", side_effect=open_test_ledger),
+                patch.object(family, "_append_sealed_event_once", return_value={}),
+                patch.object(
+                    learning_stores,
+                    "archive_sealed_case_pack",
+                    side_effect=OSError("case-pack publish interrupted"),
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "case-pack publish interrupted"):
+                    family.record_real_case(
+                        identity,
+                        {"text": " Value-4 "},
+                        now_ms=3_100,
+                    )
+
+            ledger = ArchiveVerifiableTaskLedger(path)
+            with ledger.lock:
+                state = ledger._load()
+                first = state["datasets"]["normalize-label-real-0001"]
+                self.assertTrue(first["sealed"])
+                self.assertEqual(5, len(first["cases"]))
+                self.assertEqual(64, len(first["sealed_set_sha256"]))
+
+            with (
+                patch.object(family, "open_archive_ledger", side_effect=open_test_ledger),
+                patch.object(learning_stores, "archive_sealed_case_pack", side_effect=fake_case_pack) as pack,
+                patch.object(family, "_append_sealed_event_once", return_value={}) as event,
+            ):
+                recovered = family.record_real_case(
+                    identity,
+                    {"text": " Value-5 "},
+                    now_ms=3_200,
+                )
+
+            self.assertTrue(recovered["recorded"])
+            self.assertEqual("normalize-label-real-0002", recovered["dataset_id"])
+            self.assertEqual("real-01", recovered["case_id"])
+            self.assertGreaterEqual(pack.call_count, 1)
+            self.assertGreaterEqual(event.call_count, 1)
+            payload = event.call_args_list[0].args[0]
+            self.assertEqual("normalize-label-real-0001", payload["dataset_id"])
+            self.assertTrue(payload["recovered_after_interruption"])
+
+            with ledger.lock:
+                final_state = ledger._load()
+                self.assertEqual(2, len(final_state["datasets"]))
+                self.assertTrue(
+                    final_state["datasets"]["normalize-label-real-0001"]["sealed"]
+                )
+                self.assertEqual(
+                    1,
+                    len(final_state["datasets"]["normalize-label-real-0002"]["cases"]),
+                )
 
 
 if __name__ == "__main__":

@@ -62,10 +62,16 @@ jobs:
             node-agent/learning_stores.py \
             node-agent/skill_registry.py \
             node-agent/skill_synthesis_loop.py \
+            node-agent/skill_teacher_contract.py \
             node-agent/ollama_skill_teacher.py \
             node-agent/first_learning_family.py \
             node-agent/learning_trial_protocol.py \
             node-agent/skill_learning_cycle.py \
+            node-agent/resilient_skill_synthesis.py \
+            node-agent/proof_store_hardening.py \
+            node-agent/shared_store_lock.py \
+            node-agent/typed_skill_search.py \
+            node-agent/hybrid_skill_teacher.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
@@ -79,7 +85,9 @@ jobs:
             node-agent/test_skill_synthesis_loop.py \
             node-agent/test_ollama_skill_teacher.py \
             node-agent/test_pre_ollama_skill_dispatch.py \
-            node-agent/test_learning_trial_protocol.py
+            node-agent/test_learning_trial_protocol.py \
+            node-agent/test_typed_skill_search.py \
+            node-agent/test_hybrid_skill_teacher.py
 
       - name: Test bounded runtime, learning substrate and brain profiles
         shell: bash
@@ -227,6 +235,9 @@ jobs:
 
           synthesis = health["skill_synthesis"]
           assert synthesis["teacher_role"] == "proposal_only"
+          assert synthesis["teacher_request_kind"] == "JADE_SKILL_TEACHER_REQUEST_V2"
+          assert synthesis["visible_diagnostics_returned_to_teacher"] is True
+          assert synthesis["visible_attempts_persisted"] is True
           assert synthesis["teacher_controls_provenance"] is False
           assert synthesis["teacher_controls_verifier"] is False
           assert synthesis["teacher_controls_activation"] is False
@@ -247,7 +258,8 @@ jobs:
           assert environment["attribution_log_hash_chained"] is True
 
           night_skill = health["night_cycle_supervisor"]["skill_learning_cycle"]
-          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v1"
+          assert night_skill["trial_protocol_id"] == "0.1.21-first-acquisition-v3"
+          assert night_skill["goal_id"] == "first-real-normalize-label-v3"
           assert night_skill["task_family"] == "normalize_label_v1"
           assert night_skill["minimum_ready_datasets"] == 3
           assert night_skill["requires_external_hash_attestation"] is True
@@ -265,7 +277,7 @@ jobs:
           assert night_skill["initial_acquisition_is_mastery_claim"] is False
           assert night_skill["post_demo_confirmatory_fresh_datasets_required"] == 4
           assert night_skill["post_demo_total_hidden_case_target"] == 10
-          assert night_skill["teacher"] == "ollama_code_profile"
+          assert night_skill["teacher"] == "hybrid_llm_typed_search"
           assert night_skill["teacher_trigger"] == "vps_night_cycle_only"
           assert night_skill["remote_learning_task_exposed"] is False
           assert night_skill["router_level_skill_dispatch_pending"] is True

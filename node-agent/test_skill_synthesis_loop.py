@@ -6,7 +6,8 @@ from pathlib import Path
 
 from skill_registry import SkillRegistry
 from skill_synthesis_loop import LearningGoalStore, SkillSynthesisLoop
-from skill_spec import BODY_KIND
+from skill_spec import ALLOWED_OPS, BODY_KIND
+from skill_teacher_contract import REQUEST_KIND
 from verifiable_task_ledger import VerifiableTaskLedger
 
 
@@ -155,14 +156,15 @@ class SkillSynthesisLoopTest(unittest.TestCase):
         self.assertFalse(result["teacher_controls_activation"])
         self.assertEqual(2, len(teacher_requests))
 
-        # Teacher requests contain TRAIN/VALIDATION only. The commitment hash is
-        # allowed, so isolation must be checked structurally rather than by
-        # searching for numeric substrings that may occur inside SHA-256 text.
         for request in teacher_requests:
+            self.assertEqual(REQUEST_KIND, request["request_kind"])
             self.assertFalse(request["sealed_test_inputs_exposed"])
             self.assertFalse(request["sealed_test_answers_exposed"])
             self.assertFalse(request["seal_nonce_exposed"])
             self.assertEqual(2, request["sealed_test_count"])
+            self.assertEqual(set(ALLOWED_OPS), set(request["dsl_contract"]["operations"]))
+            self.assertEqual([1, 2], request["dsl_contract"]["operations"]["get"]["arity"])
+            self.assertEqual([1], request["dsl_contract"]["operations"]["trim"]["arity"])
             visible_ids = {case["case_id"] for case in request["visible_cases"]}
             self.assertEqual(
                 {"train-1", "train-2", "validation-1"},
@@ -185,13 +187,22 @@ class SkillSynthesisLoopTest(unittest.TestCase):
                 [case["input"] for case in request["visible_cases"]],
             )
 
+        retry_feedback = teacher_requests[1]["previous_attempts"]
+        self.assertEqual(1, len(retry_feedback))
+        self.assertEqual(0.0, retry_feedback[0]["train_pass_rate"])
+        self.assertEqual(0.0, retry_feedback[0]["validation_pass_rate"])
+        self.assertEqual("object", retry_feedback[0]["proposal_body"]["op"])
+        failures = retry_feedback[0]["visible_failures"]
+        self.assertEqual(3, len(failures))
+        self.assertTrue(all(item["failure_kind"] == "OUTPUT_MISMATCH" for item in failures))
+        self.assertNotIn("sealed-1", {item["case_id"] for item in failures})
+        self.assertNotIn("sealed-2", {item["case_id"] for item in failures})
+
         selected = self.registry.selected_skill(self.identity, self.family)
         self.assertIsNotNone(selected)
         self.assertEqual("EXTERNAL_TEACHER", selected["source_kind"])
         self.assertTrue(selected["sealed_verified"])
 
-        # Hard logical restart: construct fresh store/runtime-facing objects from
-        # disk. The teacher callable is intentionally never passed to this path.
         restarted_registry = SkillRegistry(self.registry_path)
         restarted_ledger = VerifiableTaskLedger(self.ledger_path)
         restarted_goals = LearningGoalStore(self.goals_path)
@@ -200,10 +211,9 @@ class SkillSynthesisLoopTest(unittest.TestCase):
                 "sealed_exam_consumed"
             ]
         )
-        self.assertEqual(
-            "RETAINED",
-            restarted_goals.get(self.identity, "goal-sum-v1")["state"],
-        )
+        restarted_goal = restarted_goals.get(self.identity, "goal-sum-v1")
+        self.assertEqual("RETAINED", restarted_goal["state"])
+        self.assertEqual(2, len(restarted_goal["visible_attempts"]))
         recall = restarted_registry.execute_for_family(
             self.identity,
             self.family,
@@ -216,7 +226,6 @@ class SkillSynthesisLoopTest(unittest.TestCase):
         self.assertFalse(recall["network_used"])
         self.assertEqual(2, len(teacher_requests))
 
-        # Causal control: removing the retained route removes the capability.
         restarted_registry.deactivate_family(
             self.identity,
             self.family,
@@ -258,6 +267,7 @@ class SkillSynthesisLoopTest(unittest.TestCase):
         self.assertEqual("SEALED_FAILED", result["state"])
         self.assertFalse(result["skill_retained"])
         self.assertEqual(1, calls)
+        self.assertEqual(1, len(result["visible_attempts"]))
         self.assertTrue(
             self.ledger.sealed_manifest(self.identity, self.dataset)[
                 "sealed_exam_consumed"
@@ -302,6 +312,10 @@ class SkillSynthesisLoopTest(unittest.TestCase):
         )
         self.assertEqual("VISIBLE_FAILED", result["state"])
         self.assertFalse(result["sealed_exam_run"])
+        self.assertEqual(2, len(result["visible_attempts"]))
+        persisted = self.goals.get(self.identity, "goal-sum-v1")
+        self.assertEqual("VISIBLE_FAILED", persisted["state"])
+        self.assertEqual(2, len(persisted["visible_attempts"]))
         self.assertFalse(
             self.ledger.sealed_manifest(self.identity, self.dataset)[
                 "sealed_exam_consumed"

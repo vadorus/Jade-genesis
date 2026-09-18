@@ -105,6 +105,17 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget
     ): DistributedTaskResult =
+        runFfmpegTranscodeProbeOnNode(
+            nodeId = null,
+            device = device,
+            budget = budget
+        )
+
+    suspend fun runFfmpegTranscodeProbeOnNode(
+        nodeId: String?,
+        device: DeviceProfile,
+        budget: ResourceBudget
+    ): DistributedTaskResult =
         runTask(
             request = DistributedTaskRequest(
                 taskId = "task-${UUID.randomUUID()}",
@@ -115,7 +126,8 @@ class TaskRouter(
                 createdAt = System.currentTimeMillis()
             ),
             device = device,
-            budget = budget
+            budget = budget,
+            forcedNodeId = nodeId
         )
 
     suspend fun runTextAnalysis(
@@ -220,7 +232,8 @@ class TaskRouter(
     private suspend fun runTask(
         request: DistributedTaskRequest,
         device: DeviceProfile,
-        budget: ResourceBudget
+        budget: ResourceBudget,
+        forcedNodeId: String? = null
     ): DistributedTaskResult {
         val activeConfig = configProvider().validated()
         val startedAt = System.currentTimeMillis()
@@ -237,7 +250,10 @@ class TaskRouter(
             )
         )
         val ranked = nodes
-            .filter { supportsTask(it, request) }
+            .filter { node ->
+                supportsTask(node, request) &&
+                    (forcedNodeId == null || node.nodeId == forcedNodeId)
+            }
             .map {
                 rankNode(
                     node = it,
@@ -273,25 +289,53 @@ class TaskRouter(
         }
 
         val requested = ranked.firstOrNull()
-        val routeReason = routeReason(
-            request = request,
-            budget = budget,
-            ranked = ranked
-        )
+        val routeReason = if (forcedNodeId == null) {
+            routeReason(
+                request = request,
+                budget = budget,
+                ranked = ranked
+            )
+        } else {
+            val forced = ranked.firstOrNull()?.node
+            if (forced != null) {
+                "Exécution de mesure explicitement bornée sur " +
+                    "${forced.name} (${forced.nodeId}) pour " +
+                    "${request.taskKind}; aucun fallback vers un autre nœud."
+            } else {
+                "Exécution de mesure demandée sur ${forcedNodeId}, mais ce " +
+                    "nœud n'est pas disponible avec la capacité " +
+                    "${request.requiredCapability}."
+            }
+        }
         val attempts = mutableListOf<TaskAttempt>()
         val failures = mutableListOf<String>()
 
         if (requested == null) {
             val local = nodeManager.localNode(device)
-            val reason = "Aucun nœud compatible avec ${request.taskKind}."
+            val forcedNode = forcedNodeId?.let { id ->
+                nodes.firstOrNull { it.nodeId == id }
+            }
+            val reason = if (forcedNodeId == null) {
+                "Aucun nœud compatible avec ${request.taskKind}."
+            } else {
+                "Le nœud explicitement demandé ${forcedNodeId} n'est pas " +
+                    "compatible ou disponible pour ${request.taskKind}."
+            }
+            val failureNode = forcedNode ?: local
             val result = DistributedTaskResult(
                 taskId = request.taskId,
                 taskKind = request.taskKind,
                 requestedNodeId = null,
                 requestedNodeName = null,
-                executedNodeId = local.nodeId,
-                executedNodeName = local.name,
-                executionLocation = TaskExecutionLocation.LOCAL,
+                executedNodeId = failureNode.nodeId,
+                executedNodeName = failureNode.name,
+                executionLocation = if (
+                    failureNode.status == NodeStatus.LOCAL
+                ) {
+                    TaskExecutionLocation.LOCAL
+                } else {
+                    TaskExecutionLocation.REMOTE
+                },
                 status = TaskStatus.FAILED,
                 success = false,
                 output = "",

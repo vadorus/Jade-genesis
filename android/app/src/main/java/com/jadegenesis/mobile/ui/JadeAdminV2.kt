@@ -185,6 +185,21 @@ internal fun JadeAdminV2(
                         "L'écran n'invente aucun score absent de JadeUiState. Les rapports Runtime Eval complets restent produits par le moteur dédié.",
                         JadeColors.Info
                     )
+                    Spacer(Modifier.height(10.dp))
+                    V2PrimaryButton(
+                        text = if (state.canaryBusy) {
+                            "Mesure PC ↔ VPS en cours…"
+                        } else {
+                            "Mesurer PC ↔ VPS depuis le Pixel"
+                        },
+                        onClick = { vm.runPixelFfmpegCanaryMeasurement() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !state.canaryBusy
+                    )
+                    if (state.canaryMessage.isNotBlank()) {
+                        Spacer(Modifier.height(9.dp))
+                        V2InlineMessage(state.canaryMessage)
+                    }
                 }
             }
 

@@ -50,6 +50,9 @@ import com.jadegenesis.mobile.replay.CapabilityBranchHarvestReport
 import com.jadegenesis.mobile.replay.CapabilityBranchHarvester
 import com.jadegenesis.mobile.replay.CapabilityDecisionTrace
 import com.jadegenesis.mobile.replay.CapabilityDecisionTraceStore
+import com.jadegenesis.mobile.replay.CapabilityExecutionEvidence
+import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceFactory
+import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceStore
 import com.jadegenesis.mobile.replay.CapabilityManualChallengerPolicy
 import com.jadegenesis.mobile.replay.CapabilityReplayLab
 import com.jadegenesis.mobile.replay.CapabilityShadowLab
@@ -102,6 +105,8 @@ class JadeCore(context: Context) {
     private val routingReplayLab = RoutingReplayLab()
     private val capabilityDecisionTraceStore =
         CapabilityDecisionTraceStore(appContext)
+    private val capabilityExecutionEvidenceStore =
+        CapabilityExecutionEvidenceStore(appContext)
     private val capabilityReplayLab = CapabilityReplayLab()
     private val capabilityBranchHarvester = CapabilityBranchHarvester()
     private val capabilityShadowLab =
@@ -329,6 +334,24 @@ class JadeCore(context: Context) {
         limit: Int = 32
     ): List<CapabilityDecisionTrace> =
         capabilityDecisionTraceStore.recent(limit)
+
+    suspend fun runFfmpegCapabilityProbe(): DistributedTaskResult {
+        val device = profiler.capture()
+        val budget = resourceGovernor.evaluate(device)
+        val result = taskRouter.runFfmpegTranscodeProbe(
+            device = device,
+            budget = budget
+        )
+        capabilityExecutionEvidenceStore.record(
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(result)
+        )
+        return result
+    }
+
+    fun recentCapabilityExecutionEvidence(
+        limit: Int = 32
+    ): List<CapabilityExecutionEvidence> =
+        capabilityExecutionEvidenceStore.recent(limit)
 
     fun replayRecentCapabilityDecisions(
         limit: Int = 32

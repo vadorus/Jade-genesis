@@ -101,6 +101,23 @@ class TaskRouter(
         )
     }
 
+    suspend fun runFfmpegTranscodeProbe(
+        device: DeviceProfile,
+        budget: ResourceBudget
+    ): DistributedTaskResult =
+        runTask(
+            request = DistributedTaskRequest(
+                taskId = "task-${UUID.randomUUID()}",
+                taskKind = "ffmpeg_transcode_probe_v1",
+                payload = """{"profile":"ffmpeg_synthetic_mpeg4_mp4_v1"}""",
+                requiredCapability = "ffmpeg_transcode_probe_v1",
+                workload = TaskWorkload.LIGHT,
+                createdAt = System.currentTimeMillis()
+            ),
+            device = device,
+            budget = budget
+        )
+
     suspend fun runTextAnalysis(
         text: String,
         device: DeviceProfile,
@@ -922,6 +939,56 @@ class TaskRouter(
                 }
                 require(json.optInt("input_count", 0) > 0) {
                     "La consolidation mémoire est vide."
+                }
+            }
+
+            "ffmpeg_transcode_probe_v1" -> {
+                val json = JSONObject(output)
+                require(json.optString("provider_id") == "ffmpeg-local") {
+                    "Le probe FFmpeg provient d'un autre fournisseur."
+                }
+                require(json.optString("operation") == "media_transcode_probe") {
+                    "Le probe FFmpeg a une opération inattendue."
+                }
+                require(json.optBoolean("success", false)) {
+                    "Le probe FFmpeg signale un échec."
+                }
+                require(json.optBoolean("verification_passed", false)) {
+                    "Le probe FFmpeg n'a pas été vérifié."
+                }
+                require(!json.optBoolean("user_file_access", true)) {
+                    "Le probe FFmpeg a accédé à un fichier utilisateur."
+                }
+                require(!json.optBoolean("arbitrary_arguments_allowed", true)) {
+                    "Le probe FFmpeg autorise des arguments arbitraires."
+                }
+                require(!json.optBoolean("shell_execution", true)) {
+                    "Le probe FFmpeg a utilisé un shell."
+                }
+                require(!json.optBoolean("network_input_allowed", true)) {
+                    "Le probe FFmpeg autorise une entrée réseau."
+                }
+                require(!json.optBoolean("persistent_output", true)) {
+                    "Le probe FFmpeg a persisté sa sortie."
+                }
+                val media = json.getJSONObject("output")
+                require(media.optString("codec") == "mpeg4") {
+                    "Le codec du probe FFmpeg est inattendu."
+                }
+                require(media.optInt("width", 0) == 160) {
+                    "La largeur du probe FFmpeg est inattendue."
+                }
+                require(media.optInt("height", 0) == 90) {
+                    "La hauteur du probe FFmpeg est inattendue."
+                }
+                require(media.optLong("bytes", 0L) > 0L) {
+                    "La sortie du probe FFmpeg est vide."
+                }
+                require(
+                    Regex("^[0-9a-f]{64}$")
+                        .matches(media.optString("sha256"))
+                ) {
+                    "Le SHA-256 du probe FFmpeg est invalide."
                 }
             }
 

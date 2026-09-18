@@ -44,6 +44,8 @@ import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
 import com.jadegenesis.mobile.replay.DecisionTrace
 import com.jadegenesis.mobile.replay.DecisionTraceStore
+import com.jadegenesis.mobile.replay.RoutingAAReplayReport
+import com.jadegenesis.mobile.replay.RoutingReplayLab
 import com.jadegenesis.mobile.runtime.RuntimeManager
 import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
@@ -85,6 +87,7 @@ class JadeCore(context: Context) {
     private val taskLedger = TaskLedger(appContext)
     private val taskQueue = TaskQueue(appContext)
     private val decisionTraceStore = DecisionTraceStore(appContext)
+    private val routingReplayLab = RoutingReplayLab()
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
         ledger = taskLedger,
@@ -271,6 +274,11 @@ class JadeCore(context: Context) {
 
     fun recentDecisionTraces(limit: Int = 32): List<DecisionTrace> =
         decisionTraceStore.recent(limit)
+
+    fun replayRecentRoutingDecisions(
+        limit: Int = 32
+    ): RoutingAAReplayReport =
+        routingReplayLab.evaluate(decisionTraceStore.recent(limit))
 
     fun pendingTaskCount(): Int = taskQueue.pendingCount()
 

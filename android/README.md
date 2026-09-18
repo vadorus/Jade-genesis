@@ -5,8 +5,8 @@ Native Android / Pixel application for Jade Genesis.
 Current package/version:
 
 - application ID: `com.jadegenesis.mobile`
-- versionName: `0.1.21`
-- versionCode: `39`
+- versionName: `0.1.22`
+- versionCode: `40`
 - minSdk: `31`
 - compileSdk / targetSdk: `37`
 

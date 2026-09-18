@@ -190,6 +190,8 @@ jobs:
               item["cost_class"] == "LOCAL_FREE"
               for item in inventory["items"]
           )
+          for capability_id in inventory["available_ids"]:
+              assert f"local_free:{capability_id}" in capabilities
 
           ollama_calls = health["ollama_calls"]
           assert ollama_calls["model_list_calls"] >= 0

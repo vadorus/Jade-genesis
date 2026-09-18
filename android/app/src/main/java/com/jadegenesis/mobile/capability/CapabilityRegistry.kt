@@ -81,21 +81,33 @@ class CapabilityRegistry(
     private val descriptors = linkedMapOf<String, CapabilityDescriptor>()
 
     fun register(descriptor: CapabilityDescriptor) {
-        descriptors[descriptor.id] = descriptor
+        descriptors[instanceKey(descriptor)] = descriptor
     }
 
     fun registerAll(items: Iterable<CapabilityDescriptor>) {
         items.forEach(::register)
     }
 
-    fun remove(id: String): Boolean =
-        descriptors.remove(id) != null
+    fun remove(id: String): Boolean {
+        val direct = descriptors.remove(id) != null
+        val matchingKeys = descriptors
+            .filterValues { it.id == id }
+            .keys
+            .toList()
+        matchingKeys.forEach(descriptors::remove)
+        return direct || matchingKeys.isNotEmpty()
+    }
 
     fun all(): List<CapabilityDescriptor> =
         descriptors.values.toList()
 
     fun get(id: String): CapabilityDescriptor? =
-        descriptors[id]
+        descriptors[id] ?: descriptors.values.firstOrNull { it.id == id }
+
+    private fun instanceKey(descriptor: CapabilityDescriptor): String {
+        val node = descriptor.nodeId?.trim().orEmpty()
+        return if (node.isBlank()) descriptor.id else "${descriptor.id}@$node"
+    }
 
     fun availableFor(operation: String): List<CapabilityDescriptor> {
         val normalized = operation.trim().lowercase()
@@ -135,7 +147,8 @@ class CapabilityRegistry(
             { costRank(it.costClass, policy) },
             { if (it.requiresNetwork) 1 else 0 },
             { it.displayName.lowercase() },
-            { it.id }
+            { it.id },
+            { it.nodeId.orEmpty() }
         )
 
     private fun costRank(

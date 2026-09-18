@@ -17,6 +17,7 @@ class CapabilityPairedComparisonLabTest {
             evidenceId = "inc",
             nodeId = "pc-a",
             durationMs = 120L,
+            endToEndMs = 150L,
             success = true,
             verified = true
         )
@@ -24,6 +25,7 @@ class CapabilityPairedComparisonLabTest {
             evidenceId = "chal",
             nodeId = "pc-b",
             durationMs = 80L,
+            endToEndMs = 900L,
             success = true,
             verified = true
         )
@@ -40,8 +42,8 @@ class CapabilityPairedComparisonLabTest {
         assertTrue(comparison.latencyComparable)
         assertEquals(-40L, comparison.latencyDeltaMs)
         assertEquals("pc-b", comparison.fasterNodeId)
-        assertEquals(420L, comparison.incumbentEndToEndMs)
-        assertEquals(380L, comparison.challengerEndToEndMs)
+        assertEquals(150L, comparison.incumbentEndToEndMs)
+        assertEquals(900L, comparison.challengerEndToEndMs)
         assertFalse(comparison.automaticPromotionAllowed)
     }
 
@@ -183,6 +185,7 @@ class CapabilityPairedComparisonLabTest {
         evidenceId: String,
         nodeId: String,
         durationMs: Long,
+        endToEndMs: Long = durationMs + 300L,
         success: Boolean,
         verified: Boolean
     ): CapabilityExecutionEvidence =
@@ -196,7 +199,7 @@ class CapabilityPairedComparisonLabTest {
             nodeName = nodeId,
             success = success,
             verificationPassed = verified,
-            durationMs = durationMs + 300L,
+            durationMs = endToEndMs,
             nodeExecutionMs = durationMs,
             outputBytes = if (success) 1234L else 0L,
             outputSha256 = if (success) {

@@ -46,8 +46,9 @@ The Android-side catalog declares these eligible providers:
 | Krita | image editing / painting |
 | Playwright | browser automation |
 
-These are candidates for node adapters. They remain `available=false` until a
-real node probe proves otherwise.
+These are candidates for node adapters. The static Android catalog still
+defaults them to `available=false`; the Node Runtime discovery layer can now
+prove availability read-only and advertise it back to Android.
 
 ## Why Higgsfield is not core infrastructure
 
@@ -85,21 +86,46 @@ Within the default policy:
 This is intentionally simpler than the future Replay Lab. V0 establishes the
 policy boundary first.
 
-## Next implementation step
+## Implemented discovery bridge
 
-The next code step is **real discovery**, not automatic installation:
+0.1.22 now adds a read-only discovery path:
 
 ```text
-Node probe
-  -> detect Ollama / ComfyUI / whisper.cpp / Piper / Blender / FFmpeg /
-     Krita / Playwright
-  -> report version + node + availability
-  -> CapabilityRegistry
-  -> DecisionTrace records what Jade could choose and what it selected
+Node Runtime
+  -> PATH detection for command-backed local tools
+  -> existing Ollama health reused
+  -> optional ComfyUI loopback-only probe
+  -> capability_inventory
+  -> local_free:<catalog-id> compatibility markers
+  -> Android NodeCapabilityBridge
+  -> typed CapabilityRegistry
 ```
 
-Once DecisionTrace exists, Replay Lab can compare alternative routing policies
-without changing production behavior.
+The discovery module does not install or start software. It never probes a
+non-loopback ComfyUI URL and never creates a paid-provider entry.
+
+The same capability may be present on several online nodes. The registry keeps
+those provider instances separately by capability id + node id, so later
+routing policy can compare PC/VPS/device choices rather than collapsing them.
+
+## Next implementation step
+
+DecisionTrace and deterministic A/A routing replay now already exist on main.
+The next capability-specific step is to record, for each orchestrated
+capability decision:
+
+```text
+required operation
+  -> discovered eligible providers
+  -> free-first policy
+  -> selected provider + node
+  -> execution outcome/cost/latency
+  -> DecisionTrace
+  -> A/A Replay
+```
+
+Only after replay can faithfully reproduce those decisions should Jade gain a
+challenger policy or Branch Harvester for capability routing.
 
 ## Relationship to existing Jade architecture
 

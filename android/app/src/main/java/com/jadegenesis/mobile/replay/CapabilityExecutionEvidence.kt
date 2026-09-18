@@ -105,7 +105,25 @@ object CapabilityExecutionEvidenceFactory {
         }
 
         val output = json.getJSONObject("output")
+        val codec = output.optString("codec").trim().lowercase()
+        val width = output.optInt("width", 0)
+        val height = output.optInt("height", 0)
+        val outputBytes = output.optLong("bytes", 0L)
+        val durationSeconds = output.optDouble("duration_seconds", -1.0)
         val sha = output.optString("sha256")
+
+        require(codec == "mpeg4") {
+            "FFmpeg evidence codec is invalid."
+        }
+        require(width == 160 && height == 90) {
+            "FFmpeg evidence dimensions are invalid."
+        }
+        require(outputBytes > 0L) {
+            "FFmpeg evidence output size is invalid."
+        }
+        require(durationSeconds in 0.25..1.0) {
+            "FFmpeg evidence media duration is invalid."
+        }
         require(Regex("^[0-9a-f]{64}$").matches(sha)) {
             "FFmpeg evidence SHA-256 is invalid."
         }
@@ -122,11 +140,11 @@ object CapabilityExecutionEvidenceFactory {
             verificationPassed = true,
             durationMs = result.durationMs,
             nodeExecutionMs = nodeExecutionMs,
-            outputBytes = output.optLong("bytes", 0L),
+            outputBytes = outputBytes,
             outputSha256 = sha,
-            codec = output.optString("codec"),
-            width = output.optInt("width", 0),
-            height = output.optInt("height", 0),
+            codec = codec,
+            width = width,
+            height = height,
             fallbackUsed = result.fallbackUsed,
             startedAt = result.startedAt,
             completedAt = result.completedAt
@@ -175,10 +193,11 @@ object CapabilityExecutionEvidenceCodec {
             json.optLong("duration_ms", 0L)
         }
         val nodeExecutionMs = if (schemaVersion >= 2) {
-            json.optLong("node_execution_ms", 0L)
+            json.optLong("node_execution_ms", -1L)
         } else {
             // V1 evidence did not separate network/transport time.
-            endToEndMs
+            // Keep it readable, but mark node-local timing as unavailable.
+            -1L
         }
 
         return CapabilityExecutionEvidence(

@@ -114,7 +114,8 @@ class TaskRouter(
     suspend fun runFfmpegTranscodeProbeOnNode(
         nodeId: String?,
         device: DeviceProfile,
-        budget: ResourceBudget
+        budget: ResourceBudget,
+        refreshRemote: Boolean = true
     ): DistributedTaskResult =
         runTask(
             request = DistributedTaskRequest(
@@ -127,7 +128,8 @@ class TaskRouter(
             ),
             device = device,
             budget = budget,
-            forcedNodeId = nodeId
+            forcedNodeId = nodeId,
+            refreshRemote = refreshRemote
         )
 
     suspend fun runTextAnalysis(
@@ -233,15 +235,19 @@ class TaskRouter(
         request: DistributedTaskRequest,
         device: DeviceProfile,
         budget: ResourceBudget,
-        forcedNodeId: String? = null
+        forcedNodeId: String? = null,
+        refreshRemote: Boolean = true
     ): DistributedTaskResult {
         val activeConfig = configProvider().validated()
         val startedAt = System.currentTimeMillis()
+        val measurementOnly =
+            forcedNodeId != null ||
+                request.taskKind == "ffmpeg_transcode_probe_v1"
         queue.enqueue(request)
 
         val nodes = nodeManager.nodes(
             device = device,
-            refreshRemote = true
+            refreshRemote = refreshRemote
         )
         val history = ledger.recent(
             activeConfig.task.routingHistoryLimit.coerceIn(
@@ -353,7 +359,11 @@ class TaskRouter(
                 attempts = 0,
                 error = reason
             )
-            ledger.record(result)
+            if (!measurementOnly) {
+
+                ledger.record(result)
+
+            }
             recordDecisionTrace(
                 request = request,
                 activeConfig = activeConfig,
@@ -361,6 +371,11 @@ class TaskRouter(
                 alternatives = decisionAlternatives,
                 requested = requested,
                 routeReason = routeReason,
+                decisionKind = if (measurementOnly) {
+                    "capability_measurement"
+                } else {
+                    "task_routing"
+                },
                 result = result
             )
             return result
@@ -484,7 +499,11 @@ class TaskRouter(
                     nodeName = executedNode.name,
                     attempts = attempts.size
                 )
-                ledger.record(result)
+                if (!measurementOnly) {
+
+                    ledger.record(result)
+
+                }
                 recordDecisionTrace(
                     request = request,
                     activeConfig = activeConfig,
@@ -492,6 +511,11 @@ class TaskRouter(
                     alternatives = decisionAlternatives,
                     requested = requested,
                     routeReason = routeReason,
+                    decisionKind = if (measurementOnly) {
+                        "capability_measurement"
+                    } else {
+                        "task_routing"
+                    },
                     result = result
                 )
                 return result
@@ -546,7 +570,11 @@ class TaskRouter(
             attempts = attempts.size,
             error = failureSummary
         )
-        ledger.record(result)
+        if (!measurementOnly) {
+
+            ledger.record(result)
+
+        }
         recordDecisionTrace(
             request = request,
             activeConfig = activeConfig,
@@ -554,6 +582,11 @@ class TaskRouter(
             alternatives = decisionAlternatives,
             requested = requested,
             routeReason = routeReason,
+            decisionKind = if (measurementOnly) {
+                "capability_measurement"
+            } else {
+                "task_routing"
+            },
             result = result
         )
         return result
@@ -566,12 +599,13 @@ class TaskRouter(
         alternatives: List<DecisionAlternativeTrace>,
         requested: RankedNode?,
         routeReason: String,
+        decisionKind: String,
         result: DistributedTaskResult
     ) {
         decisionTraceStore?.record(
             DecisionTrace(
                 traceId = "decision-${request.taskId}",
-                decisionKind = "task_routing",
+                decisionKind = decisionKind,
                 taskId = request.taskId,
                 taskKind = request.taskKind,
                 requiredCapability = request.requiredCapability,

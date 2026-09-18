@@ -48,6 +48,35 @@ class CapabilityPairedComparisonLabTest {
     }
 
     @Test
+    fun legacyEvidenceWithoutNodeTimingIsNotLatencyComparable() {
+        val incumbent = evidence(
+            evidenceId = "legacy-inc",
+            nodeId = "pc-a",
+            durationMs = 100L,
+            success = true,
+            verified = true
+        ).copy(nodeExecutionMs = -1L)
+
+        val challenger = evidence(
+            evidenceId = "new-chal",
+            nodeId = "pc-b",
+            durationMs = 80L,
+            success = true,
+            verified = true
+        )
+
+        val comparison = CapabilityPairedComparisonLab().compare(
+            incumbent,
+            challenger
+        )
+
+        assertEquals(CapabilityPairStatus.BOTH_VERIFIED, comparison.status)
+        assertFalse(comparison.latencyComparable)
+        assertNull(comparison.latencyDeltaMs)
+        assertNull(comparison.fasterNodeId)
+    }
+
+    @Test
     fun latencyIsIgnoredWhenChallengerFailsVerification() {
         val incumbent = evidence(
             evidenceId = "inc",

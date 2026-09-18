@@ -7,6 +7,6 @@ import org.junit.Test
 class RuntimeVersionTest {
     @Test
     fun expectedNodeRuntimeMatches021Runtime() {
-        assertEquals("0.1.8", RuntimeManager.EXPECTED_RUNTIME_VERSION)
+        assertEquals("0.1.9", RuntimeManager.EXPECTED_RUNTIME_VERSION)
     }
 }

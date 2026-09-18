@@ -73,7 +73,9 @@ jobs:
             node-agent/typed_skill_search.py \
             node-agent/hybrid_skill_teacher.py \
             node-agent/free_capability_discovery.py \
+            node-agent/ffmpeg_capability_probe.py \
             node-agent/test_free_capability_discovery.py \
+            node-agent/test_ffmpeg_capability_probe.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
@@ -100,6 +102,66 @@ jobs:
             -p 'test_*.py' \
             -v
 
+      - name: Install free FFmpeg test dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+
+      - name: Execute bounded FFmpeg capability probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          node_dir = Path("node-agent").resolve()
+          sys.path.insert(0, str(node_dir))
+
+          from ffmpeg_capability_probe import (
+              ffmpeg_probe_status,
+              run_ffmpeg_transcode_probe,
+          )
+
+          status = ffmpeg_probe_status()
+          assert status["ready"] is True, status
+          assert status["user_file_access"] is False
+          assert status["arbitrary_arguments_allowed"] is False
+          assert status["shell_execution"] is False
+          assert status["network_input_allowed"] is False
+          assert status["persistent_output"] is False
+
+          result_text, duration_ms = run_ffmpeg_transcode_probe("")
+          result = json.loads(result_text)
+          assert result["success"] is True
+          assert result["verification_passed"] is True
+          assert result["provider_id"] == "ffmpeg-local"
+          assert result["operation"] == "media_transcode_probe"
+          assert result["output"]["codec"] == "mpeg4"
+          assert result["output"]["width"] == 160
+          assert result["output"]["height"] == 90
+          assert result["output"]["bytes"] > 0
+          assert len(result["output"]["sha256"]) == 64
+          assert duration_ms >= 0
+
+          print(
+              "Bounded FFmpeg probe passed:",
+              json.dumps(
+                  {
+                      "duration_ms": duration_ms,
+                      "bytes": result["output"]["bytes"],
+                      "sha256": result["output"]["sha256"],
+                  },
+                  sort_keys=True,
+              ),
+          )
+          PY
+
       - name: Validate 0.1.21 causal-learning boundaries without external services
         shell: bash
         run: |
@@ -119,11 +181,12 @@ jobs:
           module = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(module)
 
-          assert module.VERSION == "0.1.8"
+          assert module.VERSION == "0.1.9"
           assert module.PROTOCOL == "jade-genesis-node/0.0.6"
           assert "brain_chat" in module.ALLOWED_TASKS
           assert "vision_analyze" in module.ALLOWED_TASKS
           assert "shared_state_sync" in module.ALLOWED_TASKS
+          assert "ffmpeg_transcode_probe_v1" in module.ALLOWED_TASKS
           for forbidden_task in (
               "night_learning_lab",
               "procedure_execute",
@@ -192,6 +255,19 @@ jobs:
           )
           for capability_id in inventory["available_ids"]:
               assert f"local_free:{capability_id}" in capabilities
+
+          ffmpeg_probe = health["ffmpeg_transcode_probe"]
+          assert ffmpeg_probe["schema_version"] == 1
+          assert ffmpeg_probe["provider_id"] == "ffmpeg-local"
+          assert ffmpeg_probe["operation"] == "media_transcode_probe"
+          assert ffmpeg_probe["bounded_synthetic_input_only"] is True
+          assert ffmpeg_probe["user_file_access"] is False
+          assert ffmpeg_probe["arbitrary_arguments_allowed"] is False
+          assert ffmpeg_probe["shell_execution"] is False
+          assert ffmpeg_probe["network_input_allowed"] is False
+          assert ffmpeg_probe["persistent_output"] is False
+          if ffmpeg_probe["ready"]:
+              assert "ffmpeg_transcode_probe_v1" in capabilities
 
           ollama_calls = health["ollama_calls"]
           assert ollama_calls["model_list_calls"] >= 0
@@ -346,7 +422,7 @@ jobs:
               assert '"body"' not in route_text
               assert '"expected_output"' not in route_text
 
-          print("Node Runtime 0.1.8 + causal Skill Synthesis plumbing validated.")
+          print("Node Runtime 0.1.9 + bounded FFmpeg probe + causal Skill Synthesis plumbing validated.")
           PY
 
       - name: Prove validation did not rewrite sources

@@ -289,7 +289,6 @@ def _health_payload(config: dict, store=None) -> dict:
     result["capabilities"] = capabilities
     result["brain_profiles"] = brain_profiles_status(config, core)
     result["ollama_calls"] = ollama_call_counters()
-    result["ffmpeg_transcode_probe"] = ffmpeg_probe_status()
     result["skill_dispatch"] = {
         "enabled_for_structured_brain_chat": True,
         "exact_task_family_only": True,
@@ -342,6 +341,7 @@ def _runtime_payload(config: dict) -> dict:
     result["runtime_version"] = VERSION
     result["brain_profiles"] = brain_profiles_status(config, core)
     result["ollama_calls"] = ollama_call_counters()
+    result["ffmpeg_transcode_probe"] = ffmpeg_probe_status()
     result["skill_dispatch"] = {
         "enabled_for_structured_brain_chat": True,
         "exact_task_family_only": True,

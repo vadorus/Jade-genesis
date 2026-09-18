@@ -34,6 +34,7 @@ import com.jadegenesis.mobile.model.JadeIdentity
 import com.jadegenesis.mobile.model.LearningCandidate
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.MemoryType
+import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.MeshProbeSummary
 import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
@@ -367,6 +368,94 @@ class JadeCore(context: Context) {
             incumbentNodeId = incumbentNodeId,
             challengerNodeId = challengerNodeId
         )
+
+    suspend fun runPairedFfmpegCapabilityProbe(
+        incumbentNodeId: String,
+        challengerNodeId: String
+    ): CapabilityPairedComparison {
+        require(incumbentNodeId.isNotBlank()) {
+            "Le nœud incumbent est vide."
+        }
+        require(challengerNodeId.isNotBlank()) {
+            "Le nœud challenger est vide."
+        }
+        require(incumbentNodeId != challengerNodeId) {
+            "La comparaison nécessite deux nœuds différents."
+        }
+
+        val device = profiler.capture()
+        val budget = resourceGovernor.evaluate(device)
+        val nodes = nodeManager.nodes(
+            device = device,
+            refreshRemote = true
+        )
+
+        fun requireCompatibleNode(nodeId: String): GenesisNode {
+            val node = nodes.firstOrNull { it.nodeId == nodeId }
+                ?: error("Nœud introuvable pour la comparaison : $nodeId")
+            require(
+                node.status == NodeStatus.LOCAL ||
+                    node.status == NodeStatus.ONLINE
+            ) {
+                "Le nœud $nodeId n'est pas disponible."
+            }
+            require("task_execution_v3" in node.capabilities) {
+                "Le nœud $nodeId ne permet pas l'exécution de tâche."
+            }
+            require("ffmpeg_transcode_probe_v1" in node.capabilities) {
+                "Le nœud $nodeId n'annonce pas le probe FFmpeg borné."
+            }
+            return node
+        }
+
+        requireCompatibleNode(incumbentNodeId)
+        requireCompatibleNode(challengerNodeId)
+
+        val incumbentResult = taskRouter.runFfmpegTranscodeProbeOnNode(
+            nodeId = incumbentNodeId,
+            device = device,
+            budget = budget
+        )
+        val incumbentEvidence =
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(
+                incumbentResult
+            )
+        capabilityExecutionEvidenceStore.record(incumbentEvidence)
+
+        val challengerResult = taskRouter.runFfmpegTranscodeProbeOnNode(
+            nodeId = challengerNodeId,
+            device = device,
+            budget = budget
+        )
+        val challengerEvidence =
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(
+                challengerResult
+            )
+        capabilityExecutionEvidenceStore.record(challengerEvidence)
+
+        val comparison = capabilityPairedComparisonLab.compare(
+            incumbent = incumbentEvidence,
+            challenger = challengerEvidence
+        )
+
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "ffmpeg_paired_probe_completed",
+            "Comparaison FFmpeg bornée terminée sans promotion automatique.",
+            mapOf(
+                "incumbent_node_id" to incumbentNodeId,
+                "challenger_node_id" to challengerNodeId,
+                "status" to comparison.status.name,
+                "latency_comparable" to
+                    comparison.latencyComparable.toString(),
+                "latency_delta_ms" to
+                    (comparison.latencyDeltaMs?.toString() ?: "n/a"),
+                "automatic_promotion" to "false"
+            )
+        )
+
+        return comparison
+    }
 
     fun replayRecentCapabilityDecisions(
         limit: Int = 32

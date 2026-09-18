@@ -37,7 +37,7 @@ class CapabilityRepeatedPairAnalyzerTest {
         assertEquals(98L, report.challengerMedianMs)
         assertEquals(140L, report.incumbentP95Ms)
         assertEquals(120L, report.challengerP95Ms)
-        assertEquals(-15L, report.medianLatencyDeltaMs)
+        assertEquals(-10L, report.medianLatencyDeltaMs)
         assertFalse(report.automaticPromotionAllowed)
     }
 

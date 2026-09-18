@@ -143,7 +143,9 @@ class FfmpegCapabilityProbeTest(unittest.TestCase):
             f"testsrc2=size={WIDTH}x{HEIGHT}:rate=10",
             ffmpeg_command,
         )
-        self.assertNotIn("-i", ["user.mp4"])
+        self.assertTrue(
+            all("user.mp4" not in str(arg) for arg in ffmpeg_command)
+        )
         self.assertEqual(15.0, observed_commands[0][1])
         self.assertEqual(5.0, observed_commands[1][1])
 

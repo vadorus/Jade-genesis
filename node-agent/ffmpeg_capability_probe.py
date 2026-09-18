@@ -62,6 +62,8 @@ def _default_runner(command: list[str], timeout_seconds: float) -> subprocess.Co
 
 
 def _parse_request(payload: str) -> dict:
+    if len(payload) > 512:
+        raise ValueError("ffmpeg_probe_payload_too_large")
     if not payload.strip():
         return {"profile": PROBE_ID}
     try:
@@ -165,9 +167,7 @@ def run_ffmpeg_transcode_probe(
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,duration",
-            "-show_entries",
-            "format=duration,size",
+            "stream=codec_name,width,height,r_frame_rate,duration:format=duration,size",
             "-of",
             "json",
             str(output_path),

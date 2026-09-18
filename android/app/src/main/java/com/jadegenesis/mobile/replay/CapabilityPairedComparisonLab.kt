@@ -76,7 +76,9 @@ class CapabilityPairedComparisonLab {
         }
 
         val latencyComparable =
-            status == CapabilityPairStatus.BOTH_VERIFIED
+            status == CapabilityPairStatus.BOTH_VERIFIED &&
+                incumbent.nodeExecutionMs >= 0L &&
+                challenger.nodeExecutionMs >= 0L
 
         val latencyDeltaMs = if (latencyComparable) {
             challenger.nodeExecutionMs - incumbent.nodeExecutionMs
@@ -105,13 +107,13 @@ class CapabilityPairedComparisonLab {
             incumbentNodeName = incumbent.nodeName,
             incumbentSuccess = incumbent.success,
             incumbentVerified = incumbentVerified,
-            incumbentDurationMs = incumbent.nodeExecutionMs,
+            incumbentDurationMs = incumbent.nodeExecutionMs.coerceAtLeast(0L),
             challengerEvidenceId = challenger.evidenceId,
             challengerNodeId = challenger.nodeId,
             challengerNodeName = challenger.nodeName,
             challengerSuccess = challenger.success,
             challengerVerified = challengerVerified,
-            challengerDurationMs = challenger.nodeExecutionMs,
+            challengerDurationMs = challenger.nodeExecutionMs.coerceAtLeast(0L),
             status = status,
             latencyComparable = latencyComparable,
             latencyDeltaMs = latencyDeltaMs,

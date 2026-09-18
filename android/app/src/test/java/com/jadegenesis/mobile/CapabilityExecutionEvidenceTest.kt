@@ -66,7 +66,24 @@ class CapabilityExecutionEvidenceTest {
 
         val restored = CapabilityExecutionEvidenceCodec.fromJson(legacy)
         assertEquals(123L, restored.durationMs)
-        assertEquals(123L, restored.nodeExecutionMs)
+        assertEquals(-1L, restored.nodeExecutionMs)
+    }
+
+    @Test
+    fun malformedMediaMetadataIsRejectedByEvidenceFactory() {
+        val bad = result(success = true).copy(
+            output = result(success = true).output.replace(
+                "\"duration_seconds\":0.5",
+                "\"duration_seconds\":2.0"
+            )
+        )
+
+        try {
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(bad)
+            throw AssertionError("Expected invalid media duration to be rejected.")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("duration"))
+        }
     }
 
     @Test
@@ -99,6 +116,7 @@ class CapabilityExecutionEvidenceTest {
                 "codec":"mpeg4",
                 "width":160,
                 "height":90,
+                "duration_seconds":0.5,
                 "bytes":1234,
                 "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               }

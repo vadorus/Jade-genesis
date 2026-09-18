@@ -314,7 +314,10 @@ class JadeCore(context: Context) {
     fun replayRecentRoutingDecisions(
         limit: Int = 32
     ): RoutingAAReplayReport =
-        routingReplayLab.evaluate(decisionTraceStore.recent(limit))
+        routingReplayLab.evaluate(
+            decisionTraceStore.recent(limit)
+                .filter { it.decisionKind == "task_routing" }
+        )
 
     suspend fun discoveredFreeCapabilities(
         refreshRemote: Boolean = true
@@ -375,7 +378,9 @@ class JadeCore(context: Context) {
 
     suspend fun runPairedFfmpegCapabilityProbe(
         incumbentNodeId: String,
-        challengerNodeId: String
+        challengerNodeId: String,
+        refreshRemote: Boolean = true,
+        challengerFirst: Boolean = false
     ): CapabilityPairedComparison {
         require(incumbentNodeId.isNotBlank()) {
             "Le nœud incumbent est vide."
@@ -391,7 +396,7 @@ class JadeCore(context: Context) {
         val budget = resourceGovernor.evaluate(device)
         val nodes = nodeManager.nodes(
             device = device,
-            refreshRemote = true
+            refreshRemote = refreshRemote
         )
 
         fun requireCompatibleNode(nodeId: String): GenesisNode {
@@ -415,27 +420,29 @@ class JadeCore(context: Context) {
         requireCompatibleNode(incumbentNodeId)
         requireCompatibleNode(challengerNodeId)
 
-        val incumbentResult = taskRouter.runFfmpegTranscodeProbeOnNode(
-            nodeId = incumbentNodeId,
-            device = device,
-            budget = budget
-        )
-        val incumbentEvidence =
-            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(
-                incumbentResult
+        suspend fun execute(nodeId: String): CapabilityExecutionEvidence {
+            val result = taskRouter.runFfmpegTranscodeProbeOnNode(
+                nodeId = nodeId,
+                device = device,
+                budget = budget,
+                refreshRemote = false
             )
-        capabilityExecutionEvidenceStore.record(incumbentEvidence)
+            val evidence =
+                CapabilityExecutionEvidenceFactory.fromFfmpegProbe(result)
+            capabilityExecutionEvidenceStore.record(evidence)
+            return evidence
+        }
 
-        val challengerResult = taskRouter.runFfmpegTranscodeProbeOnNode(
-            nodeId = challengerNodeId,
-            device = device,
-            budget = budget
-        )
-        val challengerEvidence =
-            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(
-                challengerResult
-            )
-        capabilityExecutionEvidenceStore.record(challengerEvidence)
+        val incumbentEvidence: CapabilityExecutionEvidence
+        val challengerEvidence: CapabilityExecutionEvidence
+
+        if (challengerFirst) {
+            challengerEvidence = execute(challengerNodeId)
+            incumbentEvidence = execute(incumbentNodeId)
+        } else {
+            incumbentEvidence = execute(incumbentNodeId)
+            challengerEvidence = execute(challengerNodeId)
+        }
 
         val comparison = capabilityPairedComparisonLab.compare(
             incumbent = incumbentEvidence,
@@ -450,10 +457,14 @@ class JadeCore(context: Context) {
                 "incumbent_node_id" to incumbentNodeId,
                 "challenger_node_id" to challengerNodeId,
                 "status" to comparison.status.name,
-                "latency_comparable" to
+                "node_execution_comparable" to
                     comparison.latencyComparable.toString(),
-                "latency_delta_ms" to
+                "node_execution_delta_ms" to
                     (comparison.latencyDeltaMs?.toString() ?: "n/a"),
+                "incumbent_end_to_end_ms" to
+                    comparison.incumbentEndToEndMs.toString(),
+                "challenger_end_to_end_ms" to
+                    comparison.challengerEndToEndMs.toString(),
                 "automatic_promotion" to "false"
             )
         )
@@ -470,12 +481,51 @@ class JadeCore(context: Context) {
             "Le nombre de tours doit être compris entre 2 et 7."
         }
 
+        // One refresh before the entire series. Individual bounded probes reuse
+        // this registry snapshot and fail closed if a node stops responding.
+        val device = profiler.capture()
+        val budget = resourceGovernor.evaluate(device)
+        val nodes = nodeManager.nodes(
+            device = device,
+            refreshRemote = true
+        )
+
+        fun requireCompatibleNode(nodeId: String) {
+            val node = nodes.firstOrNull { it.nodeId == nodeId }
+                ?: error("Nœud introuvable pour la comparaison : $nodeId")
+            require(
+                (node.status == NodeStatus.LOCAL ||
+                    node.status == NodeStatus.ONLINE) &&
+                    "task_execution_v3" in node.capabilities &&
+                    "ffmpeg_transcode_probe_v1" in node.capabilities
+            ) {
+                "Le nœud $nodeId n'est pas prêt pour la série FFmpeg."
+            }
+        }
+
+        requireCompatibleNode(incumbentNodeId)
+        requireCompatibleNode(challengerNodeId)
+
+        // Warm both nodes once without counting the result. This absorbs the
+        // cold process-launch/cache penalty before measured rounds.
+        listOf(incumbentNodeId, challengerNodeId).forEach { nodeId ->
+            val warmup = taskRouter.runFfmpegTranscodeProbeOnNode(
+                nodeId = nodeId,
+                device = device,
+                budget = budget,
+                refreshRemote = false
+            )
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(warmup)
+        }
+
         val comparisons = buildList {
-            repeat(rounds) {
+            repeat(rounds) { index ->
                 add(
                     runPairedFfmpegCapabilityProbe(
                         incumbentNodeId = incumbentNodeId,
-                        challengerNodeId = challengerNodeId
+                        challengerNodeId = challengerNodeId,
+                        refreshRemote = false,
+                        challengerFirst = index % 2 == 1
                     )
                 )
             }
@@ -494,13 +544,19 @@ class JadeCore(context: Context) {
                 "incumbent_node_id" to incumbentNodeId,
                 "challenger_node_id" to challengerNodeId,
                 "rounds" to rounds.toString(),
+                "warmup_rounds" to "1",
+                "order" to "alternating",
                 "both_verified" to report.bothVerifiedRounds.toString(),
-                "incumbent_median_ms" to
+                "incumbent_node_median_ms" to
                     (report.incumbentMedianMs?.toString() ?: "n/a"),
-                "challenger_median_ms" to
+                "challenger_node_median_ms" to
                     (report.challengerMedianMs?.toString() ?: "n/a"),
-                "median_delta_ms" to
+                "node_median_delta_ms" to
                     (report.medianLatencyDeltaMs?.toString() ?: "n/a"),
+                "incumbent_end_to_end_median_ms" to
+                    (report.incumbentEndToEndMedianMs?.toString() ?: "n/a"),
+                "challenger_end_to_end_median_ms" to
+                    (report.challengerEndToEndMedianMs?.toString() ?: "n/a"),
                 "automatic_promotion" to "false"
             )
         )

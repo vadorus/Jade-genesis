@@ -5,6 +5,9 @@ import android.util.Base64
 import com.jadegenesis.mobile.brain.BrainRouter
 import com.jadegenesis.mobile.brain.LocalPCBrain
 import com.jadegenesis.mobile.brain.PrototypeBrain
+import com.jadegenesis.mobile.capability.CapabilityDescriptor
+import com.jadegenesis.mobile.capability.CapabilitySelectionCoordinator
+import com.jadegenesis.mobile.capability.NodeCapabilityBridge
 import com.jadegenesis.mobile.cognitive.CognitiveCore
 import com.jadegenesis.mobile.cognitive.CognitiveLedger
 import com.jadegenesis.mobile.cognitive.LearningEngine
@@ -42,6 +45,10 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
+import com.jadegenesis.mobile.replay.CapabilityAAReplayReport
+import com.jadegenesis.mobile.replay.CapabilityDecisionTrace
+import com.jadegenesis.mobile.replay.CapabilityDecisionTraceStore
+import com.jadegenesis.mobile.replay.CapabilityReplayLab
 import com.jadegenesis.mobile.replay.DecisionTrace
 import com.jadegenesis.mobile.replay.DecisionTraceStore
 import com.jadegenesis.mobile.replay.RoutingAAReplayReport
@@ -88,6 +95,13 @@ class JadeCore(context: Context) {
     private val taskQueue = TaskQueue(appContext)
     private val decisionTraceStore = DecisionTraceStore(appContext)
     private val routingReplayLab = RoutingReplayLab()
+    private val capabilityDecisionTraceStore =
+        CapabilityDecisionTraceStore(appContext)
+    private val capabilityReplayLab = CapabilityReplayLab()
+    private val capabilitySelectionCoordinator =
+        CapabilitySelectionCoordinator(
+            traceSink = capabilityDecisionTraceStore::record
+        )
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
         ledger = taskLedger,
@@ -279,6 +293,41 @@ class JadeCore(context: Context) {
         limit: Int = 32
     ): RoutingAAReplayReport =
         routingReplayLab.evaluate(decisionTraceStore.recent(limit))
+
+    suspend fun discoveredFreeCapabilities(
+        refreshRemote: Boolean = true
+    ): List<CapabilityDescriptor> {
+        val nodes = nodeManager.nodes(
+            device = profiler.capture(),
+            refreshRemote = refreshRemote
+        )
+        return NodeCapabilityBridge.discovered(nodes)
+    }
+
+    suspend fun selectFreeCapability(
+        operation: String,
+        refreshRemote: Boolean = true
+    ): CapabilityDescriptor? {
+        val nodes = nodeManager.nodes(
+            device = profiler.capture(),
+            refreshRemote = refreshRemote
+        )
+        return capabilitySelectionCoordinator
+            .select(operation, nodes)
+            .selected
+    }
+
+    fun recentCapabilityDecisionTraces(
+        limit: Int = 32
+    ): List<CapabilityDecisionTrace> =
+        capabilityDecisionTraceStore.recent(limit)
+
+    fun replayRecentCapabilityDecisions(
+        limit: Int = 32
+    ): CapabilityAAReplayReport =
+        capabilityReplayLab.evaluate(
+            capabilityDecisionTraceStore.recent(limit)
+        )
 
     fun pendingTaskCount(): Int = taskQueue.pendingCount()
 

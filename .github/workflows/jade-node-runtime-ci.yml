@@ -72,6 +72,8 @@ jobs:
             node-agent/shared_store_lock.py \
             node-agent/typed_skill_search.py \
             node-agent/hybrid_skill_teacher.py \
+            node-agent/free_capability_discovery.py \
+            node-agent/test_free_capability_discovery.py \
             node-agent/test_brain_profiles.py \
             node-agent/test_night_learning_lab.py \
             node-agent/test_vps_night_cycle.py \
@@ -172,8 +174,22 @@ jobs:
               "verified_skill_pre_ollama_dispatch_v1",
               "ollama_call_counter_v1",
               "real_learning_case_collection_v1",
+              "free_capability_discovery_v1",
           ):
               assert required in capabilities
+
+          inventory = health["capability_inventory"]
+          assert inventory["schema_version"] == 1
+          assert inventory["policy"] == "LOCAL_FREE_ONLY"
+          assert inventory["read_only_discovery"] is True
+          assert inventory["automatic_installation"] is False
+          assert inventory["paid_provider_count"] == 0
+          assert isinstance(inventory["items"], list)
+          assert len(inventory["items"]) >= 8
+          assert all(
+              item["cost_class"] == "LOCAL_FREE"
+              for item in inventory["items"]
+          )
 
           ollama_calls = health["ollama_calls"]
           assert ollama_calls["model_list_calls"] >= 0

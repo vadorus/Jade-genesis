@@ -42,6 +42,8 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
+import com.jadegenesis.mobile.replay.DecisionTrace
+import com.jadegenesis.mobile.replay.DecisionTraceStore
 import com.jadegenesis.mobile.runtime.RuntimeManager
 import com.jadegenesis.mobile.screen.ScreenObserverRepository
 import com.jadegenesis.mobile.selfmodel.SelfModelBuilder
@@ -82,10 +84,12 @@ class JadeCore(context: Context) {
     )
     private val taskLedger = TaskLedger(appContext)
     private val taskQueue = TaskQueue(appContext)
+    private val decisionTraceStore = DecisionTraceStore(appContext)
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
         ledger = taskLedger,
-        queue = taskQueue
+        queue = taskQueue,
+        decisionTraceStore = decisionTraceStore
     )
     private val computeMesh = ComputeMesh(nodeManager, diagnostics)
     private val learningEngine = LearningEngine()
@@ -264,6 +268,9 @@ class JadeCore(context: Context) {
 
     fun recentTaskQueue(limit: Int = 16): List<QueuedTaskSnapshot> =
         taskQueue.recent(limit)
+
+    fun recentDecisionTraces(limit: Int = 32): List<DecisionTrace> =
+        decisionTraceStore.recent(limit)
 
     fun pendingTaskCount(): Int = taskQueue.pendingCount()
 

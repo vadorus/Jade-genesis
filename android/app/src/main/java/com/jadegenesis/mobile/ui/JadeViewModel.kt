@@ -10,6 +10,7 @@ import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.LearningCandidate
 import com.jadegenesis.mobile.model.MemorySnapshot
 import com.jadegenesis.mobile.model.MeshProbeSummary
+import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
@@ -66,6 +67,8 @@ data class JadeUiState(
     val researchMessage: String = "",
     val toolBusy: Boolean = false,
     val toolMessage: String = "",
+    val canaryBusy: Boolean = false,
+    val canaryMessage: String = "",
     val adminConfigured: Boolean = false,
     val adminUnlocked: Boolean = false,
     val debugEnabled: Boolean = false,
@@ -190,6 +193,61 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                 .onFailure { failTask(it) }
         }
     }
+
+    fun runPixelFfmpegCanaryMeasurement() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                canaryBusy = true,
+                canaryMessage = "Mesure FFmpeg Pixel : 5 comparaisons VPS → PC en cours…",
+                error = null
+            )
+            runCatching {
+                val self = core.refreshNodes()
+                val pc = self.knownNodes.firstOrNull { node ->
+                    node.kind == NodeKind.PC &&
+                        node.status == NodeStatus.ONLINE &&
+                        "ffmpeg_transcode_probe_v1" in node.capabilities
+                } ?: error("Aucun PC compatible en ligne.")
+                val vps = self.knownNodes.firstOrNull { node ->
+                    node.kind == NodeKind.VPS &&
+                        node.status == NodeStatus.ONLINE &&
+                        "ffmpeg_transcode_probe_v1" in node.capabilities
+                } ?: error("Aucun VPS compatible en ligne.")
+                Pair(
+                    self,
+                    core.recommendManualFfmpegCanary(
+                        incumbentNodeId = vps.nodeId,
+                        challengerNodeId = pc.nodeId,
+                        rounds = 5
+                    )
+                )
+            }.onSuccess { (self, recommendation) ->
+                val gain = recommendation.medianImprovementPercent?.let {
+                    String.format(java.util.Locale.US, "%.1f", it)
+                } ?: "n/a"
+                _state.value = _state.value.copy(
+                    canaryBusy = false,
+                    selfModel = self,
+                    runtimes = core.runtimeSnapshots(self.knownNodes),
+                    diagnostics = core.recentDiagnostics(),
+                    canaryMessage =
+                        "VPS médiane ${recommendation.incumbentMedianMs ?: -1} ms · " +
+                            "PC médiane ${recommendation.challengerMedianMs ?: -1} ms · " +
+                            "gain PC $gain % · ${recommendation.status.name}. " +
+                            "Aucun routage modifié.",
+                    error = null
+                )
+            }.onFailure { e ->
+                _state.value = _state.value.copy(
+                    canaryBusy = false,
+                    canaryMessage = "",
+                    diagnostics = core.recentDiagnostics(),
+                    error = e.message ?: e.toString()
+                )
+            }
+        }
+    }
+
 
     fun runDistributedTextAnalysis(text: String) {
         val clean = text.trim()

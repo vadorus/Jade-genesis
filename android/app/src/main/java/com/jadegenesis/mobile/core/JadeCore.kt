@@ -42,6 +42,8 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
+import com.jadegenesis.mobile.replay.BranchHarvestPlan
+import com.jadegenesis.mobile.replay.BranchHarvestPlanner
 import com.jadegenesis.mobile.replay.DecisionTrace
 import com.jadegenesis.mobile.replay.DecisionTraceStore
 import com.jadegenesis.mobile.replay.RoutingAAReplayReport
@@ -88,6 +90,7 @@ class JadeCore(context: Context) {
     private val taskQueue = TaskQueue(appContext)
     private val decisionTraceStore = DecisionTraceStore(appContext)
     private val routingReplayLab = RoutingReplayLab()
+    private val branchHarvestPlanner = BranchHarvestPlanner()
     private val taskRouter = TaskRouter(
         nodeManager = nodeManager,
         ledger = taskLedger,
@@ -279,6 +282,15 @@ class JadeCore(context: Context) {
         limit: Int = 32
     ): RoutingAAReplayReport =
         routingReplayLab.evaluate(decisionTraceStore.recent(limit))
+
+    fun planRecentCounterfactualBranches(
+        limit: Int = 16,
+        maxBranchesPerTrace: Int = 2
+    ): List<BranchHarvestPlan> =
+        branchHarvestPlanner.planBatch(
+            traces = decisionTraceStore.recent(limit),
+            maxBranchesPerTrace = maxBranchesPerTrace
+        )
 
     fun pendingTaskCount(): Int = taskQueue.pendingCount()
 

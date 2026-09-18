@@ -40,6 +40,8 @@ class CapabilityPairedComparisonLabTest {
         assertTrue(comparison.latencyComparable)
         assertEquals(-40L, comparison.latencyDeltaMs)
         assertEquals("pc-b", comparison.fasterNodeId)
+        assertEquals(420L, comparison.incumbentEndToEndMs)
+        assertEquals(380L, comparison.challengerEndToEndMs)
         assertFalse(comparison.automaticPromotionAllowed)
     }
 
@@ -194,7 +196,8 @@ class CapabilityPairedComparisonLabTest {
             nodeName = nodeId,
             success = success,
             verificationPassed = verified,
-            durationMs = durationMs,
+            durationMs = durationMs + 300L,
+            nodeExecutionMs = durationMs,
             outputBytes = if (success) 1234L else 0L,
             outputSha256 = if (success) {
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

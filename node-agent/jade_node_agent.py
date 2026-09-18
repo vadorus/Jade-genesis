@@ -28,6 +28,7 @@ import jade_node_runtime_core as core
 from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
+from free_capability_discovery import discover_free_capabilities
 from first_learning_family import (
     TASK_FAMILY as FIRST_LEARNING_FAMILY,
     input_seen_in_learning,
@@ -252,7 +253,22 @@ def _learning_status_payload() -> dict:
 
 def _health_payload(config: dict, store=None) -> dict:
     result = _original_health(config, store)
+    capability_inventory = discover_free_capabilities(
+        ollama_ready=bool(result.get("brain_ready", False)),
+        ollama_model=str(result.get("brain_model", "")),
+        comfyui_url=str(
+            config.get("comfyui_url", "http://127.0.0.1:8188")
+        ),
+    )
+    result["capability_inventory"] = capability_inventory
+
     capabilities = list(result.get("capabilities", []))
+    if "free_capability_discovery_v1" not in capabilities:
+        capabilities.append("free_capability_discovery_v1")
+    for capability_id in capability_inventory.get("available_ids", []):
+        marker = f"local_free:{capability_id}"
+        if marker not in capabilities:
+            capabilities.append(marker)
     for capability in (
         "cognitive_brain_profiles_v1",
         "correction_exact_json_v1",

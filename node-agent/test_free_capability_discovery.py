@@ -46,6 +46,10 @@ class FreeCapabilityDiscoveryTest(unittest.TestCase):
             "/usr/bin/ffmpeg",
             items["ffmpeg-local"]["details"]["executable_path"],
         )
+        self.assertIn(
+            "media_transcode_probe",
+            items["ffmpeg-local"]["operations"],
+        )
         self.assertEqual(
             "http://127.0.0.1:8188",
             items["comfyui-local"]["details"]["service_url"],

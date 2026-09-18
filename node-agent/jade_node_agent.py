@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jade Genesis Node Runtime 0.1.8 entrypoint.
+"""Jade Genesis Node Runtime 0.1.9 entrypoint.
 
 The stable runtime core stays separate while this wrapper layers Shared Genesis
 State, bounded VPS Night Learning, Adaptive Strategy Registry, Verifiable Task
@@ -29,6 +29,7 @@ from adaptive_strategy_registry import adaptive_strategy_registry_status
 from adaptive_vps_night_cycle import start_supervisor, stop_supervisor, supervisor_status
 from brain_profiles import brain_profiles_status, run_brain_chat_profiled
 from free_capability_discovery import discover_free_capabilities
+from ffmpeg_capability_probe import ffmpeg_probe_status, run_ffmpeg_transcode_probe
 from first_learning_family import (
     TASK_FAMILY as FIRST_LEARNING_FAMILY,
     input_seen_in_learning,
@@ -47,7 +48,7 @@ from skill_registry import skill_registry_status
 from skill_spec import skill_spec_status
 from skill_synthesis_loop import skill_synthesis_status
 
-VERSION = "0.1.8"
+VERSION = "0.1.9"
 PROTOCOL = core.PROTOCOL
 
 _original_execute = core.execute_allowlisted_task
@@ -96,6 +97,8 @@ def _execute_allowlisted_task(
 ):
     if task_kind == "shared_state_sync":
         return run_shared_state_sync(payload, config)
+    if task_kind == "ffmpeg_transcode_probe_v1":
+        return run_ffmpeg_transcode_probe(payload)
     return _original_execute(task_kind, payload, iterations, config)
 
 
@@ -261,6 +264,8 @@ def _health_payload(config: dict, store=None) -> dict:
         ),
     )
     result["capability_inventory"] = capability_inventory
+    ffmpeg_probe = ffmpeg_probe_status()
+    result["ffmpeg_transcode_probe"] = ffmpeg_probe
 
     capabilities = list(result.get("capabilities", []))
     if "free_capability_discovery_v1" not in capabilities:
@@ -269,6 +274,8 @@ def _health_payload(config: dict, store=None) -> dict:
         marker = f"local_free:{capability_id}"
         if marker not in capabilities:
             capabilities.append(marker)
+    if ffmpeg_probe["ready"] and "ffmpeg_transcode_probe_v1" not in capabilities:
+        capabilities.append("ffmpeg_transcode_probe_v1")
     for capability in (
         "cognitive_brain_profiles_v1",
         "correction_exact_json_v1",
@@ -282,6 +289,7 @@ def _health_payload(config: dict, store=None) -> dict:
     result["capabilities"] = capabilities
     result["brain_profiles"] = brain_profiles_status(config, core)
     result["ollama_calls"] = ollama_call_counters()
+    result["ffmpeg_transcode_probe"] = ffmpeg_probe_status()
     result["skill_dispatch"] = {
         "enabled_for_structured_brain_chat": True,
         "exact_task_family_only": True,
@@ -370,7 +378,7 @@ def _runtime_stopping() -> None:
 core.VERSION = VERSION
 core.ollama_models = _counted_ollama_models
 core._json_request = _counted_json_request
-core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync",)
+core.ALLOWED_TASKS = tuple(core.ALLOWED_TASKS) + ("shared_state_sync", "ffmpeg_transcode_probe_v1")
 core.run_brain_chat = _profiled_brain_chat
 core.execute_allowlisted_task = _execute_allowlisted_task
 core.health_payload = _health_payload

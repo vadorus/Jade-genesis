@@ -46,9 +46,14 @@ import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
 import com.jadegenesis.mobile.replay.CapabilityAAReplayReport
+import com.jadegenesis.mobile.replay.CapabilityBranchHarvestReport
+import com.jadegenesis.mobile.replay.CapabilityBranchHarvester
 import com.jadegenesis.mobile.replay.CapabilityDecisionTrace
 import com.jadegenesis.mobile.replay.CapabilityDecisionTraceStore
+import com.jadegenesis.mobile.replay.CapabilityManualChallengerPolicy
 import com.jadegenesis.mobile.replay.CapabilityReplayLab
+import com.jadegenesis.mobile.replay.CapabilityShadowLab
+import com.jadegenesis.mobile.replay.CapabilityShadowReport
 import com.jadegenesis.mobile.replay.DecisionTrace
 import com.jadegenesis.mobile.replay.DecisionTraceStore
 import com.jadegenesis.mobile.replay.RoutingAAReplayReport
@@ -98,6 +103,9 @@ class JadeCore(context: Context) {
     private val capabilityDecisionTraceStore =
         CapabilityDecisionTraceStore(appContext)
     private val capabilityReplayLab = CapabilityReplayLab()
+    private val capabilityBranchHarvester = CapabilityBranchHarvester()
+    private val capabilityShadowLab =
+        CapabilityShadowLab(capabilityBranchHarvester)
     private val capabilitySelectionCoordinator =
         CapabilitySelectionCoordinator(
             traceSink = capabilityDecisionTraceStore::record
@@ -327,6 +335,30 @@ class JadeCore(context: Context) {
     ): CapabilityAAReplayReport =
         capabilityReplayLab.evaluate(
             capabilityDecisionTraceStore.recent(limit)
+        )
+
+    fun harvestRecentCapabilityBranches(
+        limit: Int = 32
+    ): CapabilityBranchHarvestReport =
+        capabilityBranchHarvester.evaluate(
+            capabilityDecisionTraceStore.recent(limit)
+        )
+
+    fun shadowRecentCapabilityDecisions(
+        policyId: String,
+        operation: String,
+        preferredProviderId: String,
+        preferredNodeId: String? = null,
+        limit: Int = 32
+    ): CapabilityShadowReport =
+        capabilityShadowLab.evaluate(
+            traces = capabilityDecisionTraceStore.recent(limit),
+            policy = CapabilityManualChallengerPolicy(
+                policyId = policyId,
+                operation = operation,
+                preferredProviderId = preferredProviderId,
+                preferredNodeId = preferredNodeId
+            )
         )
 
     fun pendingTaskCount(): Int = taskQueue.pendingCount()

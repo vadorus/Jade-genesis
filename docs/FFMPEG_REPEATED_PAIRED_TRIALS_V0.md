@@ -9,8 +9,10 @@ comparison several times before treating the measurements as meaningful.
 
 ```text
 node A + node B
+  -> one uncounted warm-up on each node
   -> paired bounded probe
-  -> repeat 2..7 rounds
+  -> alternate execution order each round
+  -> repeat 2..7 measured rounds
   -> machine-verified evidence each round
   -> aggregate statistics
 ```
@@ -24,11 +26,12 @@ The report includes:
 - rounds where both sides verified;
 - comparable-latency rounds;
 - faster-round counts and ties;
-- median latency per node;
-- p95 latency per node;
-- median challenger-minus-incumbent latency delta.
+- median node-execution time per node;
+- p95 node-execution time per node;
+- median challenger-minus-incumbent node-execution delta;
+- median end-to-end time from the Pixel for each node.
 
-Latency from an unverified execution is excluded.
+Timing from an unverified execution is excluded. Canary decisions use node-execution time; end-to-end Pixel timing is reported separately and does not select the winner.
 
 ## Boundaries
 
@@ -36,6 +39,9 @@ Latency from an unverified execution is excluded.
 - maximum 7 rounds;
 - fixed synthetic FFmpeg profile only;
 - same two explicit nodes for the full series;
+- one registry refresh before the measured series;
+- one uncounted warm-up on each node;
+- incumbent/challenger execution order alternates by round;
 - no fallback to another node;
 - no paid API;
 - no automatic routing change;

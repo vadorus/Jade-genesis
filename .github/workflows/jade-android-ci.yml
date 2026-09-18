@@ -73,8 +73,22 @@ jobs:
           gradle-version: "9.6.0"
           cache-disabled: true
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+      - name: Locate preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$(command -v sdkmanager)"
+          test -x "$SDKMANAGER"
+
+          ANDROID_SDK_ROOT="$(cd "$(dirname "$SDKMANAGER")/../../.." && pwd)"
+          test -d "$ANDROID_SDK_ROOT"
+
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          echo "Using sdkmanager: $SDKMANAGER"
+          echo "Using Android SDK: $ANDROID_SDK_ROOT"
 
       - name: Install Android API 37 and Build Tools 36
         shell: bash
@@ -529,8 +543,22 @@ jobs:
           gradle-version: "9.6.0"
           cache-disabled: true
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+      - name: Locate preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$(command -v sdkmanager)"
+          test -x "$SDKMANAGER"
+
+          ANDROID_SDK_ROOT="$(cd "$(dirname "$SDKMANAGER")/../../.." && pwd)"
+          test -d "$ANDROID_SDK_ROOT"
+
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          echo "Using sdkmanager: $SDKMANAGER"
+          echo "Using Android SDK: $ANDROID_SDK_ROOT"
 
       - name: Install Android API 37 and Build Tools 36
         shell: bash

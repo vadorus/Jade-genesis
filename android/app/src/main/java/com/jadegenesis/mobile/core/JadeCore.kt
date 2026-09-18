@@ -49,6 +49,8 @@ import com.jadegenesis.mobile.research.ResearchEngine
 import com.jadegenesis.mobile.replay.CapabilityAAReplayReport
 import com.jadegenesis.mobile.replay.CapabilityBranchHarvestReport
 import com.jadegenesis.mobile.replay.CapabilityBranchHarvester
+import com.jadegenesis.mobile.replay.CapabilityCanaryRecommendation
+import com.jadegenesis.mobile.replay.CapabilityCanaryRecommendationLab
 import com.jadegenesis.mobile.replay.CapabilityDecisionTrace
 import com.jadegenesis.mobile.replay.CapabilityDecisionTraceStore
 import com.jadegenesis.mobile.replay.CapabilityExecutionEvidence
@@ -504,6 +506,36 @@ class JadeCore(context: Context) {
         )
 
         return report
+    }
+
+    suspend fun recommendManualFfmpegCanary(
+        incumbentNodeId: String,
+        challengerNodeId: String,
+        rounds: Int = 5
+    ): CapabilityCanaryRecommendation {
+        val report = runRepeatedFfmpegCapabilityProbe(
+            incumbentNodeId = incumbentNodeId,
+            challengerNodeId = challengerNodeId,
+            rounds = rounds
+        )
+        val recommendation =
+            CapabilityCanaryRecommendationLab.evaluate(report)
+
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "ffmpeg_canary_recommendation",
+            "Recommandation canary calculée sans modification du routage.",
+            mapOf(
+                "incumbent_node_id" to incumbentNodeId,
+                "challenger_node_id" to challengerNodeId,
+                "status" to recommendation.status.name,
+                "requires_explicit_approval" to
+                    recommendation.requiresExplicitApproval.toString(),
+                "automatic_promotion" to "false"
+            )
+        )
+
+        return recommendation
     }
 
     fun replayRecentCapabilityDecisions(

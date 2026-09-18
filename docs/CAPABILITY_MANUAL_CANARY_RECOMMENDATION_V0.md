@@ -1,0 +1,67 @@
+# Jade Genesis — Manual Canary Recommendation V0
+
+## Purpose
+
+This milestone turns repeated, verified capability measurements into a
+**recommendation for a manual canary trial**.
+
+It does not change routing and does not promote a challenger.
+
+## Eligibility gate
+
+A challenger is eligible for a manual canary only when all of the following
+are true:
+
+- at least 5 paired rounds completed;
+- every round is machine-verified on both nodes;
+- every round is latency-comparable;
+- the challenger is faster on at least 80% of rounds;
+- challenger median latency improves by at least 10%.
+
+If the challenger verifies fewer rounds than the incumbent, the result is a
+verification regression and the canary is blocked.
+
+## Output states
+
+- `ELIGIBLE_FOR_MANUAL_CANARY`
+- `INCONCLUSIVE`
+- `INSUFFICIENT_EVIDENCE`
+- `CHALLENGER_VERIFICATION_REGRESSION`
+
+Every result keeps:
+
+```text
+requiresExplicitApproval = true
+automaticPromotionAllowed = false
+```
+
+## JadeCore surface
+
+```text
+recommendManualFfmpegCanary(
+    incumbentNodeId,
+    challengerNodeId,
+    rounds = 5
+)
+```
+
+This call first executes the existing repeated bounded FFmpeg pair, then
+evaluates the report.
+
+## Boundary
+
+V0 cannot:
+
+- change TaskRouter policy;
+- change Capability Registry;
+- persist a routing preference;
+- promote a challenger;
+- install software;
+- use paid APIs;
+- modify source code or model weights.
+
+## Next gate
+
+A future canary executor may temporarily route only a tiny bounded fraction of
+one capability family to an approved challenger, with explicit approval,
+rollback and control evidence.

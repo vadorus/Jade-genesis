@@ -79,6 +79,7 @@ FREE_TOOL_SPECS = (
             "media_transcode",
             "media_assembly",
             "audio_video_mux",
+            "media_transcode_probe",
         ),
         "commands": ("ffmpeg",),
     },

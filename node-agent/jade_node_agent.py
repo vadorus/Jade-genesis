@@ -265,6 +265,10 @@ def _health_payload(config: dict, store=None) -> dict:
     capabilities = list(result.get("capabilities", []))
     if "free_capability_discovery_v1" not in capabilities:
         capabilities.append("free_capability_discovery_v1")
+    for capability_id in capability_inventory.get("available_ids", []):
+        marker = f"local_free:{capability_id}"
+        if marker not in capabilities:
+            capabilities.append(marker)
     for capability in (
         "cognitive_brain_profiles_v1",
         "correction_exact_json_v1",

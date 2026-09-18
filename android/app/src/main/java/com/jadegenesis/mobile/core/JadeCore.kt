@@ -57,6 +57,8 @@ import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceStore
 import com.jadegenesis.mobile.replay.CapabilityManualChallengerPolicy
 import com.jadegenesis.mobile.replay.CapabilityPairedComparison
 import com.jadegenesis.mobile.replay.CapabilityPairedComparisonLab
+import com.jadegenesis.mobile.replay.CapabilityRepeatedPairAnalyzer
+import com.jadegenesis.mobile.replay.CapabilityRepeatedPairReport
 import com.jadegenesis.mobile.replay.CapabilityReplayLab
 import com.jadegenesis.mobile.replay.CapabilityShadowLab
 import com.jadegenesis.mobile.replay.CapabilityShadowReport
@@ -455,6 +457,53 @@ class JadeCore(context: Context) {
         )
 
         return comparison
+    }
+
+    suspend fun runRepeatedFfmpegCapabilityProbe(
+        incumbentNodeId: String,
+        challengerNodeId: String,
+        rounds: Int = 5
+    ): CapabilityRepeatedPairReport {
+        require(rounds in 2..7) {
+            "Le nombre de tours doit être compris entre 2 et 7."
+        }
+
+        val comparisons = buildList {
+            repeat(rounds) {
+                add(
+                    runPairedFfmpegCapabilityProbe(
+                        incumbentNodeId = incumbentNodeId,
+                        challengerNodeId = challengerNodeId
+                    )
+                )
+            }
+        }
+
+        val report = CapabilityRepeatedPairAnalyzer.analyze(
+            comparisons = comparisons,
+            roundsRequested = rounds
+        )
+
+        diagnostics.log(
+            DiagnosticLevel.INFO,
+            "ffmpeg_repeated_pair_report",
+            "Série FFmpeg bornée terminée sans promotion automatique.",
+            mapOf(
+                "incumbent_node_id" to incumbentNodeId,
+                "challenger_node_id" to challengerNodeId,
+                "rounds" to rounds.toString(),
+                "both_verified" to report.bothVerifiedRounds.toString(),
+                "incumbent_median_ms" to
+                    (report.incumbentMedianMs?.toString() ?: "n/a"),
+                "challenger_median_ms" to
+                    (report.challengerMedianMs?.toString() ?: "n/a"),
+                "median_delta_ms" to
+                    (report.medianLatencyDeltaMs?.toString() ?: "n/a"),
+                "automatic_promotion" to "false"
+            )
+        )
+
+        return report
     }
 
     fun replayRecentCapabilityDecisions(

@@ -54,6 +54,8 @@ import com.jadegenesis.mobile.replay.CapabilityExecutionEvidence
 import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceFactory
 import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceStore
 import com.jadegenesis.mobile.replay.CapabilityManualChallengerPolicy
+import com.jadegenesis.mobile.replay.CapabilityPairedComparison
+import com.jadegenesis.mobile.replay.CapabilityPairedComparisonLab
 import com.jadegenesis.mobile.replay.CapabilityReplayLab
 import com.jadegenesis.mobile.replay.CapabilityShadowLab
 import com.jadegenesis.mobile.replay.CapabilityShadowReport
@@ -108,6 +110,8 @@ class JadeCore(context: Context) {
     private val capabilityExecutionEvidenceStore =
         CapabilityExecutionEvidenceStore(appContext)
     private val capabilityReplayLab = CapabilityReplayLab()
+    private val capabilityPairedComparisonLab =
+        CapabilityPairedComparisonLab()
     private val capabilityBranchHarvester = CapabilityBranchHarvester()
     private val capabilityShadowLab =
         CapabilityShadowLab(capabilityBranchHarvester)
@@ -352,6 +356,17 @@ class JadeCore(context: Context) {
         limit: Int = 32
     ): List<CapabilityExecutionEvidence> =
         capabilityExecutionEvidenceStore.recent(limit)
+
+    fun compareLatestFfmpegCapabilityEvidence(
+        incumbentNodeId: String,
+        challengerNodeId: String,
+        limit: Int = 64
+    ): CapabilityPairedComparison? =
+        capabilityPairedComparisonLab.latestForNodes(
+            evidence = capabilityExecutionEvidenceStore.recent(limit),
+            incumbentNodeId = incumbentNodeId,
+            challengerNodeId = challengerNodeId
+        )
 
     fun replayRecentCapabilityDecisions(
         limit: Int = 32

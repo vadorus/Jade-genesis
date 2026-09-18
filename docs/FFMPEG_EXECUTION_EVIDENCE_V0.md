@@ -30,7 +30,8 @@ The persisted record contains only measurement data:
 - provider id and operation;
 - executed node id/name;
 - success / verification status;
-- measured duration;
+- end-to-end duration observed by Android;
+- node-local execution duration reported by the bounded probe;
 - output byte count;
 - output SHA-256;
 - codec and dimensions;
@@ -63,7 +64,7 @@ that explicitly advertises the bounded runtime capability can be selected.
 
 ## Validation boundary
 
-Android independently verifies the returned JSON before marking the distributed
+Android verifies the returned JSON before marking the distributed
 task successful:
 
 - provider must be `ffmpeg-local`;
@@ -74,12 +75,15 @@ task successful:
 - codec must be MPEG-4;
 - dimensions must be exactly 160×90;
 - output must be non-empty;
+- `metrics.duration_ms` must be present and non-negative;
 - SHA-256 must be a valid lowercase 64-hex digest.
 
 ## What this proves
 
 Jade now has a path from a real node capability to persistent measured evidence,
 without a paid API and without storing user content.
+
+Comparison decisions use the node-local execution duration, not the Pixel-to-node transport time. The end-to-end duration is retained separately for UX and network analysis.
 
 This still does **not** establish that one node/provider is better than another.
 

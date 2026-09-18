@@ -18,6 +18,9 @@ import com.jadegenesis.mobile.model.TaskStatus
 import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceAdmissionController
+import com.jadegenesis.mobile.replay.DecisionAlternativeTrace
+import com.jadegenesis.mobile.replay.DecisionTrace
+import com.jadegenesis.mobile.replay.DecisionTraceStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,6 +33,7 @@ class TaskRouter(
     private val nodeManager: NodeManager,
     private val ledger: TaskLedger,
     private val queue: TaskQueue,
+    private val decisionTraceStore: DecisionTraceStore? = null,
     private val configProvider: () -> JadeConfig = { JadeConfigRuntime.current() },
     private val admissionController: ResourceAdmissionController =
         ResourceAdmissionController()
@@ -232,6 +236,25 @@ class TaskRouter(
                     .thenByDescending { it.node.cpuCores }
             )
 
+        val rankedByNodeId = ranked.associateBy { it.node.nodeId }
+        val decisionAlternatives = nodes.map { node ->
+            val candidate = rankedByNodeId[node.nodeId]
+            DecisionAlternativeTrace(
+                nodeId = node.nodeId,
+                nodeName = node.name,
+                nodeKind = node.kind.name,
+                nodeStatus = node.status.name,
+                eligible = candidate != null,
+                score = candidate?.score,
+                cpuCores = node.cpuCores,
+                ramAvailableGb = node.ramAvailableGb,
+                activeTaskCount = node.activeTaskCount,
+                brainReady = node.brainReady,
+                brainModel = node.brainModel,
+                capabilities = node.capabilities.sorted()
+            )
+        }
+
         val requested = ranked.firstOrNull()
         val routeReason = routeReason(
             request = request,
@@ -270,6 +293,15 @@ class TaskRouter(
                 error = reason
             )
             ledger.record(result)
+            recordDecisionTrace(
+                request = request,
+                activeConfig = activeConfig,
+                budget = budget,
+                alternatives = decisionAlternatives,
+                requested = requested,
+                routeReason = routeReason,
+                result = result
+            )
             return result
         }
 
@@ -392,6 +424,15 @@ class TaskRouter(
                     attempts = attempts.size
                 )
                 ledger.record(result)
+                recordDecisionTrace(
+                    request = request,
+                    activeConfig = activeConfig,
+                    budget = budget,
+                    alternatives = decisionAlternatives,
+                    requested = requested,
+                    routeReason = routeReason,
+                    result = result
+                )
                 return result
             }
 
@@ -445,7 +486,53 @@ class TaskRouter(
             error = failureSummary
         )
         ledger.record(result)
+        recordDecisionTrace(
+            request = request,
+            activeConfig = activeConfig,
+            budget = budget,
+            alternatives = decisionAlternatives,
+            requested = requested,
+            routeReason = routeReason,
+            result = result
+        )
         return result
+    }
+
+    private fun recordDecisionTrace(
+        request: DistributedTaskRequest,
+        activeConfig: JadeConfig,
+        budget: ResourceBudget,
+        alternatives: List<DecisionAlternativeTrace>,
+        requested: RankedNode?,
+        routeReason: String,
+        result: DistributedTaskResult
+    ) {
+        decisionTraceStore?.record(
+            DecisionTrace(
+                traceId = "decision-${request.taskId}",
+                decisionKind = "task_routing",
+                taskId = request.taskId,
+                taskKind = request.taskKind,
+                requiredCapability = request.requiredCapability,
+                workload = request.workload,
+                configId = activeConfig.configId,
+                configRevision = activeConfig.revision,
+                resourceMode = budget.mode,
+                preferRemoteCompute = budget.preferRemoteCompute,
+                maxParallelTasks = budget.maxParallelTasks,
+                alternatives = alternatives,
+                chosenNodeId = requested?.node?.nodeId,
+                chosenNodeName = requested?.node?.name,
+                routeReason = routeReason,
+                outcomeSuccess = result.success,
+                outcomeNodeId = result.executedNodeId,
+                outcomeNodeName = result.executedNodeName,
+                outcomeDurationMs = result.durationMs,
+                fallbackUsed = result.fallbackUsed,
+                startedAt = result.startedAt,
+                completedAt = result.completedAt
+            )
+        )
     }
 
     private fun supportsTask(

@@ -81,7 +81,8 @@ object LocalFreeCapabilityCatalog {
             operations = setOf(
                 "media_transcode",
                 "media_assembly",
-                "audio_video_mux"
+                "audio_video_mux",
+                "media_transcode_probe"
             ),
             providerType = CapabilityProviderType.LOCAL_TOOL,
             costClass = CapabilityCostClass.LOCAL_FREE,

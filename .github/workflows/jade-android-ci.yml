@@ -78,14 +78,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$(command -v sdkmanager)"
-          test -x "$SDKMANAGER"
-
-          ANDROID_SDK_ROOT="$(cd "$(dirname "$SDKMANAGER")/../../.." && pwd)"
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           test -d "$ANDROID_SDK_ROOT"
+
+          SDKMANAGER="$(
+            find "$ANDROID_SDK_ROOT/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -perm -111 \
+              -print \
+              | sort -V \
+              | tail -n 1
+          )"
+
+          test -n "$SDKMANAGER"
+          test -x "$SDKMANAGER"
 
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
 
           echo "Using sdkmanager: $SDKMANAGER"
           echo "Using Android SDK: $ANDROID_SDK_ROOT"
@@ -548,14 +559,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$(command -v sdkmanager)"
-          test -x "$SDKMANAGER"
-
-          ANDROID_SDK_ROOT="$(cd "$(dirname "$SDKMANAGER")/../../.." && pwd)"
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
           test -d "$ANDROID_SDK_ROOT"
+
+          SDKMANAGER="$(
+            find "$ANDROID_SDK_ROOT/cmdline-tools" \
+              -type f \
+              -name sdkmanager \
+              -perm -111 \
+              -print \
+              | sort -V \
+              | tail -n 1
+          )"
+
+          test -n "$SDKMANAGER"
+          test -x "$SDKMANAGER"
 
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
 
           echo "Using sdkmanager: $SDKMANAGER"
           echo "Using Android SDK: $ANDROID_SDK_ROOT"

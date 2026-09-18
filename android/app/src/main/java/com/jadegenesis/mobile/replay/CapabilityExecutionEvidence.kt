@@ -14,7 +14,14 @@ data class CapabilityExecutionEvidence(
     val nodeName: String,
     val success: Boolean,
     val verificationPassed: Boolean,
+    /**
+     * End-to-end duration observed by the Android caller.
+     *
+     * Kept as durationMs for storage/source compatibility. Capability
+     * comparison decisions must use nodeExecutionMs instead.
+     */
     val durationMs: Long,
+    val nodeExecutionMs: Long,
     val outputBytes: Long,
     val outputSha256: String,
     val codec: String,
@@ -49,6 +56,7 @@ object CapabilityExecutionEvidenceFactory {
                 success = false,
                 verificationPassed = false,
                 durationMs = result.durationMs,
+                nodeExecutionMs = 0L,
                 outputBytes = 0L,
                 outputSha256 = "",
                 codec = "",
@@ -89,6 +97,13 @@ object CapabilityExecutionEvidenceFactory {
             "FFmpeg evidence unexpectedly persisted output."
         }
 
+        val metrics = json.optJSONObject("metrics")
+            ?: error("FFmpeg evidence metrics are missing.")
+        val nodeExecutionMs = metrics.optLong("duration_ms", -1L)
+        require(nodeExecutionMs >= 0L) {
+            "FFmpeg evidence node execution duration is invalid."
+        }
+
         val output = json.getJSONObject("output")
         val sha = output.optString("sha256")
         require(Regex("^[0-9a-f]{64}$").matches(sha)) {
@@ -106,6 +121,7 @@ object CapabilityExecutionEvidenceFactory {
             success = true,
             verificationPassed = true,
             durationMs = result.durationMs,
+            nodeExecutionMs = nodeExecutionMs,
             outputBytes = output.optLong("bytes", 0L),
             outputSha256 = sha,
             codec = output.optString("codec"),
@@ -121,7 +137,7 @@ object CapabilityExecutionEvidenceFactory {
 object CapabilityExecutionEvidenceCodec {
     fun toJson(evidence: CapabilityExecutionEvidence): JSONObject =
         JSONObject().apply {
-            put("schema_version", 1)
+            put("schema_version", 2)
             put("evidence_id", evidence.evidenceId)
             put("task_id", evidence.taskId)
             put("task_kind", evidence.taskKind)
@@ -132,6 +148,8 @@ object CapabilityExecutionEvidenceCodec {
             put("success", evidence.success)
             put("verification_passed", evidence.verificationPassed)
             put("duration_ms", evidence.durationMs)
+            put("end_to_end_ms", evidence.durationMs)
+            put("node_execution_ms", evidence.nodeExecutionMs)
             put("output_bytes", evidence.outputBytes)
             put("output_sha256", evidence.outputSha256)
             put("codec", evidence.codec)
@@ -143,8 +161,24 @@ object CapabilityExecutionEvidenceCodec {
         }
 
     fun fromJson(json: JSONObject): CapabilityExecutionEvidence {
-        require(json.optInt("schema_version", 0) == 1) {
+        val schemaVersion = json.optInt("schema_version", 0)
+        require(schemaVersion == 1 || schemaVersion == 2) {
             "Unsupported CapabilityExecutionEvidence schema."
+        }
+
+        val endToEndMs = if (schemaVersion >= 2) {
+            json.optLong(
+                "end_to_end_ms",
+                json.optLong("duration_ms", 0L)
+            )
+        } else {
+            json.optLong("duration_ms", 0L)
+        }
+        val nodeExecutionMs = if (schemaVersion >= 2) {
+            json.optLong("node_execution_ms", 0L)
+        } else {
+            // V1 evidence did not separate network/transport time.
+            endToEndMs
         }
 
         return CapabilityExecutionEvidence(
@@ -158,7 +192,8 @@ object CapabilityExecutionEvidenceCodec {
             success = json.optBoolean("success", false),
             verificationPassed =
                 json.optBoolean("verification_passed", false),
-            durationMs = json.optLong("duration_ms", 0L),
+            durationMs = endToEndMs,
+            nodeExecutionMs = nodeExecutionMs,
             outputBytes = json.optLong("output_bytes", 0L),
             outputSha256 = json.optString("output_sha256"),
             codec = json.optString("codec"),

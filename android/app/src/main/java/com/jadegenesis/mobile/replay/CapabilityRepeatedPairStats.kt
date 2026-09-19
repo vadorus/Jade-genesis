@@ -21,6 +21,8 @@ data class CapabilityRepeatedPairReport(
     val incumbentP95Ms: Long?,
     val challengerP95Ms: Long?,
     val medianLatencyDeltaMs: Long?,
+    val incumbentEndToEndMedianMs: Long? = null,
+    val challengerEndToEndMedianMs: Long? = null,
     val automaticPromotionAllowed: Boolean = false
 )
 
@@ -57,6 +59,8 @@ object CapabilityRepeatedPairAnalyzer {
                 incumbentP95Ms = null,
                 challengerP95Ms = null,
                 medianLatencyDeltaMs = null,
+                incumbentEndToEndMedianMs = null,
+                challengerEndToEndMedianMs = null,
                 automaticPromotionAllowed = false
             )
 
@@ -85,6 +89,10 @@ object CapabilityRepeatedPairAnalyzer {
             challengerVerified.map { it.challengerDurationMs }
         val latencyDeltas =
             comparable.mapNotNull { it.latencyDeltaMs }
+        val incumbentEndToEnd =
+            incumbentVerified.map { it.incumbentEndToEndMs }
+        val challengerEndToEnd =
+            challengerVerified.map { it.challengerEndToEndMs }
 
         val incumbentFaster = comparable.count {
             it.fasterNodeId == first.incumbentNodeId
@@ -115,6 +123,8 @@ object CapabilityRepeatedPairAnalyzer {
             incumbentP95Ms = percentile95(incumbentDurations),
             challengerP95Ms = percentile95(challengerDurations),
             medianLatencyDeltaMs = median(latencyDeltas),
+            incumbentEndToEndMedianMs = median(incumbentEndToEnd),
+            challengerEndToEndMedianMs = median(challengerEndToEnd),
             automaticPromotionAllowed = false
         )
     }

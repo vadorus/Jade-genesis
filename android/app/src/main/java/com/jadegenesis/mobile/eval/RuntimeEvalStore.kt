@@ -300,7 +300,9 @@ class RuntimeEvalStore(context: Context) {
         }
 
     private fun shouldEvaluate(taskKind: String): Boolean =
-        taskKind.isNotBlank() && taskKind != "shared_state_sync"
+        taskKind.isNotBlank() &&
+            taskKind != "shared_state_sync" &&
+            taskKind != "ffmpeg_transcode_probe_v1"
 
     private fun maxItems(): Int {
         val history = JadeConfigRuntime.current()

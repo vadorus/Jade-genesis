@@ -35,6 +35,55 @@ class CapabilityExecutionEvidenceTest {
         assertEquals(evidence.taskId, restored.taskId)
         assertEquals(evidence.outputSha256, restored.outputSha256)
         assertEquals(evidence.durationMs, restored.durationMs)
+        assertEquals(41L, evidence.nodeExecutionMs)
+        assertEquals(87L, evidence.durationMs)
+        assertEquals(evidence.nodeExecutionMs, restored.nodeExecutionMs)
+    }
+
+    @Test
+    fun schemaOneEvidenceRemainsReadableWithoutInventingNewTiming() {
+        val legacy = org.json.JSONObject().apply {
+            put("schema_version", 1)
+            put("evidence_id", "legacy")
+            put("task_id", "task-legacy")
+            put("task_kind", "ffmpeg_transcode_probe_v1")
+            put("provider_id", "ffmpeg-local")
+            put("operation", "media_transcode_probe")
+            put("node_id", "pc-a")
+            put("node_name", "PC A")
+            put("success", true)
+            put("verification_passed", true)
+            put("duration_ms", 123L)
+            put("output_bytes", 1L)
+            put("output_sha256", "a".repeat(64))
+            put("codec", "mpeg4")
+            put("width", 160)
+            put("height", 90)
+            put("fallback_used", false)
+            put("started_at", 1L)
+            put("completed_at", 124L)
+        }
+
+        val restored = CapabilityExecutionEvidenceCodec.fromJson(legacy)
+        assertEquals(123L, restored.durationMs)
+        assertEquals(-1L, restored.nodeExecutionMs)
+    }
+
+    @Test
+    fun malformedMediaMetadataIsRejectedByEvidenceFactory() {
+        val bad = result(success = true).copy(
+            output = result(success = true).output.replace(
+                "\"duration_seconds\":0.5",
+                "\"duration_seconds\":2.0"
+            )
+        )
+
+        try {
+            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(bad)
+            throw AssertionError("Expected invalid media duration to be rejected.")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("duration"))
+        }
     }
 
     @Test
@@ -62,10 +111,12 @@ class CapabilityExecutionEvidenceTest {
               "shell_execution":false,
               "network_input_allowed":false,
               "persistent_output":false,
+              "metrics":{"duration_ms":41},
               "output":{
                 "codec":"mpeg4",
                 "width":160,
                 "height":90,
+                "duration_seconds":0.5,
                 "bytes":1234,
                 "sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               }

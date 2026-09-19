@@ -195,6 +195,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun runPixelFfmpegCanaryMeasurement() {
+        if (_state.value.canaryBusy) return
         viewModelScope.launch {
             _state.value = _state.value.copy(
                 canaryBusy = true,
@@ -231,10 +232,12 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     runtimes = core.runtimeSnapshots(self.knownNodes),
                     diagnostics = core.recentDiagnostics(),
                     canaryMessage =
-                        "VPS médiane ${recommendation.incumbentMedianMs ?: -1} ms · " +
-                            "PC médiane ${recommendation.challengerMedianMs ?: -1} ms · " +
-                            "gain PC $gain % · ${recommendation.status.name}. " +
-                            "Aucun routage modifié.",
+                        "Calcul nœud — VPS ${recommendation.incumbentMedianMs ?: -1} ms · " +
+                            "PC ${recommendation.challengerMedianMs ?: -1} ms · gain PC $gain %. " +
+                            "Bout-en-bout Pixel — VPS " +
+                            "${recommendation.incumbentEndToEndMedianMs ?: -1} ms · PC " +
+                            "${recommendation.challengerEndToEndMedianMs ?: -1} ms. " +
+                            "${recommendation.status.name}. Aucun routage modifié.",
                     error = null
                 )
             }.onFailure { e ->

@@ -20,6 +20,8 @@ data class CapabilityCanaryRecommendation(
     val incumbentMedianMs: Long?,
     val challengerMedianMs: Long?,
     val medianImprovementPercent: Double?,
+    val incumbentEndToEndMedianMs: Long? = null,
+    val challengerEndToEndMedianMs: Long? = null,
     val requiresExplicitApproval: Boolean = true,
     val automaticPromotionAllowed: Boolean = false
 )
@@ -141,6 +143,8 @@ object CapabilityCanaryRecommendationLab {
             incumbentMedianMs = report.incumbentMedianMs,
             challengerMedianMs = report.challengerMedianMs,
             medianImprovementPercent = improvement,
+            incumbentEndToEndMedianMs = report.incumbentEndToEndMedianMs,
+            challengerEndToEndMedianMs = report.challengerEndToEndMedianMs,
             requiresExplicitApproval = true,
             automaticPromotionAllowed = false
         )

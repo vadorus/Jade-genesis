@@ -29,6 +29,8 @@ data class CapabilityPairedComparison(
     val latencyComparable: Boolean,
     val latencyDeltaMs: Long?,
     val fasterNodeId: String?,
+    val incumbentEndToEndMs: Long = 0L,
+    val challengerEndToEndMs: Long = 0L,
     val automaticPromotionAllowed: Boolean = false
 )
 
@@ -74,10 +76,12 @@ class CapabilityPairedComparisonLab {
         }
 
         val latencyComparable =
-            status == CapabilityPairStatus.BOTH_VERIFIED
+            status == CapabilityPairStatus.BOTH_VERIFIED &&
+                incumbent.nodeExecutionMs >= 0L &&
+                challenger.nodeExecutionMs >= 0L
 
         val latencyDeltaMs = if (latencyComparable) {
-            challenger.durationMs - incumbent.durationMs
+            challenger.nodeExecutionMs - incumbent.nodeExecutionMs
         } else {
             null
         }
@@ -86,9 +90,9 @@ class CapabilityPairedComparisonLab {
             null
         } else {
             when {
-                incumbent.durationMs < challenger.durationMs ->
+                incumbent.nodeExecutionMs < challenger.nodeExecutionMs ->
                     incumbent.nodeId
-                challenger.durationMs < incumbent.durationMs ->
+                challenger.nodeExecutionMs < incumbent.nodeExecutionMs ->
                     challenger.nodeId
                 else -> null
             }
@@ -103,17 +107,19 @@ class CapabilityPairedComparisonLab {
             incumbentNodeName = incumbent.nodeName,
             incumbentSuccess = incumbent.success,
             incumbentVerified = incumbentVerified,
-            incumbentDurationMs = incumbent.durationMs,
+            incumbentDurationMs = incumbent.nodeExecutionMs.coerceAtLeast(0L),
             challengerEvidenceId = challenger.evidenceId,
             challengerNodeId = challenger.nodeId,
             challengerNodeName = challenger.nodeName,
             challengerSuccess = challenger.success,
             challengerVerified = challengerVerified,
-            challengerDurationMs = challenger.durationMs,
+            challengerDurationMs = challenger.nodeExecutionMs.coerceAtLeast(0L),
             status = status,
             latencyComparable = latencyComparable,
             latencyDeltaMs = latencyDeltaMs,
             fasterNodeId = fasterNodeId,
+            incumbentEndToEndMs = incumbent.durationMs,
+            challengerEndToEndMs = challenger.durationMs,
             automaticPromotionAllowed = false
         )
     }

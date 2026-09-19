@@ -34,15 +34,31 @@ class DecisionTraceStore(context: Context) {
 
     @Synchronized
     fun recent(limit: Int = 32): List<DecisionTrace> {
-        val safeLimit = limit.coerceIn(0, MAX_ITEMS)
-        if (safeLimit == 0) {
-            return emptyList()
-        }
+        return selectRecentDecisionTraces(
+            traces = loadTraces(),
+            limit = limit
+        )
+    }
 
+    @Synchronized
+    fun recentByDecisionKind(
+        decisionKind: String,
+        limit: Int = 32
+    ): List<DecisionTrace> {
+        require(decisionKind.isNotBlank()) {
+            "decisionKind must not be blank."
+        }
+        return selectRecentDecisionTraces(
+            traces = loadTraces(),
+            limit = limit,
+            decisionKind = decisionKind
+        )
+    }
+
+    private fun loadTraces(): List<DecisionTrace> {
         val array = loadArray()
         return buildList {
-            val count = minOf(array.length(), safeLimit)
-            for (index in 0 until count) {
+            for (index in 0 until array.length()) {
                 runCatching {
                     DecisionTraceCodec.fromJson(
                         array.getJSONObject(index)
@@ -67,4 +83,22 @@ class DecisionTraceStore(context: Context) {
         private const val KEY_TRACES = "decision_traces_v1"
         const val MAX_ITEMS = 200
     }
+}
+
+internal fun selectRecentDecisionTraces(
+    traces: List<DecisionTrace>,
+    limit: Int,
+    decisionKind: String? = null
+): List<DecisionTrace> {
+    val safeLimit = limit.coerceIn(0, DecisionTraceStore.MAX_ITEMS)
+    if (safeLimit == 0) {
+        return emptyList()
+    }
+
+    return traces.asSequence()
+        .filter { trace ->
+            decisionKind == null || trace.decisionKind == decisionKind
+        }
+        .take(safeLimit)
+        .toList()
 }

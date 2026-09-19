@@ -80,6 +80,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val core = JadeCore(application)
     private val _state = MutableStateFlow(JadeUiState())
+    private val canaryGate = SingleFlightGate()
     val state: StateFlow<JadeUiState> = _state.asStateFlow()
 
     init {
@@ -195,58 +196,65 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun runPixelFfmpegCanaryMeasurement() {
-        if (_state.value.canaryBusy) return
+        if (!canaryGate.tryEnter()) return
         viewModelScope.launch {
-            _state.value = _state.value.copy(
-                canaryBusy = true,
-                canaryMessage = "Mesure FFmpeg Pixel : 5 comparaisons VPS → PC en cours…",
-                error = null
-            )
-            runCatching {
-                val self = core.refreshNodes()
-                val pc = self.knownNodes.firstOrNull { node ->
-                    node.kind == NodeKind.PC &&
-                        node.status == NodeStatus.ONLINE &&
-                        "ffmpeg_transcode_probe_v1" in node.capabilities
-                } ?: error("Aucun PC compatible en ligne.")
-                val vps = self.knownNodes.firstOrNull { node ->
-                    node.kind == NodeKind.VPS &&
-                        node.status == NodeStatus.ONLINE &&
-                        "ffmpeg_transcode_probe_v1" in node.capabilities
-                } ?: error("Aucun VPS compatible en ligne.")
-                Pair(
-                    self,
-                    core.recommendManualFfmpegCanary(
-                        incumbentNodeId = vps.nodeId,
-                        challengerNodeId = pc.nodeId,
-                        rounds = 5
-                    )
-                )
-            }.onSuccess { (self, recommendation) ->
-                val gain = recommendation.medianImprovementPercent?.let {
-                    String.format(java.util.Locale.US, "%.1f", it)
-                } ?: "n/a"
+            try {
                 _state.value = _state.value.copy(
-                    canaryBusy = false,
-                    selfModel = self,
-                    runtimes = core.runtimeSnapshots(self.knownNodes),
-                    diagnostics = core.recentDiagnostics(),
-                    canaryMessage =
-                        "Calcul nœud — VPS ${recommendation.incumbentMedianMs ?: -1} ms · " +
-                            "PC ${recommendation.challengerMedianMs ?: -1} ms · gain PC $gain %. " +
-                            "Bout-en-bout Pixel — VPS " +
-                            "${recommendation.incumbentEndToEndMedianMs ?: -1} ms · PC " +
-                            "${recommendation.challengerEndToEndMedianMs ?: -1} ms. " +
-                            "${recommendation.status.name}. Aucun routage modifié.",
+                    canaryBusy = true,
+                    canaryMessage = "Mesure FFmpeg Pixel : 6 comparaisons VPS → PC en cours…",
                     error = null
                 )
-            }.onFailure { e ->
-                _state.value = _state.value.copy(
-                    canaryBusy = false,
-                    canaryMessage = "",
-                    diagnostics = core.recentDiagnostics(),
-                    error = e.message ?: e.toString()
-                )
+                runCatching {
+                    val self = core.refreshNodes()
+                    val pc = self.knownNodes.firstOrNull { node ->
+                        node.kind == NodeKind.PC &&
+                            node.status == NodeStatus.ONLINE &&
+                            "ffmpeg_transcode_probe_v1" in node.capabilities
+                    } ?: error("Aucun PC compatible en ligne.")
+                    val vps = self.knownNodes.firstOrNull { node ->
+                        node.kind == NodeKind.VPS &&
+                            node.status == NodeStatus.ONLINE &&
+                            "ffmpeg_transcode_probe_v1" in node.capabilities
+                    } ?: error("Aucun VPS compatible en ligne.")
+                    Pair(
+                        self,
+                        core.recommendManualFfmpegCanary(
+                            incumbentNodeId = vps.nodeId,
+                            challengerNodeId = pc.nodeId,
+                            rounds = 6
+                        )
+                    )
+                }.onSuccess { (self, recommendation) ->
+                    val gain = recommendation.medianImprovementPercent?.let {
+                        String.format(java.util.Locale.US, "%.1f", it)
+                    } ?: "n/a"
+                    _state.value = _state.value.copy(
+                        canaryBusy = false,
+                        selfModel = self,
+                        runtimes = core.runtimeSnapshots(self.knownNodes),
+                        diagnostics = core.recentDiagnostics(),
+                        canaryMessage =
+                            "Calcul nœud — VPS ${recommendation.incumbentMedianMs ?: -1} ms · " +
+                                "PC ${recommendation.challengerMedianMs ?: -1} ms · gain PC $gain %. " +
+                                "Bout-en-bout Pixel — VPS " +
+                                "${recommendation.incumbentEndToEndMedianMs ?: -1} ms · PC " +
+                                "${recommendation.challengerEndToEndMedianMs ?: -1} ms. " +
+                                "${recommendation.status.name}. Aucun routage modifié.",
+                        error = null
+                    )
+                }.onFailure { e ->
+                    _state.value = _state.value.copy(
+                        canaryBusy = false,
+                        canaryMessage = "",
+                        diagnostics = core.recentDiagnostics(),
+                        error = e.message ?: e.toString()
+                    )
+                }
+            } finally {
+                canaryGate.leave()
+                if (_state.value.canaryBusy) {
+                    _state.value = _state.value.copy(canaryBusy = false)
+                }
             }
         }
     }

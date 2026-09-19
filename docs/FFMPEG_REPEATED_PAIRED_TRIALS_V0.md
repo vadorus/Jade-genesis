@@ -12,7 +12,7 @@ node A + node B
   -> one uncounted warm-up on each node
   -> paired bounded probe
   -> alternate execution order each round
-  -> repeat 2..7 measured rounds
+  -> repeat an even number of measured rounds (2..8; 6 by default)
   -> machine-verified evidence each round
   -> aggregate statistics
 ```
@@ -35,12 +35,13 @@ Timing from an unverified execution is excluded. Canary decisions use node-execu
 
 ## Boundaries
 
-- minimum 2 rounds;
-- maximum 7 rounds;
+- an even number of rounds is mandatory;
+- minimum 2 rounds, maximum 8 rounds, 6 by default;
 - fixed synthetic FFmpeg profile only;
 - same two explicit nodes for the full series;
 - one registry refresh before the measured series;
-- one uncounted warm-up on each node;
+- one uncounted, machine-verified warm-up on each node;
+- the series stops before measured rounds if either warm-up fails;
 - incumbent/challenger execution order alternates by round;
 - no fallback to another node;
 - no paid API;

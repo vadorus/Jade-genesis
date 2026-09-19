@@ -35,7 +35,6 @@ data class CapabilityCanaryRecommendation(
  */
 object CapabilityCanaryRecommendationLab {
 
-    private const val MIN_ROUNDS = 5
     private const val MIN_FASTER_FRACTION = 0.80
     private const val MIN_MEDIAN_IMPROVEMENT_PERCENT = 10.0
 
@@ -46,11 +45,15 @@ object CapabilityCanaryRecommendationLab {
         val incumbentMedian = report.incumbentMedianMs
         val challengerMedian = report.challengerMedianMs
 
-        if (rounds < MIN_ROUNDS) {
+        if (
+            rounds < CapabilityMeasurementProtocol.MIN_CANARY_ROUNDS ||
+            !CapabilityMeasurementProtocol.isBalancedRoundCount(rounds)
+        ) {
             return recommendation(
                 report = report,
                 status = CapabilityCanaryRecommendationStatus.INSUFFICIENT_EVIDENCE,
-                reason = "Au moins 5 tours terminés sont requis avant un canary manuel.",
+                reason =
+                    "Au moins 6 tours pairs terminés sont requis avant un canary manuel.",
                 improvement = null
             )
         }

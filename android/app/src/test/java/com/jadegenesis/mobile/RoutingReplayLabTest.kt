@@ -5,6 +5,7 @@ import com.jadegenesis.mobile.model.TaskWorkload
 import com.jadegenesis.mobile.replay.DecisionAlternativeTrace
 import com.jadegenesis.mobile.replay.DecisionTrace
 import com.jadegenesis.mobile.replay.RoutingReplayLab
+import com.jadegenesis.mobile.replay.selectRecentDecisionTraces
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -144,6 +145,38 @@ class RoutingReplayLabTest {
         assertEquals(0, report.total)
         assertFalse(report.passed)
         assertEquals(1.0, report.matchRate, 0.0001)
+    }
+
+    @Test
+    fun routingSelectionFiltersBeforeApplyingLimit() {
+        val measurementTraces = (1..12).map { index ->
+            trace(
+                chosenNodeId = "measurement-$index",
+                alternatives = listOf(
+                    alternative(id = "measurement-$index", score = 10.0)
+                )
+            ).copy(
+                traceId = "measurement-$index",
+                decisionKind = "capability_measurement"
+            )
+        }
+        val routingTraces = (1..5).map { index ->
+            trace(
+                chosenNodeId = "routing-$index",
+                alternatives = listOf(
+                    alternative(id = "routing-$index", score = 10.0)
+                )
+            ).copy(traceId = "routing-$index")
+        }
+
+        val selected = selectRecentDecisionTraces(
+            traces = measurementTraces + routingTraces,
+            limit = 5,
+            decisionKind = "task_routing"
+        )
+
+        assertEquals(5, selected.size)
+        assertTrue(selected.all { it.decisionKind == "task_routing" })
     }
 
     private fun trace(

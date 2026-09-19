@@ -15,12 +15,12 @@ class CapabilityCanaryRecommendationLabTest {
     fun strongVerifiedSignalBecomesManualCanaryEligible() {
         val result = CapabilityCanaryRecommendationLab.evaluate(
             report(
-                rounds = 5,
-                incumbentVerified = 5,
-                challengerVerified = 5,
-                bothVerified = 5,
-                comparable = 5,
-                challengerFaster = 4,
+                rounds = 6,
+                incumbentVerified = 6,
+                challengerVerified = 6,
+                bothVerified = 6,
+                comparable = 6,
+                challengerFaster = 5,
                 incumbentMedian = 100,
                 challengerMedian = 80
             )
@@ -37,15 +37,15 @@ class CapabilityCanaryRecommendationLabTest {
     }
 
     @Test
-    fun fewerThanFiveRoundsIsInsufficient() {
+    fun fewerThanSixRoundsIsInsufficient() {
         val result = CapabilityCanaryRecommendationLab.evaluate(
             report(
-                rounds = 4,
-                incumbentVerified = 4,
-                challengerVerified = 4,
-                bothVerified = 4,
-                comparable = 4,
-                challengerFaster = 4,
+                rounds = 5,
+                incumbentVerified = 5,
+                challengerVerified = 5,
+                bothVerified = 5,
+                comparable = 5,
+                challengerFaster = 5,
                 incumbentMedian = 100,
                 challengerMedian = 50
             )
@@ -62,12 +62,12 @@ class CapabilityCanaryRecommendationLabTest {
     fun verificationRegressionBlocksCanary() {
         val result = CapabilityCanaryRecommendationLab.evaluate(
             report(
-                rounds = 5,
-                incumbentVerified = 5,
-                challengerVerified = 4,
-                bothVerified = 4,
-                comparable = 4,
-                challengerFaster = 4,
+                rounds = 6,
+                incumbentVerified = 6,
+                challengerVerified = 5,
+                bothVerified = 5,
+                comparable = 5,
+                challengerFaster = 5,
                 incumbentMedian = 100,
                 challengerMedian = 70
             )
@@ -83,12 +83,12 @@ class CapabilityCanaryRecommendationLabTest {
     fun smallMedianGainIsInconclusive() {
         val result = CapabilityCanaryRecommendationLab.evaluate(
             report(
-                rounds = 5,
-                incumbentVerified = 5,
-                challengerVerified = 5,
-                bothVerified = 5,
-                comparable = 5,
-                challengerFaster = 4,
+                rounds = 6,
+                incumbentVerified = 6,
+                challengerVerified = 6,
+                bothVerified = 6,
+                comparable = 6,
+                challengerFaster = 5,
                 incumbentMedian = 100,
                 challengerMedian = 95
             )
@@ -104,12 +104,12 @@ class CapabilityCanaryRecommendationLabTest {
     fun fewerThanEightyPercentFasterRoundsIsInconclusive() {
         val result = CapabilityCanaryRecommendationLab.evaluate(
             report(
-                rounds = 5,
-                incumbentVerified = 5,
-                challengerVerified = 5,
-                bothVerified = 5,
-                comparable = 5,
-                challengerFaster = 3,
+                rounds = 6,
+                incumbentVerified = 6,
+                challengerVerified = 6,
+                bothVerified = 6,
+                comparable = 6,
+                challengerFaster = 4,
                 incumbentMedian = 100,
                 challengerMedian = 70
             )

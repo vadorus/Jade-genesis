@@ -57,6 +57,7 @@ import com.jadegenesis.mobile.replay.CapabilityExecutionEvidence
 import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceFactory
 import com.jadegenesis.mobile.replay.CapabilityExecutionEvidenceStore
 import com.jadegenesis.mobile.replay.CapabilityManualChallengerPolicy
+import com.jadegenesis.mobile.replay.CapabilityMeasurementProtocol
 import com.jadegenesis.mobile.replay.CapabilityPairedComparison
 import com.jadegenesis.mobile.replay.CapabilityPairedComparisonLab
 import com.jadegenesis.mobile.replay.CapabilityRepeatedPairAnalyzer
@@ -315,8 +316,10 @@ class JadeCore(context: Context) {
         limit: Int = 32
     ): RoutingAAReplayReport =
         routingReplayLab.evaluate(
-            decisionTraceStore.recent(limit)
-                .filter { it.decisionKind == "task_routing" }
+            decisionTraceStore.recentByDecisionKind(
+                decisionKind = "task_routing",
+                limit = limit
+            )
         )
 
     suspend fun discoveredFreeCapabilities(
@@ -475,11 +478,9 @@ class JadeCore(context: Context) {
     suspend fun runRepeatedFfmpegCapabilityProbe(
         incumbentNodeId: String,
         challengerNodeId: String,
-        rounds: Int = 5
+        rounds: Int = CapabilityMeasurementProtocol.DEFAULT_PAIRED_ROUNDS
     ): CapabilityRepeatedPairReport {
-        require(rounds in 2..7) {
-            "Le nombre de tours doit être compris entre 2 et 7."
-        }
+        CapabilityMeasurementProtocol.requireBalancedRounds(rounds)
 
         // One refresh before the entire series. Individual bounded probes reuse
         // this registry snapshot and fail closed if a node stops responding.
@@ -515,7 +516,12 @@ class JadeCore(context: Context) {
                 budget = budget,
                 refreshRemote = false
             )
-            CapabilityExecutionEvidenceFactory.fromFfmpegProbe(warmup)
+            val warmupEvidence =
+                CapabilityExecutionEvidenceFactory.fromFfmpegProbe(warmup)
+            CapabilityMeasurementProtocol.requireVerifiedWarmup(
+                expectedNodeId = nodeId,
+                evidence = warmupEvidence
+            )
         }
 
         val comparisons = buildList {
@@ -567,7 +573,7 @@ class JadeCore(context: Context) {
     suspend fun recommendManualFfmpegCanary(
         incumbentNodeId: String,
         challengerNodeId: String,
-        rounds: Int = 5
+        rounds: Int = CapabilityMeasurementProtocol.DEFAULT_PAIRED_ROUNDS
     ): CapabilityCanaryRecommendation {
         val report = runRepeatedFfmpegCapabilityProbe(
             incumbentNodeId = incumbentNodeId,

@@ -12,7 +12,7 @@ It does not change routing and does not promote a challenger. Pixel end-to-end t
 A challenger is eligible for a manual canary only when all of the following
 are true:
 
-- at least 5 paired rounds completed;
+- at least 6 paired rounds completed, with an even round count;
 - every round is machine-verified on both nodes;
 - every round is latency-comparable;
 - the challenger is faster on at least 80% of rounds;
@@ -41,7 +41,7 @@ automaticPromotionAllowed = false
 recommendManualFfmpegCanary(
     incumbentNodeId,
     challengerNodeId,
-    rounds = 5
+    rounds = 6
 )
 ```
 

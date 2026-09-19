@@ -1,8 +1,8 @@
-# Jade Genesis — Distributed Node Runtime 0.1.8
+# Jade Genesis — Distributed Node Runtime 0.1.9
 
 The dependency-free Python Node Runtime connects PC/VPS compute to the same persistent Jade Genesis identity while keeping the compatible wire protocol `jade-genesis-node/0.0.6`.
 
-Current Android product version on this branch is **0.1.21** (`versionCode 39`). Node and Android versions are independent.
+Current Android product version on this branch is **0.1.22** (`versionCode 40`). Node and Android versions are independent.
 
 ## Start
 
@@ -16,6 +16,18 @@ On Windows:
 
 ```powershell
 py jade_node_agent.py
+```
+
+The `windows-node/` launcher packages this runtime into one tray application.
+It supplies `--bind-address <tailscale-ip>` so the managed PC process listens
+only on its Tailscale interface, preserves the existing config/identity, starts
+with Windows and restarts the runtime after failure.
+
+Direct/VPS launches keep the historical `0.0.0.0` default. An operator may bind
+one explicit IPv4 interface with:
+
+```powershell
+py jade_node_agent.py --node-kind PC --bind-address 100.x.y.z
 ```
 
 Runtime configuration/state is stored under `~/.jade-genesis/` (or the Windows user equivalent). Pairing tokens and private runtime state must never be committed.

@@ -91,7 +91,8 @@ jobs:
             node-agent/test_pre_ollama_skill_dispatch.py \
             node-agent/test_learning_trial_protocol.py \
             node-agent/test_typed_skill_search.py \
-            node-agent/test_hybrid_skill_teacher.py
+            node-agent/test_hybrid_skill_teacher.py \
+            node-agent/test_runtime_bind_address.py
 
       - name: Test bounded runtime, learning substrate and brain profiles
         shell: bash

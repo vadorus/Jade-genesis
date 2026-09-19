@@ -110,7 +110,7 @@ internal sealed class UpdateService : IDisposable
             throw new InvalidOperationException("Chemin de mise à jour refusé.");
         }
 
-        Process.Start(new ProcessStartInfo
+        _ = Process.Start(new ProcessStartInfo
         {
             FileName = fullPath,
             Arguments = $"--apply-update {Environment.ProcessId}",

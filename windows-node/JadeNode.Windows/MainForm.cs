@@ -500,7 +500,7 @@ internal sealed class MainForm : Form
         table.Controls.Add(new Label
         {
             AutoSize = true,
-            Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold),
+            Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point),
             Text = label,
             Margin = new Padding(0, 4, 8, 8),
         }, 0, row);

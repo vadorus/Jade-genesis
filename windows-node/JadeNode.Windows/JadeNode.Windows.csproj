@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>JadeNode</AssemblyName>
+    <RootNamespace>JadeNode.Windows</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\JadeNode.Core\JadeNode.Core.csproj" />
+    <EmbeddedResource Include="Payload\JadeNodeRuntime.exe" LogicalName="JadeNode.Payload.JadeNodeRuntime.exe" />
+    <EmbeddedResource Include="Payload\runtime-manifest.json" LogicalName="JadeNode.Payload.runtime-manifest.json" />
+  </ItemGroup>
+  <Target Name="RequireRuntimePayload" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('Payload\JadeNodeRuntime.exe')" Text="Build the PyInstaller JadeNodeRuntime.exe payload first." />
+    <Error Condition="!Exists('Payload\runtime-manifest.json')" Text="Generate the runtime payload manifest first." />
+  </Target>
+</Project>

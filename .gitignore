@@ -14,3 +14,10 @@ __pycache__/
 /Jade-genesis-main.zip
 /jade-genesis-android-*.zip
 /ci-logs/
+
+# Jade Node for Windows build output / generated embedded payload
+/windows-node/build/
+/windows-node/**/bin/
+/windows-node/**/obj/
+/windows-node/JadeNode.Windows/Payload/*
+!/windows-node/JadeNode.Windows/Payload/.gitkeep

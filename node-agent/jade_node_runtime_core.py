@@ -33,6 +33,7 @@ import csv
 import ctypes
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import platform
@@ -56,6 +57,7 @@ from urllib.request import Request, urlopen
 PROTOCOL = "jade-genesis-node/0.0.6"
 VERSION = "0.1.2"
 DEFAULT_PORT = 8765
+DEFAULT_BIND_ADDRESS = "0.0.0.0"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 MAX_BODY_BYTES = 4 * 1024 * 1024
 MAX_PAYLOAD_CHARS = 2_500_000
@@ -205,6 +207,28 @@ def normalize_ollama_url(raw: str) -> str:
 def normalize_node_kind(value: str) -> str:
     candidate = value.strip().upper()
     return candidate if candidate in {"PC", "VPS"} else "PC"
+
+
+def normalize_bind_address(value: str | None) -> str:
+    """Return one explicit IPv4 listen address.
+
+    The runtime keeps its historical all-interface default for existing Linux
+    services. Supervisors such as Jade Node for Windows pass the Tailscale IPv4
+    address explicitly so the HTTP service never listens on Wi-Fi/Ethernet.
+    Host names and IPv6 are intentionally rejected: the address must name the
+    exact interface that owns the listener.
+    """
+
+    candidate = (value or DEFAULT_BIND_ADDRESS).strip()
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError as exc:
+        raise ValueError("invalid_bind_address") from exc
+    if parsed.version != 4:
+        raise ValueError("ipv6_bind_address_unsupported")
+    if parsed.is_multicast:
+        raise ValueError("multicast_bind_address_unsupported")
+    return str(parsed)
 
 
 def infer_node_kind(config: dict[str, Any]) -> str:
@@ -1007,6 +1031,7 @@ def health_payload(
         "protocol": PROTOCOL,
         "agent_version": VERSION,
         "runtime_channel": str(config.get("runtime_channel", "stable")),
+        "bind_address": str(config.get("_effective_bind_address", DEFAULT_BIND_ADDRESS)),
         "node_id": config["node_id"],
         "name": str(config.get("node_name") or default_node_name(str(config["node_kind"]))),
         "kind": str(config["node_kind"]),
@@ -1060,6 +1085,7 @@ def runtime_payload(config: dict[str, Any]) -> dict[str, Any]:
         "success": True,
         "runtime_version": VERSION,
         "runtime_channel": str(config.get("runtime_channel", "stable")),
+        "bind_address": str(config.get("_effective_bind_address", DEFAULT_BIND_ADDRESS)),
         "runtime_sha256": runtime_sha,
         "node_id": str(config["node_id"]),
         "node_kind": str(config["node_kind"]),
@@ -1805,7 +1831,8 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
     print(f"Node ID  : {config['node_id']}")
     print(f"Type     : {config['node_kind']}")
     print(f"Nom      : {config['node_name']}")
-    print(f"Adresse  : {local_ip()}:{config['port']}")
+    bind_address = str(config.get("_effective_bind_address", DEFAULT_BIND_ADDRESS))
+    print(f"Adresse  : {bind_address}:{config['port']}")
     print(f"Canal    : {config.get('runtime_channel', 'stable')}")
     print(f"Config   : {CONFIG_PATH}")
     if show_token:
@@ -1835,6 +1862,7 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=f"Jade Genesis Node Runtime {VERSION}")
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--bind-address", default=None)
     parser.add_argument("--reset-token", action="store_true")
     parser.add_argument("--show-token", action="store_true")
     parser.add_argument("--show-config", action="store_true")
@@ -1851,6 +1879,12 @@ def main() -> int:
     args = parse_args()
     if args.port is not None and not (1 <= args.port <= 65535):
         print("Port invalide.", file=sys.stderr)
+        return 2
+
+    try:
+        bind_address = normalize_bind_address(args.bind_address)
+    except ValueError as exc:
+        print(f"Adresse d'écoute invalide ({exc}).", file=sys.stderr)
         return 2
 
     config = load_or_create_config(
@@ -1873,6 +1907,10 @@ def main() -> int:
         print(json.dumps(ollama_status(config), indent=2, ensure_ascii=False))
         return 0
 
+    # Process-local only: the supervisor may select a different Tailscale
+    # interface address after a reconnect. Never persist this ephemeral value.
+    config["_effective_bind_address"] = bind_address
+
     print_status(config, show_token=args.show_token)
     log_event(
         "INFO",
@@ -1881,11 +1919,12 @@ def main() -> int:
         node_id=config["node_id"],
         node_kind=config["node_kind"],
         port=config["port"],
+        bind_address=bind_address,
     )
     print("Runtime en écoute. Ctrl+C pour arrêter.")
     store = AsyncTaskStore(config)
     server = ThreadingHTTPServer(
-        ("0.0.0.0", int(config["port"])),
+        (bind_address, int(config["port"])),
         make_handler(config, store),
     )
     runtime_started(config)

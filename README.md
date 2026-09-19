@@ -4,9 +4,9 @@ Jade Genesis is an experimental personal AI architecture built around one persis
 
 The project is **not** designed around one permanent LLM as Jade's identity or central brain. Local and external language/vision models remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, measure outcomes, consolidate useful evidence and acquire reusable bounded capabilities under explicit safety boundaries.
 
-> Current Android product version on this branch: **0.1.21** (`versionCode 39`)
+> Current Android product version on this branch: **0.1.22** (`versionCode 40`)
 >
-> Current dependency-free Node Runtime version: **0.1.8** / protocol `jade-genesis-node/0.0.6`
+> Current dependency-free Node Runtime version: **0.1.9** / protocol `jade-genesis-node/0.0.6`
 >
 > Status: **experimental / personal research project**. The 0.1.21 mechanism for verified procedural acquisition is implemented and tested in CI. On 2026-09-16, protocol V3 completed the live VPS/Pixel chain (hidden exam PASS, real restart, real reuse with Ollama delta 0, negative control): Jade demonstrated persistent acquisition and reuse of one bounded procedure, assembled by typed search from LLM hints. See issue #27 and [`docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md`](docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md).
 
@@ -31,6 +31,8 @@ Working foundations now include:
 - measured exact-family Skill reuse before Ollama;
 - one deliberately narrow real-traffic family, `normalize_label_v1`;
 - Android `/normalize <text>` plumbing to send genuine Pixel traffic to the VPS workshop;
+- a self-contained Windows Jade Node launcher that binds the PC runtime to
+  Tailscale, starts with Windows and supervises the local runtime/Ollama;
 - GitHub Actions that compile/test Android and validate the Node learning boundaries.
 
 ## What 0.1.21 is trying to prove
@@ -196,6 +198,10 @@ Android uses Kotlin/Compose with JDK 17, Gradle 9.6.0, AGP 9.4.0, compile/target
 
 The Node Runtime is dependency-free Python despite the historical directory name `node-agent`. See [`node-agent/README.md`](node-agent/README.md).
 
+The Windows PC launcher builds as one self-contained executable containing that
+runtime. See [`windows-node/README.md`](windows-node/README.md) and
+[`docs/WINDOWS_NODE_V0.md`](docs/WINDOWS_NODE_V0.md).
+
 Ordinary Android CI builds debug and unsigned release APKs. Stable signing is a separate explicit path; a green ordinary CI check is not evidence of stable signing.
 
 ## Repository layout
@@ -204,6 +210,7 @@ Ordinary Android CI builds debug and unsigned release APKs. Stable signing is a 
 Jade-genesis/
 ├── android/
 ├── node-agent/
+├── windows-node/
 ├── docs/
 ├── .github/workflows/
 ├── .gitignore

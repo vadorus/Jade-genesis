@@ -33,6 +33,7 @@ import csv
 import ctypes
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import platform
@@ -47,15 +48,19 @@ import threading
 import time
 import uuid
 from collections import Counter, deque
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from shared_store_lock import atomic_write_text, ensure_private_store_path, shared_path_lock
+
 PROTOCOL = "jade-genesis-node/0.0.6"
 VERSION = "0.1.2"
 DEFAULT_PORT = 8765
+TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 MAX_BODY_BYTES = 4 * 1024 * 1024
 MAX_PAYLOAD_CHARS = 2_500_000
@@ -69,6 +74,7 @@ CONFIG_DIR = Path(
     )
 )
 CONFIG_PATH = CONFIG_DIR / "node-agent.json"
+CONFIG_BACKUP_PATH = CONFIG_DIR / "node-agent.json.bak"
 ALLOWED_TASKS = (
     "genesis_probe",
     "text_analysis",
@@ -207,6 +213,65 @@ def normalize_node_kind(value: str) -> str:
     return candidate if candidate in {"PC", "VPS"} else "PC"
 
 
+def normalize_bind_address(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        raise ValueError("bind_address_required")
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError as exc:
+        raise ValueError("invalid_bind_address") from exc
+    if parsed.version != 4:
+        raise ValueError("ipv6_bind_address_unsupported")
+    if parsed not in TAILSCALE_NETWORK:
+        raise ValueError("bind_address_must_be_tailscale_ipv4")
+    return str(parsed)
+
+
+def discover_tailscale_ipv4() -> str | None:
+    executable = shutil.which("tailscale")
+    if not executable:
+        return None
+    try:
+        completed = subprocess.run(
+            [executable, "ip", "-4"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    for line in completed.stdout.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            return normalize_bind_address(candidate)
+        except ValueError:
+            continue
+    return None
+
+
+def resolve_bind_address(
+    override: str | None,
+    config: dict[str, Any],
+) -> str:
+    configured = str(config.get("bind_address", "")).strip()
+    candidate = (override or configured).strip()
+    if candidate:
+        return normalize_bind_address(candidate)
+    discovered = discover_tailscale_ipv4()
+    if discovered:
+        return discovered
+    raise ValueError("bind_address_required")
+
+
 def infer_node_kind(config: dict[str, Any]) -> str:
     existing = str(config.get("node_kind", "")).strip()
     if existing:
@@ -224,12 +289,45 @@ def default_node_name(kind: str) -> str:
     return f"{kind} — {hostname}"
 
 
+def _read_config(path: Path) -> dict[str, Any] | None:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        log_event(
+            "ERROR",
+            "config_unreadable",
+            "Configuration du nœud illisible.",
+            path=str(path),
+            error=type(exc).__name__,
+        )
+        return None
+    if not isinstance(loaded, dict):
+        log_event(
+            "ERROR",
+            "config_invalid_shape",
+            "Configuration du nœud invalide.",
+            path=str(path),
+        )
+        return None
+    return loaded
+
+
 def _save_config(config: dict[str, Any]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(
-        json.dumps(config, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    ensure_private_store_path(CONFIG_PATH)
+    encoded = json.dumps(config, indent=2, ensure_ascii=False)
+    with shared_path_lock(CONFIG_PATH):
+        current = _read_config(CONFIG_PATH)
+        if current is not None and CONFIG_PATH.exists():
+            atomic_write_text(
+                CONFIG_BACKUP_PATH,
+                CONFIG_PATH.read_text(encoding="utf-8"),
+                mode=0o600,
+            )
+        atomic_write_text(CONFIG_PATH, encoded, mode=0o600)
+    ensure_private_store_path(CONFIG_PATH)
 
 
 def load_or_create_config(
@@ -241,14 +339,17 @@ def load_or_create_config(
     channel_override: str | None = None,
 ) -> dict[str, Any]:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_private_store_path(CONFIG_PATH)
     config: dict[str, Any] = {}
-    if CONFIG_PATH.exists():
-        try:
-            loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                config = loaded
-        except Exception:
-            config = {}
+    config_files_exist = CONFIG_PATH.exists() or CONFIG_BACKUP_PATH.exists()
+    if config_files_exist:
+        config = _read_config(CONFIG_PATH) or _read_config(CONFIG_BACKUP_PATH) or {}
+        if not config:
+            raise SystemExit(
+                f"Configuration illisible : {CONFIG_PATH}. Jade refuse de créer "
+                "une nouvelle identité automatiquement. Restaure le fichier ou "
+                "supprime-le volontairement pour initialiser un nouveau nœud."
+            )
 
     if node_kind_override is not None:
         config["node_kind"] = normalize_node_kind(node_kind_override)
@@ -1466,26 +1567,40 @@ def execute_allowlisted_task(
 
 
 class AsyncTaskStore:
+    TERMINAL_STATUSES = {"COMPLETED", "FAILED"}
+
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self.lock = threading.Lock()
         self.tasks: dict[str, dict[str, Any]] = {}
+        configured_workers = safe_int(config.get("max_parallel_tasks", 1), 1)
+        self.max_parallel_tasks = max(1, min(configured_workers, 8))
+        self.executor = ThreadPoolExecutor(
+            max_workers=self.max_parallel_tasks,
+            thread_name_prefix="jade-task",
+        )
 
     def _cleanup_locked(self) -> None:
         now = time.time()
         expired = [
             task_id
             for task_id, item in self.tasks.items()
-            if now - float(item.get("updated_epoch", now)) > ASYNC_TASK_TTL_SECONDS
+            if item.get("status") in self.TERMINAL_STATUSES
+            and now - float(item.get("updated_epoch", now)) > ASYNC_TASK_TTL_SECONDS
         ]
         for task_id in expired:
             self.tasks.pop(task_id, None)
-        if len(self.tasks) > ASYNC_TASK_MAX_ITEMS:
-            ordered = sorted(
-                self.tasks.items(),
+        overflow = max(0, len(self.tasks) - ASYNC_TASK_MAX_ITEMS)
+        if overflow:
+            completed = sorted(
+                (
+                    pair
+                    for pair in self.tasks.items()
+                    if pair[1].get("status") in self.TERMINAL_STATUSES
+                ),
                 key=lambda pair: float(pair[1].get("updated_epoch", 0.0)),
             )
-            for task_id, _ in ordered[: len(self.tasks) - ASYNC_TASK_MAX_ITEMS]:
+            for task_id, _ in completed[:overflow]:
                 self.tasks.pop(task_id, None)
 
     def submit(
@@ -1514,13 +1629,13 @@ class AsyncTaskStore:
             }
             self.tasks[task_id] = item
 
-        thread = threading.Thread(
-            target=self._worker,
-            args=(task_id, task_kind, payload, iterations),
-            daemon=True,
-            name=f"jade-task-{task_id[-8:]}",
+        self.executor.submit(
+            self._worker,
+            task_id,
+            task_kind,
+            payload,
+            iterations,
         )
-        thread.start()
         log_event("INFO", "async_task_queued", f"{task_kind} accepté.", task_id=task_id)
         return dict(item)
 
@@ -1617,6 +1732,7 @@ def validate_task_request(request: dict[str, Any]) -> tuple[str, str, str, int]:
 def make_handler(config: dict[str, Any], store: AsyncTaskStore):
     class JadeNodeHandler(BaseHTTPRequestHandler):
         server_version = f"JadeGenesisNode/{VERSION}"
+        timeout = 15
 
         def _authorized(self) -> bool:
             supplied = self.headers.get("X-Jade-Token", "")
@@ -1805,7 +1921,9 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
     print(f"Node ID  : {config['node_id']}")
     print(f"Type     : {config['node_kind']}")
     print(f"Nom      : {config['node_name']}")
-    print(f"Adresse  : {local_ip()}:{config['port']}")
+    bind_address = str(config.get("_effective_bind_address", "")).strip()
+    display_address = bind_address or local_ip()
+    print(f"Adresse  : {display_address}:{config['port']}")
     print(f"Canal    : {config.get('runtime_channel', 'stable')}")
     print(f"Config   : {CONFIG_PATH}")
     if show_token:
@@ -1835,6 +1953,7 @@ def print_status(config: dict[str, Any], show_token: bool = False) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=f"Jade Genesis Node Runtime {VERSION}")
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--bind-address", default=None)
     parser.add_argument("--reset-token", action="store_true")
     parser.add_argument("--show-token", action="store_true")
     parser.add_argument("--show-config", action="store_true")
@@ -1873,6 +1992,19 @@ def main() -> int:
         print(json.dumps(ollama_status(config), indent=2, ensure_ascii=False))
         return 0
 
+    try:
+        bind_address = resolve_bind_address(args.bind_address, config)
+    except ValueError as exc:
+        print(
+            "Adresse d'écoute Tailscale requise. "
+            "Utilise --bind-address <IPv4-Tailscale> ou configure bind_address "
+            f"dans {CONFIG_PATH} ({exc}).",
+            file=sys.stderr,
+        )
+        return 2
+
+    config["_effective_bind_address"] = bind_address
+    store = AsyncTaskStore(config)
     print_status(config, show_token=args.show_token)
     log_event(
         "INFO",
@@ -1881,11 +2013,12 @@ def main() -> int:
         node_id=config["node_id"],
         node_kind=config["node_kind"],
         port=config["port"],
+        bind_address=bind_address,
+        max_parallel_tasks=store.max_parallel_tasks,
     )
     print("Runtime en écoute. Ctrl+C pour arrêter.")
-    store = AsyncTaskStore(config)
     server = ThreadingHTTPServer(
-        ("0.0.0.0", int(config["port"])),
+        (bind_address, int(config["port"])),
         make_handler(config, store),
     )
     runtime_started(config)

@@ -44,9 +44,8 @@ class NodeManager(
         "jade_genesis_nodes",
         Context.MODE_PRIVATE
     )
-    private val registryMutex = Mutex()
-
     companion object {
+        private val registryMutex = Mutex()
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
         private const val KEY_REMOTE_NODES_V1 = "remote_nodes_v1"
@@ -394,19 +393,73 @@ class NodeManager(
 
         return registryMutex.withLock {
             val latest = loadStoredNodesUnsafe()
+            val originalById = current.associateBy { it.nodeId }
             val refreshedById = refreshed.associateBy { it.nodeId }
-            val merged = buildList {
-                latest.forEach { node ->
-                    add(refreshedById[node.nodeId] ?: node)
-                }
-                refreshed.forEach { node ->
-                    if (latest.none { it.nodeId == node.nodeId }) add(node)
+            val merged = latest.map { latestNode ->
+                val original = originalById[latestNode.nodeId]
+                val probed = refreshedById[latestNode.nodeId]
+                when {
+                    probed == null -> latestNode
+                    original != null && !sameRoutingConfiguration(original, latestNode) -> {
+                        logger?.log(
+                            DiagnosticLevel.INFO,
+                            "node_refresh_stale_discarded",
+                            "Une sonde obsolète a été ignorée après modification de l'appairage.",
+                            mapOf("node_id" to latestNode.nodeId)
+                        )
+                        latestNode
+                    }
+                    else -> mergeProbeResult(latestNode, probed)
                 }
             }
             val normalized = deduplicateStoredNodes(merged)
             saveStoredNodesUnsafe(normalized)
             normalized.map { currentPublicNode(it) }
         }
+    }
+
+    private fun sameRoutingConfiguration(
+        before: StoredNode,
+        after: StoredNode
+    ): Boolean {
+        if (before.token != after.token) return false
+        if (before.activeRouteId != after.activeRouteId) return false
+
+        fun routeKeys(node: StoredNode): Set<String> =
+            node.routes.map { route ->
+                listOf(
+                    route.routeId,
+                    route.kind.name,
+                    route.host.lowercase(),
+                    route.port.toString()
+                ).joinToString("|")
+            }.toSet()
+
+        return routeKeys(before) == routeKeys(after)
+    }
+
+    private fun mergeProbeResult(
+        latest: StoredNode,
+        probed: StoredNode
+    ): StoredNode {
+        val probedRoutesById = probed.routes.associateBy { it.routeId }
+        val mergedRoutes = latest.routes.map { route ->
+            val refreshedRoute = probedRoutesById[route.routeId] ?: return@map route
+            route.copy(
+                status = refreshedRoute.status,
+                latencyMs = refreshedRoute.latencyMs,
+                lastSeenAt = refreshedRoute.lastSeenAt,
+                lastError = refreshedRoute.lastError
+            )
+        }
+        val refreshedActiveRouteId = probed.activeRouteId
+            ?.takeIf { routeId -> mergedRoutes.any { it.routeId == routeId } }
+
+        return probed.copy(
+            token = latest.token,
+            routes = mergedRoutes,
+            activeRouteId = refreshedActiveRouteId ?: latest.activeRouteId
+        )
     }
 
     fun preferredComputeNode(

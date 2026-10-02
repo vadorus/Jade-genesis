@@ -50,7 +50,7 @@ class SelfImprovementPlanner {
 
         val newestCandidateAt = existingCandidates.maxOfOrNull { it.createdAt } ?: 0L
         val groups = report.groups.filter { stats ->
-            stats.samples >= SafetyPolicy.MIN_RUNTIME_EVAL_POSTERIOR_SAMPLES &&
+            stats.samples >= SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES &&
                 stats.lastObservedAt > newestCandidateAt
         }
         if (groups.isEmpty()) return null

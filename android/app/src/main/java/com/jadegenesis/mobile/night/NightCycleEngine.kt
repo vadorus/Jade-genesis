@@ -1,12 +1,16 @@
 package com.jadegenesis.mobile.night
 
 import android.content.Context
+import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.config.SafetyPolicy
 import com.jadegenesis.mobile.core.JadeCore
 import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
+import com.jadegenesis.mobile.eval.RuntimeEvalReport
 import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
+import com.jadegenesis.mobile.evolution.EvolutionCandidate
 import com.jadegenesis.mobile.evolution.EvolutionCandidateStatus
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
+import com.jadegenesis.mobile.evolution.SelfImprovementPlanner
 import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.state.SharedGenesisStateBootstrapper
 import java.util.UUID
@@ -19,6 +23,7 @@ class NightCycleEngine(context: Context) {
     private val sharedState = SharedGenesisStateBootstrapper(appContext)
     private val runtimeEval = RuntimeEvalRuntime.initialize(appContext)
     private val evolution = EvolutionRuntime.initialize(appContext)
+    private val selfImprovementPlanner = SelfImprovementPlanner()
 
     suspend fun runOnce(
         force: Boolean = false,
@@ -65,6 +70,7 @@ class NightCycleEngine(context: Context) {
         var runtimeObservationCount = 0
         var runtimeScore = 0.0
         var runtimeConfidence = 0.0
+        var runtimeReport: RuntimeEvalReport? = null
         var evolutionCandidateCount = 0
         var evolutionValidatedCount = 0
         var fatalError: String? = null
@@ -138,6 +144,7 @@ class NightCycleEngine(context: Context) {
             val runtimeStarted = System.currentTimeMillis()
             val runtimeReview = runCatching { runtimeEval.report() }
             runtimeReview.onSuccess { report ->
+                runtimeReport = report
                 runtimeObservationCount = report.observationCount
                 runtimeScore = report.score
                 runtimeConfidence = report.confidence
@@ -158,11 +165,37 @@ class NightCycleEngine(context: Context) {
 
             val evolutionStarted = System.currentTimeMillis()
             val evolutionReview = runCatching {
-                evolution.candidates(SafetyPolicy.MAX_EVOLUTION_CANDIDATES)
+                val before = evolution.candidates(
+                    SafetyPolicy.MAX_EVOLUTION_CANDIDATES
+                )
+                val proposal = runtimeReport?.let { report ->
+                    selfImprovementPlanner.propose(
+                        report = report,
+                        champion = JadeConfigRuntime.current().validated(),
+                        existingCandidates = before
+                    )
+                }
+                val automaticCandidate = proposal?.let {
+                    evolution.proposeConfigCandidate(
+                        title = it.title,
+                        rationale = it.rationale,
+                        proposedConfig = it.proposedConfig
+                    )
+                }
+                val candidates = if (automaticCandidate == null) {
+                    before
+                } else {
+                    evolution.candidates(SafetyPolicy.MAX_EVOLUTION_CANDIDATES)
+                }
+                EvolutionNightReview(
+                    candidates = candidates,
+                    automaticCandidate = automaticCandidate,
+                    automaticSignal = proposal?.signal?.name
+                )
             }
-            evolutionReview.onSuccess { candidates ->
-                evolutionCandidateCount = candidates.size
-                evolutionValidatedCount = candidates.count {
+            evolutionReview.onSuccess { review ->
+                evolutionCandidateCount = review.candidates.size
+                evolutionValidatedCount = review.candidates.count {
                     it.status == EvolutionCandidateStatus.VALIDATED
                 }
             }
@@ -170,7 +203,8 @@ class NightCycleEngine(context: Context) {
                 phase = NightCyclePhase.EVOLUTION_REVIEW,
                 success = evolutionReview.isSuccess,
                 summary = evolutionReview.fold(
-                    onSuccess = { candidates ->
+                    onSuccess = { review ->
+                        val candidates = review.candidates
                         val proposed = candidates.count {
                             it.status == EvolutionCandidateStatus.PROPOSED
                         }
@@ -180,7 +214,10 @@ class NightCycleEngine(context: Context) {
                         val validated = candidates.count {
                             it.status == EvolutionCandidateStatus.VALIDATED
                         }
-                        "Evolution Engine : ${candidates.size} candidat(s), $proposed proposé(s), $testing en test, $validated validé(s) en attente d'approbation. Aucune promotion automatique."
+                        val automatic = review.automaticCandidate?.let { candidate ->
+                            " Auto-amélioration : hypothèse ${review.automaticSignal?.lowercase()} créée sous ${candidate.candidateId}; champion inchangé."
+                        }.orEmpty()
+                        "Evolution Engine : ${candidates.size} candidat(s), $proposed proposé(s), $testing en test, $validated validé(s) en attente d'approbation. Aucune promotion automatique.$automatic"
                     },
                     onFailure = { error ->
                         "Revue Evolution Engine impossible : ${safeError(error)}"
@@ -289,4 +326,10 @@ class NightCycleEngine(context: Context) {
 
     private fun format(value: Double): String =
         "%.1f".format(java.util.Locale.US, value)
+
+    private data class EvolutionNightReview(
+        val candidates: List<EvolutionCandidate>,
+        val automaticCandidate: EvolutionCandidate?,
+        val automaticSignal: String?
+    )
 }

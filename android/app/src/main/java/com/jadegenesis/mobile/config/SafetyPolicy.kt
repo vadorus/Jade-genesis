@@ -75,6 +75,14 @@ object SafetyPolicy {
     const val MAX_CONVERSATION_LEARNING_CONTEXT_ITEMS = 3
     const val MAX_CONVERSATION_LEARNING_TEXT_CHARS = 1_000
 
+    // Right-hand learning: user preferences remain explicit user statements;
+    // human-science research uses generic queries without personal text.
+    const val MAX_RIGHT_HAND_PREFERENCES = 80
+    const val MAX_RIGHT_HAND_HUMAN_KNOWLEDGE_RECORDS = 30
+    const val MAX_RIGHT_HAND_HUMAN_KNOWLEDGE_EVIDENCE = 6
+    const val MAX_RIGHT_HAND_CONTEXT_ITEMS = 3
+    const val RIGHT_HAND_HUMAN_KNOWLEDGE_FRESH_MS = 7L * 24L * 60L * 60L * 1_000L
+
     // Memory Health : l'historique sert uniquement à mesurer la croissance du
     // stockage. Il ne déclenche jamais de purge automatique. 75 échantillons à
     // 12 h couvrent plus de 30 jours de tendance.

@@ -169,6 +169,14 @@ class ResearchEngine {
                 .onFailure { errors += "DuckDuckGo Q${queryIndex + 1}: ${shortError(it)}" }
         }
 
+        val humanScienceQuery = queries.firstOrNull()
+            ?.takeIf { targets.isEmpty() && looksHumanScienceContext("$focusInstruction\n$observation") }
+        if (humanScienceQuery != null) {
+            runCatching { europePmc(humanScienceQuery) }
+                .onSuccess { evidence += it }
+                .onFailure { errors += "Europe PMC: ${shortError(it)}" }
+        }
+
         val technicalQuery = queries.firstOrNull { looksTechnical(it) }
         if (targets.isEmpty() && technicalQuery != null && looksIssueOrErrorContext(observation)) {
             runCatching { githubIssues(technicalQuery) }
@@ -496,6 +504,39 @@ class ResearchEngine {
         }
     }
 
+    private fun europePmc(query: String): List<ResearchEvidence> {
+        val url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search" +
+            "?query=${enc(query)}&format=json&pageSize=3&resultType=core"
+        val json = JSONObject(get(url))
+        val results = json.optJSONObject("resultList")?.optJSONArray("result") ?: JSONArray()
+        return buildList {
+            for (index in 0 until results.length()) {
+                val item = results.optJSONObject(index) ?: continue
+                val title = item.optString("title").trim()
+                val pmid = item.optString("pmid").trim()
+                val doi = item.optString("doi").trim()
+                val abstractText = item.optString("abstractText")
+                    .replace(Regex("<[^>]+>"), " ").trim()
+                if (title.isBlank()) continue
+                val sourceUrl = when {
+                    pmid.isNotBlank() -> "https://pubmed.ncbi.nlm.nih.gov/$pmid/"
+                    doi.isNotBlank() -> "https://doi.org/$doi"
+                    else -> "https://europepmc.org/search?query=${enc(query)}"
+                }
+                add(
+                    ResearchEvidence(
+                        provider = "Europe PMC",
+                        title = title,
+                        url = sourceUrl,
+                        snippet = abstractText.take(900),
+                        confidence = 0.91,
+                        primarySource = false
+                    )
+                )
+            }
+        }
+    }
+
     private fun wikipedia(query: String): List<ResearchEvidence> {
         val url =
             "https://fr.wikipedia.org/w/api.php?action=query&generator=search&gsrlimit=3&gsrsearch=${enc(query)}&prop=extracts&exintro=1&explaintext=1&format=json"
@@ -753,6 +794,15 @@ class ResearchEngine {
         val markers = listOf(
             "error", "erreur", "exception", "failed", "échec", "bug",
             "stacktrace", "compile", "compilation", "crash", "warning", "avertissement"
+        )
+        return markers.any(lower::contains)
+    }
+
+    private fun looksHumanScienceContext(text: String): Boolean {
+        val lower = text.lowercase()
+        val markers = listOf(
+            "psychology", "psychological", "stress", "low mood", "motivation",
+            "conflict", "fatigue", "sleep", "behavior change", "communication adults"
         )
         return markers.any(lower::contains)
     }

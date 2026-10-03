@@ -193,7 +193,13 @@ class SelfModelBuilder {
                 "research_engine",
                 true,
                 "ResearchEngine v3 repo-first",
-                "Research v3 extrait 1 à 3 requêtes ciblées, détecte les dépôts GitHub structurés et privilégie alors les sources primaires du dépôt (métadonnées, racine et README), avec recherche publique complémentaire filtrée."
+                "Research v3 extrait 1 à 3 requêtes ciblées, détecte les dépôts GitHub structurés et privilégie alors les sources primaires du dépôt. Pour les sciences humaines, il peut compléter avec Europe PMC, sans envoyer les formulations personnelles brutes de l’utilisateur."
+            ),
+            Capability(
+                "right_hand_learning",
+                true,
+                "RightHandLearning v1",
+                "Apprend les préférences explicitement formulées par l’utilisateur, distingue les signaux contextuels des traits permanents et peut rechercher des connaissances humaines générales sourcées avant de les réutiliser comme contexte."
             ),
             Capability(
                 "visual_learning",

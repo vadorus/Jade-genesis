@@ -2,6 +2,7 @@ package com.jadegenesis.mobile
 
 import android.app.Application
 import com.jadegenesis.mobile.cognitive.ConversationLearningRuntime
+import com.jadegenesis.mobile.cognitive.RightHandLearningRuntime
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
@@ -15,6 +16,7 @@ class JadeGenesisApplication : Application() {
         RuntimeEvalRuntime.initialize(this)
         EvolutionRuntime.initialize(this)
         ConversationLearningRuntime.initialize(this)
+        RightHandLearningRuntime.initialize(this)
         SharedGenesisStateWorker.schedule(this)
         NightCycleWorker.schedule(this)
     }

@@ -1,5 +1,8 @@
 package com.jadegenesis.mobile.ui
 
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,10 +35,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import com.jadegenesis.mobile.BuildConfig
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Composable
 internal fun JadeAdminV2(
@@ -45,6 +54,7 @@ internal fun JadeAdminV2(
 ) {
     var pin by remember { mutableStateOf("") }
     var toolIdea by remember { mutableStateOf("") }
+    val context = LocalContext.current
 
     LazyColumn(
         modifier = modifier.background(JadeColors.Bg),
@@ -274,7 +284,7 @@ internal fun JadeAdminV2(
                             Spacer(Modifier.size(8.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
-                                    "${entry.level} · ${entry.event}",
+                                    "${formatDiagnosticTimestamp(entry.createdAt)} · ${entry.level} · ${entry.event}",
                                     fontFamily = JadeMono,
                                     fontSize = 11.sp,
                                     color = diagnosticTone(entry.level)
@@ -289,9 +299,25 @@ internal fun JadeAdminV2(
                         onClick = { vm.generateDiagnosticBundle() },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    state.diagnosticBundlePath?.let {
+                    state.diagnosticBundlePath?.let { path ->
                         Spacer(Modifier.height(7.dp))
-                        Text(it, fontFamily = JadeMono, fontSize = 11.sp, color = JadeColors.Muted2)
+                        Text(path, fontFamily = JadeMono, fontSize = 11.sp, color = JadeColors.Muted2)
+                        Spacer(Modifier.height(9.dp))
+                        V2SecondaryButton(
+                            "Partager / Exporter",
+                            onClick = {
+                                runCatching {
+                                    shareDiagnosticBundle(context, path)
+                                }.onFailure { error ->
+                                    Toast.makeText(
+                                        context,
+                                        error.message ?: "Impossible de partager le bundle diagnostic.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
@@ -305,6 +331,50 @@ internal fun JadeAdminV2(
             }
         }
     }
+}
+
+private val diagnosticTimestampFormatter =
+    DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+
+internal fun formatDiagnosticTimestamp(
+    createdAt: Long,
+    zoneId: ZoneId = ZoneId.systemDefault()
+): String {
+    if (createdAt <= 0L) return "date inconnue"
+    return runCatching {
+        diagnosticTimestampFormatter
+            .withZone(zoneId)
+            .format(Instant.ofEpochMilli(createdAt))
+    }.getOrDefault("date inconnue")
+}
+
+private fun shareDiagnosticBundle(context: Context, path: String) {
+    val diagnosticsDir = File(context.filesDir, "diagnostics").canonicalFile
+    val bundle = File(path).canonicalFile
+    require(bundle.isFile) { "Bundle diagnostic introuvable." }
+    require(bundle.parentFile == diagnosticsDir) {
+        "Partage refusé : le fichier n'appartient pas au dossier diagnostic."
+    }
+    require(
+        bundle.name.startsWith("Jade-Diagnostic-") &&
+            bundle.extension.equals("zip", ignoreCase = true)
+    ) {
+        "Partage refusé : fichier diagnostic inattendu."
+    }
+
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.diagnostics",
+        bundle
+    )
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/zip"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(
+        Intent.createChooser(sendIntent, "Partager le diagnostic Jade")
+    )
 }
 
 @Composable

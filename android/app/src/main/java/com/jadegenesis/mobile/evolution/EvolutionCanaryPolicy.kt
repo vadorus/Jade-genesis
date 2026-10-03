@@ -18,6 +18,7 @@ data class EvolutionCanaryAssessment(
     val successRateDelta: Double,
     val baselineAverageDurationMs: Double,
     val challengerAverageDurationMs: Double,
+    val failureKind: EvolutionFailureKind? = null,
     val reason: String
 )
 
@@ -30,7 +31,8 @@ object EvolutionCanaryPolicy {
             return assessment(
                 EvolutionCanaryDecision.ABORT_INVALID_EVIDENCE,
                 baseline, challenger,
-                "Les observations champion/challenger ne décrivent pas les mêmes scénarios."
+                "Les observations champion/challenger ne décrivent pas les mêmes scénarios.",
+                EvolutionFailureKind.INVALID_EVIDENCE
             )
         }
 
@@ -41,7 +43,8 @@ object EvolutionCanaryPolicy {
             return assessment(
                 EvolutionCanaryDecision.STOP_REGRESSION,
                 baseline, challenger,
-                "Le challenger a échoué sur un scénario où le champion a réussi."
+                "Le challenger a échoué sur un scénario où le champion a réussi.",
+                EvolutionFailureKind.HARD_FAILURE
             )
         }
 
@@ -53,7 +56,8 @@ object EvolutionCanaryPolicy {
                 return assessment(
                     EvolutionCanaryDecision.STOP_REGRESSION,
                     baseline, challenger,
-                    "La fiabilité du challenger régresse au-delà du seuil canary."
+                    "La fiabilité du challenger régresse au-delà du seuil canary.",
+                    EvolutionFailureKind.RELIABILITY_REGRESSION
                 )
             }
 
@@ -66,7 +70,8 @@ object EvolutionCanaryPolicy {
                 return assessment(
                     EvolutionCanaryDecision.STOP_REGRESSION,
                     baseline, challenger,
-                    "La latence moyenne du challenger dépasse le plafond canary."
+                    "La latence moyenne du challenger dépasse le plafond canary.",
+                    EvolutionFailureKind.LATENCY_REGRESSION
                 )
             }
         }
@@ -90,7 +95,8 @@ object EvolutionCanaryPolicy {
         decision: EvolutionCanaryDecision,
         baseline: List<RuntimeEvalObservation>,
         challenger: List<RuntimeEvalObservation>,
-        reason: String
+        reason: String,
+        failureKind: EvolutionFailureKind? = null
     ): EvolutionCanaryAssessment {
         val baseRate = successRate(baseline)
         val challengerRate = successRate(challenger)
@@ -102,6 +108,7 @@ object EvolutionCanaryPolicy {
             successRateDelta = challengerRate - baseRate,
             baselineAverageDurationMs = averageSuccessfulDuration(baseline),
             challengerAverageDurationMs = averageSuccessfulDuration(challenger),
+            failureKind = failureKind,
             reason = reason
         )
     }

@@ -87,6 +87,7 @@ object SafetyPolicy {
     // est volontairement plus lente à saturer que le minimum d'échantillons afin
     // que le garde-fou de confiance reste réellement discriminant.
     const val MAX_EVOLUTION_CANDIDATES = 40
+    const val MAX_EVOLUTION_FAILURE_LESSONS = 80
     const val MAX_EVOLUTION_TRANSITIONS_PER_CANDIDATE = 20
     const val MAX_EVOLUTION_SANDBOX_NOTES = 16
     const val MAX_EVOLUTION_CONFIG_JSON_CHARS = 64_000

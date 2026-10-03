@@ -65,7 +65,8 @@ class EvolutionCanaryCoordinator(context: Context) {
         if (JadeConfigRuntime.current().validated().configId != candidate.championConfigId) {
             evolution.reject(
                 candidate.candidateId,
-                "Champion actif modifié pendant le canary."
+                "Champion actif modifié pendant le canary.",
+                EvolutionFailureKind.CHAMPION_CHANGED
             )
             return stopOrphanSession(
                 activeSession,
@@ -76,7 +77,8 @@ class EvolutionCanaryCoordinator(context: Context) {
         val taskKind = candidate.experimentTaskKind ?: run {
             evolution.reject(
                 candidate.candidateId,
-                "Candidat canary sans type de tâche sûr."
+                "Candidat canary sans type de tâche sûr.",
+                EvolutionFailureKind.OTHER
             )
             return stopOrphanSession(
                 activeSession,
@@ -119,7 +121,19 @@ class EvolutionCanaryCoordinator(context: Context) {
             when (assessment.decision) {
                 EvolutionCanaryDecision.STOP_REGRESSION,
                 EvolutionCanaryDecision.ABORT_INVALID_EVIDENCE -> {
-                    evolution.reject(candidate.candidateId, assessment.reason)
+                    evolution.reject(
+                        candidateId = candidate.candidateId,
+                        reason = assessment.reason,
+                        failureKind = assessment.failureKind,
+                        failureMetrics = EvolutionFailureMetrics(
+                            baselineSamples = assessment.pairCount,
+                            challengerSamples = assessment.pairCount,
+                            baselineSuccessRate = assessment.baselineSuccessRate,
+                            challengerSuccessRate = assessment.challengerSuccessRate,
+                            baselineAverageDurationMs = assessment.baselineAverageDurationMs,
+                            challengerAverageDurationMs = assessment.challengerAverageDurationMs
+                        )
+                    )
                     activeSession = activeSession.copy(
                         status = EvolutionCanaryStatus.STOPPED,
                         reason = assessment.reason,
@@ -146,7 +160,7 @@ class EvolutionCanaryCoordinator(context: Context) {
             ?: return null
         val activeChampion = JadeConfigRuntime.current().validated()
         if (activeChampion.configId != candidate.championConfigId) {
-            evolution.reject(candidate.candidateId, "Candidat obsolète : champion actif différent.")
+            evolution.reject(candidate.candidateId, "Candidat obsolète : champion actif différent.", EvolutionFailureKind.CHAMPION_CHANGED)
             return null
         }
 

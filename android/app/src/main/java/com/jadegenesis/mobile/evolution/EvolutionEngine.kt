@@ -13,6 +13,7 @@ import java.util.UUID
 class EvolutionEngine(context: Context) {
     private val appContext = context.applicationContext
     private val store = EvolutionStore(appContext)
+    private val failureStore = EvolutionFailureStore(appContext)
 
     fun candidates(limit: Int = 20): List<EvolutionCandidate> =
         store.recent(limit)
@@ -22,12 +23,17 @@ class EvolutionEngine(context: Context) {
 
     fun count(): Int = store.count()
 
+    fun failureLessons(limit: Int = 40): List<EvolutionFailureLesson> =
+        failureStore.recent(limit)
+
     @Synchronized
     fun proposeConfigCandidate(
         title: String,
         rationale: String,
         proposedConfig: JadeConfig,
-        experimentTaskKind: String? = null
+        experimentTaskKind: String? = null,
+        hypothesisKey: String? = null,
+        mutationKey: String? = null
     ): EvolutionCandidate {
         val champion = JadeConfigRuntime.current().validated()
         val now = System.currentTimeMillis()
@@ -54,6 +60,8 @@ class EvolutionEngine(context: Context) {
             challengerConfigJson = challengerJson,
             baselineRuntimeEvidence = currentRuntimeEvidence(champion),
             experimentTaskKind = experimentTaskKind?.trim()?.takeIf { it.isNotBlank() },
+            hypothesisKey = hypothesisKey?.trim()?.takeIf { it.isNotBlank() },
+            mutationKey = mutationKey?.trim()?.takeIf { it.isNotBlank() },
             transitions = listOf(
                 EvolutionTransition(
                     status = EvolutionCandidateStatus.CANDIDATE,
@@ -302,7 +310,12 @@ class EvolutionEngine(context: Context) {
     }
 
     @Synchronized
-    fun reject(candidateId: String, reason: String): EvolutionCandidate {
+    fun reject(
+        candidateId: String,
+        reason: String,
+        failureKind: EvolutionFailureKind? = null,
+        failureMetrics: EvolutionFailureMetrics? = null
+    ): EvolutionCandidate {
         val candidate = requireCandidate(candidateId)
         require(
             candidate.status !in setOf(
@@ -317,7 +330,9 @@ class EvolutionEngine(context: Context) {
             candidate,
             EvolutionCandidateStatus.REJECTED,
             cleanReason,
-            lastError = cleanReason
+            lastError = cleanReason,
+            failureKind = failureKind,
+            failureMetrics = failureMetrics
         )
     }
 
@@ -351,13 +366,24 @@ class EvolutionEngine(context: Context) {
         status: EvolutionCandidateStatus,
         note: String,
         lastError: String? = candidate.lastError,
-        at: Long = System.currentTimeMillis()
+        at: Long = System.currentTimeMillis(),
+        failureKind: EvolutionFailureKind? = null,
+        failureMetrics: EvolutionFailureMetrics? = null
     ): EvolutionCandidate {
         val event = EvolutionTransition(
             status = status,
             at = at,
             note = note.take(500)
         )
+        if (status == EvolutionCandidateStatus.REJECTED && candidate.status != EvolutionCandidateStatus.REJECTED) {
+            val resolvedKind = failureKind ?: candidate.comparison?.let(EvolutionFailureLearner::classifyComparison) ?: EvolutionFailureKind.OTHER
+            val baseLesson = EvolutionFailureLearner.fromCandidate(candidate, resolvedKind, note, failureMetrics, at)
+            val learned = EvolutionFailureLearner.withEscalation(
+                baseLesson,
+                failureStore.recent(SafetyPolicy.MAX_EVOLUTION_FAILURE_LESSONS)
+            )
+            failureStore.record(learned)
+        }
         val updated = candidate.copy(
             status = status,
             transitions = (candidate.transitions + event)

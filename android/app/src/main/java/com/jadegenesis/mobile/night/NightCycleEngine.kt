@@ -170,11 +170,13 @@ class NightCycleEngine(context: Context) {
                 val before = evolution.candidates(
                     SafetyPolicy.MAX_EVOLUTION_CANDIDATES
                 )
+                val failureLessons = evolution.failureLessons(SafetyPolicy.MAX_EVOLUTION_FAILURE_LESSONS)
                 val proposal = runtimeReport?.let { report ->
                     selfImprovementPlanner.propose(
                         report = report,
                         champion = JadeConfigRuntime.current().validated(),
-                        existingCandidates = before
+                        existingCandidates = before,
+                        failureLessons = failureLessons
                     )
                 }
                 val automaticCandidate = proposal?.let {
@@ -182,7 +184,9 @@ class NightCycleEngine(context: Context) {
                         title = it.title,
                         rationale = it.rationale,
                         proposedConfig = it.proposedConfig,
-                        experimentTaskKind = it.sourceTaskKind
+                        experimentTaskKind = it.sourceTaskKind,
+                        hypothesisKey = it.hypothesisKey,
+                        mutationKey = it.mutationKey
                     )
                 }
                 val candidates = if (automaticCandidate == null) {
@@ -193,7 +197,9 @@ class NightCycleEngine(context: Context) {
                 EvolutionNightReview(
                     candidates = candidates,
                     automaticCandidate = automaticCandidate,
-                    automaticSignal = proposal?.signal?.name
+                    automaticSignal = proposal?.signal?.name,
+                    failureLessonCount = failureLessons.size,
+                    latestFailureDirection = failureLessons.firstOrNull()?.nextDirection?.name
                 )
             }
             evolutionReview.onSuccess { review ->
@@ -357,6 +363,8 @@ class NightCycleEngine(context: Context) {
     private data class EvolutionNightReview(
         val candidates: List<EvolutionCandidate>,
         val automaticCandidate: EvolutionCandidate?,
-        val automaticSignal: String?
+        val automaticSignal: String?,
+        val failureLessonCount: Int,
+        val latestFailureDirection: String?
     )
 }

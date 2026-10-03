@@ -88,5 +88,7 @@ data class EvolutionCandidate(
     val promotedAt: Long? = null,
     val rolledBackAt: Long? = null,
     val experimentTaskKind: String? = null,
+    val hypothesisKey: String? = null,
+    val mutationKey: String? = null,
     val lastError: String? = null
 )

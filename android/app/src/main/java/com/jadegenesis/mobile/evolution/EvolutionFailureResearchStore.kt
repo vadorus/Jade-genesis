@@ -53,7 +53,8 @@ class EvolutionFailureResearchStore(context: Context) {
             val count = minOf(
                 array.length(),
                 SafetyPolicy.MAX_EVOLUTION_FAILURE_RESEARCH_RECORDS
-            )            for (index in 0 until count) {
+            )
+            for (index in 0 until count) {
                 runCatching { fromJson(array.getJSONObject(index)) }
                     .getOrNull()
                     ?.let(::add)

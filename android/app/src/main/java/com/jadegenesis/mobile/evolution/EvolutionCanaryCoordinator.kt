@@ -157,7 +157,8 @@ class EvolutionCanaryCoordinator(context: Context) {
             decisionKind = "task_routing",
             limit = SHADOW_TRACE_WINDOW
         ).filter { trace ->
-            trace.taskKind == taskKind
+            trace.taskKind == taskKind &&
+                trace.workload == TaskWorkload.MEDIUM
         }.map { trace ->
             shadowLab.compare(trace, champion.routing, challenger.routing)
         }

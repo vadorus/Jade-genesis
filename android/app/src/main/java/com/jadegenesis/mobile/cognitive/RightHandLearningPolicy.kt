@@ -72,7 +72,7 @@ object RightHandLearningPolicy {
         val normalized = ConversationLearningPolicy.normalize(input)
         val candidates = listOf(
             HumanKnowledgeDomain.STRESS to listOf("stress", "stresse", "pression", "angoisse", "anxieux", "deborde"),
-            HumanKnowledgeDomain.LOW_MOOD to listOf("pas le moral", "moral bas", "deprime", "triste", "abattu"),
+            HumanKnowledgeDomain.LOW_MOOD to listOf("pas le moral", "pas trop le moral", "moral bas", "deprime", "triste", "abattu"),
             HumanKnowledgeDomain.MOTIVATION to listOf("motivation", "demotive", "procrastin", "pas envie", "manque d envie"),
             HumanKnowledgeDomain.CONFLICT to listOf("conflit", "dispute", "tension", "engueule", "desaccord"),
             HumanKnowledgeDomain.FATIGUE to listOf("fatigue", "epuise", "dors mal", "sommeil", "creve")

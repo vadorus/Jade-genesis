@@ -11,6 +11,7 @@ import com.jadegenesis.mobile.evolution.EvolutionCandidate
 import com.jadegenesis.mobile.evolution.EvolutionCandidateStatus
 import com.jadegenesis.mobile.evolution.EvolutionCanaryCoordinator
 import com.jadegenesis.mobile.evolution.EvolutionFailureResearchCoordinator
+import com.jadegenesis.mobile.evolution.EvolutionResearchHypothesisCoordinator
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
 import com.jadegenesis.mobile.evolution.SelfImprovementPlanner
 import com.jadegenesis.mobile.model.DiagnosticLevel
@@ -28,6 +29,7 @@ class NightCycleEngine(context: Context) {
     private val selfImprovementPlanner = SelfImprovementPlanner()
     private val canaryCoordinator = EvolutionCanaryCoordinator(appContext)
     private val failureResearchCoordinator = EvolutionFailureResearchCoordinator(appContext)
+    private val researchHypothesisCoordinator = EvolutionResearchHypothesisCoordinator(appContext)
 
     suspend fun runOnce(
         force: Boolean = false,
@@ -279,6 +281,29 @@ class NightCycleEngine(context: Context) {
                     }
                 ),
                 durationMs = elapsedSince(researchStarted)
+            )
+
+            val hypothesisStarted = System.currentTimeMillis()
+            val hypothesisRun = runCatching {
+                researchHypothesisCoordinator.runStep(
+                    researchRecords = failureResearchCoordinator.recent(
+                        SafetyPolicy.MAX_EVOLUTION_FAILURE_RESEARCH_RECORDS
+                    ),
+                    synthesizer = core::synthesizeEvolutionResearchHypothesis
+                )
+            }
+            steps += NightCycleStep(
+                phase = NightCyclePhase.EVOLUTION_HYPOTHESIS,
+                success = hypothesisRun.isSuccess,
+                summary = hypothesisRun.fold(
+                    onSuccess = { report ->
+                        "Hypothèse Evolution ${report.state.name.lowercase()} : ${report.summary}"
+                    },
+                    onFailure = { error ->
+                        "Synthèse d'hypothèse impossible : ${safeError(error)}"
+                    }
+                ),
+                durationMs = elapsedSince(hypothesisStarted)
             )
 
             steps += syncStep(NightCyclePhase.SYNC_AFTER)

@@ -4,9 +4,9 @@ Jade Genesis is an experimental personal AI architecture built around one persis
 
 The project is **not** designed around one permanent LLM as Jade's identity or central brain. Local and external language/vision models remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, measure outcomes, consolidate useful evidence and acquire reusable bounded capabilities under explicit safety boundaries.
 
-> Current Android product version on this branch: **0.1.21** (`versionCode 39`)
+> Current Android product version: **0.1.22** (`versionCode 40`)
 >
-> Current dependency-free Node Runtime version: **0.1.8** / protocol `jade-genesis-node/0.0.6`
+> Current dependency-free Node Runtime version: **0.1.9** / protocol `jade-genesis-node/0.0.6`
 >
 > Status: **experimental / personal research project**. The 0.1.21 mechanism for verified procedural acquisition is implemented and tested in CI. On 2026-09-16, protocol V3 completed the live VPS/Pixel chain (hidden exam PASS, real restart, real reuse with Ollama delta 0, negative control): Jade demonstrated persistent acquisition and reuse of one bounded procedure, assembled by typed search from LLM hints. See issue #27 and [`docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md`](docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md).
 
@@ -33,11 +33,13 @@ Working foundations now include:
 - Android `/normalize <text>` plumbing to send genuine Pixel traffic to the VPS workshop;
 - GitHub Actions that compile/test Android and validate the Node learning boundaries.
 
-## What 0.1.21 is trying to prove
+## 0.1.21 proof protocol and recorded result
 
 The milestone is not successful merely because a generated Skill reaches `RETAINED`.
 
-The required causal proof is:
+Protocol V3 completed this chain on 2026-09-16 for `normalize_label_v1`, as recorded in the [external evidence log](https://github.com/vadorus/Jade-genesis/issues/27#issuecomment-5701705861) and the [live-proof handoff](docs/HANDOFF_0.1.21_V3_LIVE_PROOF.md). This is a dated result for one bounded procedure; it does not establish broader learning or the current health of every deployment.
+
+The causal proof contract remains:
 
 ```text
 no target Skill
@@ -57,7 +59,7 @@ no target Skill
 
 That sequence distinguishes “a procedure passed a test” from “Jade acquired a persistent capability that changes future behavior.”
 
-See [`docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`](docs/SKILL_SYNTHESIS_LOOP_0.1.21.md).
+The reproducible protocol is specified in [`docs/LEARNING_TRIAL_POLICY_0.1.21_V3.md`](docs/LEARNING_TRIAL_POLICY_0.1.21_V3.md), with the mechanism in [`docs/SKILL_SYNTHESIS_LOOP_0.1.21.md`](docs/SKILL_SYNTHESIS_LOOP_0.1.21.md). The handoff records the restart, measured reuse, negative control and retained-artifact identifiers without disclosing hidden cases. Stronger claims remain gated on the policy's fresh confirmatory datasets.
 
 ## First real family
 
@@ -152,7 +154,7 @@ No arbitrary remote `skill_learn`, `skill_synthesis`, `sealed_skill_exam`, regis
 Jade must not yet be confused with autonomous general intelligence or unrestricted self-improvement.
 
 - 0.1.21 learns one bounded procedural family, not arbitrary tasks;
-- the final live hard-restart proof has not yet been completed on the real VPS/Pixel path;
+- the live hard-restart/reuse proof is recorded for one procedure on 2026-09-16; broader confirmation and generalisation remain unproven;
 - fuzzy Skill retrieval and broad confidence-based recall are not implemented;
 - Skill-to-Skill composition is disabled;
 - learned Skills cannot access shell/filesystem/network primitives;
@@ -186,9 +188,10 @@ Detailed architecture: [`docs/ARCHITECTURE_OVERVIEW.md`](docs/ARCHITECTURE_OVERV
 - **0.1.19 — Verifiable Task Ledger + SkillSpec:** deterministic datasets and declarative procedure payload. Implemented.
 - **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry and one-shot hidden final exam. Implemented.
 - **0.1.20.1 — Cognitive Plumbing Hardening:** durable memory delivery, lifecycle cleanup, Shared State compaction and meaningful Evolution metrics. Implemented on `main`.
-- **0.1.21 — Verified Skill Synthesis Loop:** three-zone environment, bounded teacher, dataset reserve/attestation, Night Cycle crank, measured Skill reuse and Pixel real-traffic path. Mechanism implemented on this branch; live restart proof pending.
-- **0.1.22 — Retrieval/lifecycle quality:** only after 0.1.21's live proof; multiple-skill selection, confidence, abstention, regression/rollback and maintenance.
-- **0.1.23+ — Composition/generalisation:** controlled composition after the single-Skill causal model is proven.
+- **0.1.21 — Verified Skill Synthesis Loop:** three-zone environment, bounded teacher, dataset reserve/attestation, Night Cycle crank, measured Skill reuse and Pixel real-traffic path. Protocol V3 completed the live restart/reuse proof on 2026-09-16 for one bounded procedure, with `typed_search_with_llm_hints` provenance.
+- **Current product — Android 0.1.22 / Node 0.1.9:** the source versions above identify the build. Later development-lot labels are not Android release versions.
+- **Development lots 0.1.24–0.1.30:** bounded self-improvement planning, research, competing hypotheses, controlled experiments and explicit-preference learning have been integrated. See the [reasoning model](docs/SELF_IMPROVEMENT_MODEL_0.1.24.md) and [0.1.30 integration](https://github.com/vadorus/Jade-genesis/pull/59). Unit tests and CI validate the implemented mechanisms; they do not establish broad autonomous learning in live personal use.
+- **Future work:** confirmatory acquisition trials, richer Skill retrieval and lifecycle validation, followed by controlled composition/generalisation. Skill composition remains disabled.
 
 ## Android / Node build versions
 

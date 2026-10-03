@@ -12,6 +12,7 @@ import com.jadegenesis.mobile.cognitive.CognitiveCore
 import com.jadegenesis.mobile.cognitive.CognitiveLedger
 import com.jadegenesis.mobile.cognitive.LearningEngine
 import com.jadegenesis.mobile.cognitive.VisualLearningStore
+import com.jadegenesis.mobile.config.JadeConfig
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.AdminGate
@@ -82,6 +83,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.UUID
+
+private const val EVOLUTION_CANARY_TEXT = "Jade Genesis routing canary benchmark: deterministic text analysis sample."
 
 class JadeCore(context: Context) {
     private val appContext = context.applicationContext
@@ -212,6 +215,39 @@ class JadeCore(context: Context) {
             device = device,
             budget = resourceBudget
         )
+    }
+
+    suspend fun runEvolutionCanaryPair(
+        taskKind: String,
+        championConfig: JadeConfig,
+        challengerConfig: JadeConfig,
+        challengerFirst: Boolean
+    ): Pair<DistributedTaskResult, DistributedTaskResult> {
+        val activeIdentity = activeIdentity()
+        val device = profiler.capture()
+        val budget = resourceGovernor.evaluate(device)
+
+        suspend fun run(config: JadeConfig, refreshRemote: Boolean) = when (taskKind) {
+            "genesis_probe" -> taskRouter.runGenesisProbeExperiment(
+                identityId = activeIdentity.jadeId, device = device, budget = budget,
+                experimentConfig = config, refreshRemote = refreshRemote
+            )
+            "text_analysis" -> taskRouter.runTextAnalysisExperiment(
+                text = EVOLUTION_CANARY_TEXT, device = device, budget = budget,
+                experimentConfig = config, refreshRemote = refreshRemote
+            )
+            else -> error("Type de tâche canary non autorisé : $taskKind")
+        }
+
+        return if (challengerFirst) {
+            val challenger = run(challengerConfig, true)
+            val champion = run(championConfig, false)
+            champion to challenger
+        } else {
+            val champion = run(championConfig, true)
+            val challenger = run(challengerConfig, false)
+            champion to challenger
+        }
     }
 
     suspend fun runDistributedTextAnalysis(text: String): DistributedTaskResult {

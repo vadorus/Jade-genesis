@@ -44,6 +44,7 @@ class SelfImprovementPlannerTest {
         ) ?: error("Expected reliability proposal")
 
         assertEquals(SelfImprovementSignal.RELIABILITY, proposal.signal)
+        assertEquals("text_analysis", proposal.sourceTaskKind)
         assertTrue(
             proposal.proposedConfig.routing.historyFailurePenalty >
                 champion.routing.historyFailurePenalty
@@ -170,13 +171,14 @@ class SelfImprovementPlannerTest {
         fallbackRate: Double = 0.0,
         averageDurationMs: Double = 20.0,
         samples: Int = 12,
-        lastObservedAt: Long = 1_500L
+        lastObservedAt: Long = 1_500L,
+        taskKind: String = "text_analysis"
     ): RuntimeEvalStats {
         val successes = (samples * successRate).toInt().coerceIn(0, samples)
         return RuntimeEvalStats(
             nodeId = "node-a",
             nodeName = "PC",
-            taskKind = "brain_chat",
+            taskKind = taskKind,
             model = "model-a",
             brainProfile = "balanced",
             samples = samples,

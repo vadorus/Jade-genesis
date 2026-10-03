@@ -18,6 +18,7 @@ data class SelfImprovementProposal(
     val title: String,
     val rationale: String,
     val sourceGroupKey: String,
+    val sourceTaskKind: String,
     val proposedConfig: JadeConfig
 )
 
@@ -50,7 +51,8 @@ class SelfImprovementPlanner {
 
         val newestCandidateAt = existingCandidates.maxOfOrNull { it.createdAt } ?: 0L
         val groups = report.groups.filter { stats ->
-            stats.samples >= SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES &&
+            stats.taskKind in CANARY_SUPPORTED_TASK_KINDS &&
+                stats.samples >= SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES &&
                 stats.lastObservedAt > newestCandidateAt
         }
         if (groups.isEmpty()) return null
@@ -178,6 +180,7 @@ class SelfImprovementPlanner {
             title = "Auto-hypothèse ${signal.name.lowercase()} — ${stats.taskKind}".take(240),
             rationale = rationale.take(2_000),
             sourceGroupKey = groupKey,
+            sourceTaskKind = stats.taskKind,
             proposedConfig = proposedConfig
         )
     }
@@ -191,6 +194,7 @@ class SelfImprovementPlanner {
         "%.1f".format(java.util.Locale.US, this)
 
     companion object {
+        private val CANARY_SUPPORTED_TASK_KINDS = setOf("genesis_probe", "text_analysis")
         private val ACTIVE_STATUSES = setOf(
             EvolutionCandidateStatus.CANDIDATE,
             EvolutionCandidateStatus.PROPOSED,

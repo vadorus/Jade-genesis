@@ -96,6 +96,12 @@ object SafetyPolicy {
     const val MIN_EVOLUTION_EVIDENCE_CONFIDENCE = 0.75
     const val MAX_EVOLUTION_SUCCESS_RATE_REGRESSION = 0.02
     const val MIN_EVOLUTION_SCORE_DELTA = 2.0
+    const val MIN_EVOLUTION_CANARY_SHADOW_CONTEXTS = 4
+    const val MIN_EVOLUTION_CANARY_SHADOW_DIVERGENCES = 1
+    const val MAX_EVOLUTION_CANARY_PAIRS_PER_CYCLE = 2
+    const val MIN_EVOLUTION_CANARY_EARLY_STOP_PAIRS = 4
+    const val MAX_EVOLUTION_CANARY_EARLY_SUCCESS_RATE_REGRESSION = 0.10
+    const val MAX_EVOLUTION_CANARY_LATENCY_MULTIPLIER = 2.0
 
     // Night Cycle : cadence et volume maximum restent compilés. Une évolution
     // de configuration ne peut donc pas transformer une fenêtre nocturne en

@@ -134,6 +134,25 @@ class CognitiveCore(
             throw error
         }
         val executionDuration = elapsedMs(executionStarted)
+        if (first.fallbackUsed) {
+            val reason = first.fallbackReason
+                ?.trim()
+                ?.take(500)
+                ?.takeIf { it.isNotBlank() }
+                ?: "Raison du backend principal indisponible."
+            logger.log(
+                DiagnosticLevel.WARN,
+                "brain_fallback",
+                "Fallback conversationnel vers ${first.backendDisplayName.ifBlank { first.backendId.ifBlank { "PrototypeBrain" } }} : $reason",
+                mapOf(
+                    "execution_id" to executionId,
+                    "backend_id" to first.backendId,
+                    "node_id" to first.nodeId,
+                    "fallback_reason" to reason,
+                    "duration_ms" to executionDuration
+                )
+            )
+        }
         record(
             executionId,
             CognitivePhase.EXECUTE,

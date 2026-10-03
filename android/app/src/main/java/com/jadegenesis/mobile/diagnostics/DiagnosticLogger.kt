@@ -10,6 +10,21 @@ import java.io.RandomAccessFile
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+internal fun redactDiagnosticSecrets(value: String): String {
+    var text = value.replace(
+        Regex("""(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"""),
+        "Bearer ***"
+    )
+    text = text.replace(
+        Regex(
+            """(?i)\b(token|secret|password|authorization|credential|private[_-]?key)\b\s*[:=]\s*([^\s,;]+)"""
+        )
+    ) { match ->
+        "${match.groupValues[1]}=***"
+    }
+    return text
+}
+
 class DiagnosticLogger(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(
@@ -51,13 +66,17 @@ class DiagnosticLogger(context: Context) {
         runCatching {
             rotateIfNeeded()
             val safeMetadata = metadata.mapValues { (key, value) ->
-                if (isSecretKey(key)) "***" else sanitizeValue(value)
+                if (isSecretKey(key)) {
+                    "***"
+                } else {
+                    redactDiagnosticSecrets(sanitizeValue(value))
+                }
             }
             val json = JSONObject().apply {
                 put("created_at", System.currentTimeMillis())
                 put("level", level.name)
                 put("event", event.take(80))
-                put("message", message.take(800))
+                put("message", redactDiagnosticSecrets(message).take(800))
                 put(
                     "metadata",
                     JSONObject().apply {

@@ -5,6 +5,9 @@ import com.jadegenesis.mobile.evolution.EvolutionCandidate
 import com.jadegenesis.mobile.evolution.EvolutionCandidateKind
 import com.jadegenesis.mobile.evolution.EvolutionCandidateStatus
 import com.jadegenesis.mobile.evolution.EvolutionSandbox
+import com.jadegenesis.mobile.evolution.EvolutionFailureKind
+import com.jadegenesis.mobile.evolution.EvolutionFailureLesson
+import com.jadegenesis.mobile.evolution.EvolutionNextDirection
 import com.jadegenesis.mobile.evolution.SelfImprovementPlanner
 import com.jadegenesis.mobile.evolution.SelfImprovementSignal
 import com.jadegenesis.mobile.eval.RuntimeEvalReport
@@ -150,6 +153,47 @@ class SelfImprovementPlannerTest {
         assertNull(proposal)
     }
 
+    @Test
+    fun failedPrimaryReliabilityMutationUsesAlternateMechanism() {
+        val proposal = planner.propose(
+            report = report(groups = listOf(stats(successRate = 0.70))),
+            champion = champion,
+            existingCandidates = emptyList(),
+            failureLessons = listOf(lesson("RELIABILITY|text_analysis|historyFailurePenalty:up"))
+        ) ?: error("Expected alternate reliability proposal")
+
+        assertEquals("RELIABILITY|text_analysis|historySuccessRateWeight:up", proposal.mutationKey)
+        assertEquals(champion.routing.historyFailurePenalty, proposal.proposedConfig.routing.historyFailurePenalty, 0.0001)
+        assertTrue(proposal.proposedConfig.routing.historySuccessRateWeight > champion.routing.historySuccessRateWeight)
+    }
+
+    @Test
+    fun invalidEvidenceDoesNotBlacklistMutation() {
+        val proposal = planner.propose(
+            report = report(groups = listOf(stats(successRate = 0.70))),
+            champion = champion,
+            existingCandidates = emptyList(),
+            failureLessons = listOf(lesson("RELIABILITY|text_analysis|historyFailurePenalty:up", EvolutionFailureKind.INVALID_EVIDENCE))
+        ) ?: error("Expected primary reliability proposal")
+
+        assertEquals("RELIABILITY|text_analysis|historyFailurePenalty:up", proposal.mutationKey)
+    }
+
+    @Test
+    fun twoRefutedReliabilityMechanismsStopAutomaticRetuning() {
+        val proposal = planner.propose(
+            report = report(groups = listOf(stats(successRate = 0.70))),
+            champion = champion,
+            existingCandidates = emptyList(),
+            failureLessons = listOf(
+                lesson("RELIABILITY|text_analysis|historyFailurePenalty:up"),
+                lesson("RELIABILITY|text_analysis|historySuccessRateWeight:up")
+            )
+        )
+
+        assertNull(proposal)
+    }
+
     private fun report(
         observationCount: Int = 12,
         confidence: Double = 1.0,
@@ -193,6 +237,30 @@ class SelfImprovementPlannerTest {
             lastObservedAt = lastObservedAt
         )
     }
+
+    private fun lesson(
+        mutationKey: String,
+        kind: EvolutionFailureKind = EvolutionFailureKind.RELIABILITY_REGRESSION
+    ): EvolutionFailureLesson = EvolutionFailureLesson(
+        lessonId = "lesson-$mutationKey",
+        candidateId = "failed-candidate",
+        taskKind = "text_analysis",
+        hypothesisKey = "RELIABILITY|text_analysis",
+        mutationKey = mutationKey,
+        kind = kind,
+        reason = "test failure",
+        refutedClaim = "test hypothesis",
+        nextDirection = EvolutionNextDirection.TRY_ALTERNATE_RELIABILITY_MECHANISM,
+        baselineSamples = 12,
+        challengerSamples = 12,
+        baselineSuccessRate = 1.0,
+        challengerSuccessRate = 0.8,
+        baselineAverageDurationMs = 100.0,
+        challengerAverageDurationMs = 120.0,
+        baselineScore = 80.0,
+        challengerScore = 70.0,
+        createdAt = 1_000L
+    )
 
     private fun candidate(
         status: EvolutionCandidateStatus,

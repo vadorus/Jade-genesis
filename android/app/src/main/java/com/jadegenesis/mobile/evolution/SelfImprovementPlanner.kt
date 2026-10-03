@@ -19,6 +19,8 @@ data class SelfImprovementProposal(
     val rationale: String,
     val sourceGroupKey: String,
     val sourceTaskKind: String,
+    val hypothesisKey: String,
+    val mutationKey: String,
     val proposedConfig: JadeConfig
 )
 
@@ -37,7 +39,8 @@ class SelfImprovementPlanner {
     fun propose(
         report: RuntimeEvalReport,
         champion: JadeConfig,
-        existingCandidates: List<EvolutionCandidate>
+        existingCandidates: List<EvolutionCandidate>,
+        failureLessons: List<EvolutionFailureLesson> = emptyList()
     ): SelfImprovementProposal? {
         if (report.observationCount < SafetyPolicy.STRONG_RUNTIME_EVAL_POSTERIOR_SAMPLES) {
             return null
@@ -65,21 +68,29 @@ class SelfImprovementPlanner {
             )
         if (reliability != null) {
             val routing = champion.routing
-            val nextPenalty = stepUp(routing.historyFailurePenalty, 0.5)
+            val primaryKey = mutationKey(SelfImprovementSignal.RELIABILITY, reliability.taskKind, "historyFailurePenalty:up")
+            val alternateKey = mutationKey(SelfImprovementSignal.RELIABILITY, reliability.taskKind, "historySuccessRateWeight:up")
+            val useAlternate = mutationRefuted(primaryKey, failureLessons)
+            if (useAlternate && mutationRefuted(alternateKey, failureLessons)) return null
+            val selectedMutationKey = if (useAlternate) alternateKey else primaryKey
+            val reliabilityRouting = if (useAlternate) {
+                routing.copy(historySuccessRateWeight = stepUp(routing.historySuccessRateWeight, 1.0))
+            } else {
+                routing.copy(historyFailurePenalty = stepUp(routing.historyFailurePenalty, 0.5))
+            }
             return proposal(
                 signal = SelfImprovementSignal.RELIABILITY,
                 stats = reliability,
                 champion = champion,
-                proposedConfig = champion.copy(
-                    routing = routing.copy(historyFailurePenalty = nextPenalty)
-                ),
+                proposedConfig = champion.copy(routing = reliabilityRouting),
+                mutationKey = selectedMutationKey,
                 observation =
                     "Le groupe mesuré réussit ${(reliability.successRate * 100.0).format1()} % " +
                         "sur ${reliability.samples} essai(s).",
                 hypothesis =
-                    "Le routage sous-pondère actuellement l'historique d'échec pour ce type de décision.",
+                    "Le routage sous-pondère probablement la fiabilité historique pour ce type de décision.",
                 prediction =
-                    "Augmenter légèrement historyFailurePenalty devrait réduire la sélection future de " +
+                    "Renforcer prudemment le poids de la fiabilité historique devrait réduire la sélection future de " +
                         "chemins historiquement peu fiables sans modifier les limites de sécurité."
             )
         }
@@ -92,21 +103,29 @@ class SelfImprovementPlanner {
             )
         if (fallback != null) {
             val routing = champion.routing
-            val nextPenalty = stepUp(routing.historyFailurePenalty, 0.5)
+            val primaryKey = mutationKey(SelfImprovementSignal.FALLBACK, fallback.taskKind, "historyFailurePenalty:up")
+            val alternateKey = mutationKey(SelfImprovementSignal.FALLBACK, fallback.taskKind, "historySuccessRateWeight:up")
+            val useAlternate = mutationRefuted(primaryKey, failureLessons)
+            if (useAlternate && mutationRefuted(alternateKey, failureLessons)) return null
+            val selectedMutationKey = if (useAlternate) alternateKey else primaryKey
+            val fallbackRouting = if (useAlternate) {
+                routing.copy(historySuccessRateWeight = stepUp(routing.historySuccessRateWeight, 1.0))
+            } else {
+                routing.copy(historyFailurePenalty = stepUp(routing.historyFailurePenalty, 0.5))
+            }
             return proposal(
                 signal = SelfImprovementSignal.FALLBACK,
                 stats = fallback,
                 champion = champion,
-                proposedConfig = champion.copy(
-                    routing = routing.copy(historyFailurePenalty = nextPenalty)
-                ),
+                proposedConfig = champion.copy(routing = fallbackRouting),
+                mutationKey = selectedMutationKey,
                 observation =
                     "Le groupe mesuré utilise un fallback dans ${(fallback.fallbackRate * 100.0).format1()} % " +
                         "des ${fallback.samples} essai(s).",
                 hypothesis =
-                    "Le coût historique des routes qui déclenchent des fallbacks est probablement trop faible.",
+                    "Le routage ne distingue probablement pas assez les routes directes des routes qui déclenchent un fallback.",
                 prediction =
-                    "Une pénalité historique légèrement supérieure devrait favoriser les routes qui terminent " +
+                    "Renforcer prudemment le signal de fiabilité historique devrait favoriser les routes qui terminent " +
                         "directement la tâche."
             )
         }
@@ -123,21 +142,29 @@ class SelfImprovementPlanner {
             )
         if (latency != null) {
             val routing = champion.routing
-            val nextBonus = stepUp(routing.historyDurationBonus, 1.0)
+            val primaryKey = mutationKey(SelfImprovementSignal.LATENCY, latency.taskKind, "historyDurationBonus:up")
+            val alternateKey = mutationKey(SelfImprovementSignal.LATENCY, latency.taskKind, "historyDurationScaleMs:down")
+            val useAlternate = mutationRefuted(primaryKey, failureLessons)
+            if (useAlternate && mutationRefuted(alternateKey, failureLessons)) return null
+            val selectedMutationKey = if (useAlternate) alternateKey else primaryKey
+            val latencyRouting = if (useAlternate) {
+                routing.copy(historyDurationScaleMs = stepDown(routing.historyDurationScaleMs, 5.0))
+            } else {
+                routing.copy(historyDurationBonus = stepUp(routing.historyDurationBonus, 1.0))
+            }
             return proposal(
                 signal = SelfImprovementSignal.LATENCY,
                 stats = latency,
                 champion = champion,
-                proposedConfig = champion.copy(
-                    routing = routing.copy(historyDurationBonus = nextBonus)
-                ),
+                proposedConfig = champion.copy(routing = latencyRouting),
+                mutationKey = selectedMutationKey,
                 observation =
                     "Le groupe mesuré prend en moyenne ${latency.averageDurationMs.format1()} ms, " +
                         "au-dessus du seuil exploratoire ${latencyThreshold.format1()} ms.",
                 hypothesis =
                     "Le routage ne récompense peut-être pas assez les alternatives historiquement plus rapides.",
                 prediction =
-                    "Augmenter légèrement historyDurationBonus devrait rendre les différences de latence " +
+                    "Rendre le signal de durée plus discriminant devrait mieux séparer les routes rapides des routes lentes, " +
                         "plus discriminantes lors du classement."
             )
         }
@@ -150,6 +177,7 @@ class SelfImprovementPlanner {
         stats: RuntimeEvalStats,
         champion: JadeConfig,
         proposedConfig: JadeConfig,
+        mutationKey: String,
         observation: String,
         hypothesis: String,
         prediction: String
@@ -181,8 +209,24 @@ class SelfImprovementPlanner {
             rationale = rationale.take(2_000),
             sourceGroupKey = groupKey,
             sourceTaskKind = stats.taskKind,
+            hypothesisKey = hypothesisKey(signal, stats.taskKind),
+            mutationKey = mutationKey,
             proposedConfig = proposedConfig
         )
+    }
+
+    private fun hypothesisKey(signal: SelfImprovementSignal, taskKind: String): String =
+        "${signal.name}|$taskKind"
+
+    private fun mutationKey(signal: SelfImprovementSignal, taskKind: String, change: String): String =
+        "${hypothesisKey(signal, taskKind)}|$change"
+
+    private fun mutationRefuted(key: String, lessons: List<EvolutionFailureLesson>): Boolean =
+        lessons.any { it.mutationKey == key && EvolutionFailureLearner.isRefuting(it.kind) }
+
+    private fun stepDown(value: Double, minimumDelta: Double): Double {
+        val delta = max(abs(value) * TUNING_STEP_FRACTION, minimumDelta)
+        return (value - delta).coerceAtLeast(1.0)
     }
 
     private fun stepUp(value: Double, minimumDelta: Double): Double {

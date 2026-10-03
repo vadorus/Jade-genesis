@@ -101,6 +101,36 @@ class TaskRouter(
         )
     }
 
+    suspend fun runGenesisProbeExperiment(
+        identityId: String,
+        device: DeviceProfile,
+        budget: ResourceBudget,
+        experimentConfig: JadeConfig,
+        refreshRemote: Boolean = true
+    ): DistributedTaskResult {
+        val config = experimentConfig.validated()
+        val taskId = "evo-probe-${UUID.randomUUID()}"
+        val payload = listOf(
+            "jade-evolution-canary", identityId, taskId,
+            System.currentTimeMillis().toString()
+        ).joinToString(":")
+
+        return runTask(
+            request = DistributedTaskRequest(
+                taskId = taskId,
+                taskKind = "genesis_probe",
+                payload = payload,
+                requiredCapability = "genesis_probe",
+                workload = TaskWorkload.MEDIUM,
+                iterations = config.task.probeIterations.coerceIn(1, SafetyPolicy.MAX_PROBE_ITERATIONS),
+                createdAt = System.currentTimeMillis()
+            ),
+            device = device, budget = budget,
+            refreshRemote = refreshRemote,
+            configOverride = config, experimentOnly = true
+        )
+    }
+
     suspend fun runFfmpegTranscodeProbe(
         device: DeviceProfile,
         budget: ResourceBudget
@@ -236,13 +266,20 @@ class TaskRouter(
         device: DeviceProfile,
         budget: ResourceBudget,
         forcedNodeId: String? = null,
-        refreshRemote: Boolean = true
+        refreshRemote: Boolean = true,
+        configOverride: JadeConfig? = null,
+        experimentOnly: Boolean = false
     ): DistributedTaskResult {
-        val activeConfig = configProvider().validated()
+        val activeConfig = configOverride?.validated() ?: configProvider().validated()
         val startedAt = System.currentTimeMillis()
         val measurementOnly =
-            forcedNodeId != null ||
+            experimentOnly || forcedNodeId != null ||
                 request.taskKind == "ffmpeg_transcode_probe_v1"
+        val traceDecisionKind = when {
+            experimentOnly -> "evolution_canary"
+            measurementOnly -> "capability_measurement"
+            else -> "task_routing"
+        }
         queue.enqueue(request)
 
         val nodes = nodeManager.nodes(
@@ -375,11 +412,7 @@ class TaskRouter(
                 alternatives = decisionAlternatives,
                 requested = requested,
                 routeReason = routeReason,
-                decisionKind = if (measurementOnly) {
-                    "capability_measurement"
-                } else {
-                    "task_routing"
-                },
+                decisionKind = traceDecisionKind,
                 result = result
             )
             return result
@@ -515,11 +548,7 @@ class TaskRouter(
                     alternatives = decisionAlternatives,
                     requested = requested,
                     routeReason = routeReason,
-                    decisionKind = if (measurementOnly) {
-                        "capability_measurement"
-                    } else {
-                        "task_routing"
-                    },
+                    decisionKind = traceDecisionKind,
                     result = result
                 )
                 return result
@@ -586,11 +615,7 @@ class TaskRouter(
             alternatives = decisionAlternatives,
             requested = requested,
             routeReason = routeReason,
-            decisionKind = if (measurementOnly) {
-                "capability_measurement"
-            } else {
-                "task_routing"
-            },
+            decisionKind = traceDecisionKind,
             result = result
         )
         return result

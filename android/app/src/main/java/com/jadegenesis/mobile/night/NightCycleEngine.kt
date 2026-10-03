@@ -9,6 +9,7 @@ import com.jadegenesis.mobile.eval.RuntimeEvalReport
 import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.evolution.EvolutionCandidate
 import com.jadegenesis.mobile.evolution.EvolutionCandidateStatus
+import com.jadegenesis.mobile.evolution.EvolutionCanaryCoordinator
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
 import com.jadegenesis.mobile.evolution.SelfImprovementPlanner
 import com.jadegenesis.mobile.model.DiagnosticLevel
@@ -24,6 +25,7 @@ class NightCycleEngine(context: Context) {
     private val runtimeEval = RuntimeEvalRuntime.initialize(appContext)
     private val evolution = EvolutionRuntime.initialize(appContext)
     private val selfImprovementPlanner = SelfImprovementPlanner()
+    private val canaryCoordinator = EvolutionCanaryCoordinator(appContext)
 
     suspend fun runOnce(
         force: Boolean = false,
@@ -224,6 +226,30 @@ class NightCycleEngine(context: Context) {
                     }
                 ),
                 durationMs = elapsedSince(evolutionStarted)
+            )
+
+            val canaryStarted = System.currentTimeMillis()
+            val canaryReview = runCatching { canaryCoordinator.runStep(core) }
+            canaryReview.onSuccess {
+                val candidates = evolution.candidates(SafetyPolicy.MAX_EVOLUTION_CANDIDATES)
+                evolutionCandidateCount = candidates.size
+                evolutionValidatedCount = candidates.count { candidate ->
+                    candidate.status == EvolutionCandidateStatus.VALIDATED
+                }
+            }
+            steps += NightCycleStep(
+                phase = NightCyclePhase.EVOLUTION_CANARY,
+                success = canaryReview.isSuccess,
+                summary = canaryReview.fold(
+                    onSuccess = { report ->
+                        "Canary Evolution ${report.state.name.lowercase()} : " +
+                            "${report.pairCount} paire(s). ${report.reason}"
+                    },
+                    onFailure = { error ->
+                        "Canary Evolution impossible : ${safeError(error)}"
+                    }
+                ),
+                durationMs = elapsedSince(canaryStarted)
             )
 
             steps += syncStep(NightCyclePhase.SYNC_AFTER)

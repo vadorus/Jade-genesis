@@ -12,6 +12,7 @@ import com.jadegenesis.mobile.cognitive.CognitiveCore
 import com.jadegenesis.mobile.cognitive.CognitiveLedger
 import com.jadegenesis.mobile.cognitive.LearningEngine
 import com.jadegenesis.mobile.cognitive.VisualLearningStore
+import com.jadegenesis.mobile.config.JadeConfig
 import com.jadegenesis.mobile.config.JadeConfigRuntime
 import com.jadegenesis.mobile.device.DeviceProfiler
 import com.jadegenesis.mobile.diagnostics.AdminGate
@@ -212,6 +213,35 @@ class JadeCore(context: Context) {
             device = device,
             budget = resourceBudget
         )
+    }
+
+    suspend fun runEvolutionCanaryPair(
+        championConfig: JadeConfig,
+        challengerConfig: JadeConfig,
+        challengerFirst: Boolean
+    ): Pair<DistributedTaskResult, DistributedTaskResult> {
+        val activeIdentity = activeIdentity()
+        val device = profiler.capture()
+        val budget = resourceGovernor.evaluate(device)
+
+        suspend fun run(config: JadeConfig, refreshRemote: Boolean) =
+            taskRouter.runGenesisProbeExperiment(
+                identityId = activeIdentity.jadeId,
+                device = device,
+                budget = budget,
+                experimentConfig = config,
+                refreshRemote = refreshRemote
+            )
+
+        return if (challengerFirst) {
+            val challenger = run(challengerConfig, refreshRemote = true)
+            val champion = run(championConfig, refreshRemote = false)
+            champion to challenger
+        } else {
+            val champion = run(championConfig, refreshRemote = true)
+            val challenger = run(challengerConfig, refreshRemote = false)
+            champion to challenger
+        }
     }
 
     suspend fun runDistributedTextAnalysis(text: String): DistributedTaskResult {

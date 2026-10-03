@@ -27,6 +27,7 @@ class RoutingShadowLabTest {
         val comparison = lab.compare(restored, neutralRouting(), neutralRouting())
 
         assertFalse(comparison.exactContext)
+        assertFalse(comparison.championScoresReproduced)
         assertFalse(comparison.championReproduced)
     }
 
@@ -43,9 +44,29 @@ class RoutingShadowLabTest {
         )
 
         assertTrue(comparison.exactContext)
+        assertTrue(comparison.championScoresReproduced)
         assertTrue(comparison.championReproduced)
         assertEquals("phone", comparison.replayedChampionNodeId)
         assertEquals("phone", comparison.challengerNodeId)
+        assertFalse(comparison.challengerChangedDecision)
+    }
+
+    @Test
+    fun scoreMismatchRefusesCounterfactualExperiment() {
+        val champion = neutralRouting().copy(
+            cpuCoreWeight = 1.0,
+            ramAvailableGbWeight = 10.0
+        )
+        val source = trace(scoringContextVersion = 1)
+        val corrupted = source.copy(
+            alternatives = source.alternatives.mapIndexed { index, alternative ->
+                if (index == 0) alternative.copy(score = 83.0) else alternative
+            }
+        )
+        val comparison = lab.compare(corrupted, champion, champion)
+
+        assertFalse(comparison.championScoresReproduced)
+        assertFalse(comparison.championReproduced)
         assertFalse(comparison.challengerChangedDecision)
     }
 
@@ -66,6 +87,7 @@ class RoutingShadowLabTest {
             challenger = challenger
         )
 
+        assertTrue(comparison.championScoresReproduced)
         assertTrue(comparison.championReproduced)
         assertTrue(comparison.challengerChangedDecision)
         assertEquals("pc", comparison.challengerNodeId)
@@ -103,13 +125,15 @@ class RoutingShadowLabTest {
                 nodeId = "phone",
                 nodeKind = "PHONE",
                 cpuCores = 4,
-                ramAvailableGb = 8.0
+                ramAvailableGb = 8.0,
+                score = 84.0
             ),
             alternative(
                 nodeId = "pc",
                 nodeKind = "PC",
                 cpuCores = 8,
-                ramAvailableGb = 4.0
+                ramAvailableGb = 4.0,
+                score = 48.0
             )
         ),
         chosenNodeId = "phone",
@@ -129,14 +153,15 @@ class RoutingShadowLabTest {
         nodeId: String,
         nodeKind: String,
         cpuCores: Int,
-        ramAvailableGb: Double
+        ramAvailableGb: Double,
+        score: Double
     ): DecisionAlternativeTrace = DecisionAlternativeTrace(
         nodeId = nodeId,
         nodeName = nodeId,
         nodeKind = nodeKind,
         nodeStatus = "ONLINE",
         eligible = true,
-        score = null,
+        score = score,
         cpuCores = cpuCores,
         ramAvailableGb = ramAvailableGb,
         storageFreeGb = 64.0,

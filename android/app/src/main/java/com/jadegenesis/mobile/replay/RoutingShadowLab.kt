@@ -3,6 +3,7 @@ package com.jadegenesis.mobile.replay
 import com.jadegenesis.mobile.config.RoutingTuning
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.TaskWorkload
+import kotlin.math.abs
 
 data class RoutingShadowComparison(
     val traceId: String,
@@ -10,6 +11,7 @@ data class RoutingShadowComparison(
     val recordedChampionNodeId: String?,
     val replayedChampionNodeId: String?,
     val challengerNodeId: String?,
+    val championScoresReproduced: Boolean,
     val championReproduced: Boolean,
     val challengerChangedDecision: Boolean,
     val reason: String
@@ -36,6 +38,7 @@ class RoutingShadowLab {
                 recordedChampionNodeId = trace.chosenNodeId,
                 replayedChampionNodeId = null,
                 challengerNodeId = null,
+                championScoresReproduced = false,
                 championReproduced = false,
                 challengerChangedDecision = false,
                 reason = "Trace antérieure : contexte de score incomplet pour un replay challenger exact."
@@ -44,10 +47,20 @@ class RoutingShadowLab {
 
         val championWinner = winner(trace, champion)
         val challengerWinner = winner(trace, challenger)
-        val reproduced = championWinner?.nodeId == trace.chosenNodeId
+        val scoresReproduced = trace.alternatives
+            .asSequence()
+            .filter { it.eligible }
+            .all { alternative ->
+                val recorded = alternative.score ?: return@all false
+                abs(score(trace, alternative, champion) - recorded) <= SCORE_TOLERANCE
+            }
+        val reproduced =
+            scoresReproduced && championWinner?.nodeId == trace.chosenNodeId
         val changed = reproduced && challengerWinner?.nodeId != championWinner?.nodeId
 
         val reason = when {
+            !scoresReproduced ->
+                "Les scores champion recalculés ne correspondent pas aux scores enregistrés; le contexte est refusé."
             !reproduced ->
                 "Le replay champion ne reproduit pas la décision enregistrée; la trace est refusée pour l'expérience."
             challengerWinner == null ->
@@ -64,6 +77,7 @@ class RoutingShadowLab {
             recordedChampionNodeId = trace.chosenNodeId,
             replayedChampionNodeId = championWinner?.nodeId,
             challengerNodeId = challengerWinner?.nodeId,
+            championScoresReproduced = scoresReproduced,
             championReproduced = reproduced,
             challengerChangedDecision = changed,
             reason = reason
@@ -160,5 +174,6 @@ class RoutingShadowLab {
 
     companion object {
         const val SCORING_CONTEXT_VERSION = 1
+        private const val SCORE_TOLERANCE = 1e-9
     }
 }

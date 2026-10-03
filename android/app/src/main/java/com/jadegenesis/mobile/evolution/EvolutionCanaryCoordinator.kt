@@ -139,7 +139,10 @@ class EvolutionCanaryCoordinator(context: Context) {
 
     private fun startEligibleSession(): SessionStart? {
         val candidate = evolution.candidates(SafetyPolicy.MAX_EVOLUTION_CANDIDATES)
-            .firstOrNull { it.status == EvolutionCandidateStatus.PROPOSED }
+            .firstOrNull { candidate ->
+                candidate.status == EvolutionCandidateStatus.PROPOSED &&
+                    candidate.experimentTaskKind in CANARY_TASK_KINDS
+            }
             ?: return null
         val activeChampion = JadeConfigRuntime.current().validated()
         if (activeChampion.configId != candidate.championConfigId) {
@@ -147,10 +150,7 @@ class EvolutionCanaryCoordinator(context: Context) {
             return null
         }
 
-        val taskKind = candidate.experimentTaskKind ?: run {
-            evolution.reject(candidate.candidateId, "Candidat sans type de tâche canary sûr.")
-            return null
-        }
+        val taskKind = requireNotNull(candidate.experimentTaskKind)
         val champion = parseConfig(candidate.championConfigJson)
         val challenger = parseConfig(candidate.challengerConfigJson)
         val comparisons = traces.recentByDecisionKind(
@@ -293,5 +293,6 @@ class EvolutionCanaryCoordinator(context: Context) {
 
     companion object {
         const val SHADOW_TRACE_WINDOW = 32
+        private val CANARY_TASK_KINDS = setOf("genesis_probe", "text_analysis")
     }
 }

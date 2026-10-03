@@ -10,6 +10,7 @@ import com.jadegenesis.mobile.eval.RuntimeEvalRuntime
 import com.jadegenesis.mobile.evolution.EvolutionCandidate
 import com.jadegenesis.mobile.evolution.EvolutionCandidateStatus
 import com.jadegenesis.mobile.evolution.EvolutionCanaryCoordinator
+import com.jadegenesis.mobile.evolution.EvolutionFailureResearchCoordinator
 import com.jadegenesis.mobile.evolution.EvolutionRuntime
 import com.jadegenesis.mobile.evolution.SelfImprovementPlanner
 import com.jadegenesis.mobile.model.DiagnosticLevel
@@ -26,6 +27,7 @@ class NightCycleEngine(context: Context) {
     private val evolution = EvolutionRuntime.initialize(appContext)
     private val selfImprovementPlanner = SelfImprovementPlanner()
     private val canaryCoordinator = EvolutionCanaryCoordinator(appContext)
+    private val failureResearchCoordinator = EvolutionFailureResearchCoordinator(appContext)
 
     suspend fun runOnce(
         force: Boolean = false,
@@ -257,6 +259,26 @@ class NightCycleEngine(context: Context) {
                     }
                 ),
                 durationMs = elapsedSince(canaryStarted)
+            )
+
+            val researchStarted = System.currentTimeMillis()
+            val failureResearch = runCatching {
+                failureResearchCoordinator.runStep(
+                    evolution.failureLessons(SafetyPolicy.MAX_EVOLUTION_FAILURE_LESSONS)
+                )
+            }
+            steps += NightCycleStep(
+                phase = NightCyclePhase.EVOLUTION_RESEARCH,
+                success = failureResearch.isSuccess,
+                summary = failureResearch.fold(
+                    onSuccess = { report ->
+                        "Recherche Evolution ${report.state.name.lowercase()} : ${report.summary}"
+                    },
+                    onFailure = { error ->
+                        "Recherche Evolution impossible : ${safeError(error)}"
+                    }
+                ),
+                durationMs = elapsedSince(researchStarted)
             )
 
             steps += syncStep(NightCyclePhase.SYNC_AFTER)

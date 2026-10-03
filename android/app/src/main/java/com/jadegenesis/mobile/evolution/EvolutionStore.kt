@@ -126,6 +126,7 @@ class EvolutionStore(context: Context) {
             put("updated_at", candidate.updatedAt)
             put("promoted_at", candidate.promotedAt ?: JSONObject.NULL)
             put("rolled_back_at", candidate.rolledBackAt ?: JSONObject.NULL)
+            put("experiment_task_kind", candidate.experimentTaskKind ?: "")
             put("last_error", candidate.lastError ?: "")
         }
 
@@ -171,6 +172,8 @@ class EvolutionStore(context: Context) {
             updatedAt = json.optLong("updated_at", 0L).coerceAtLeast(0L),
             promotedAt = json.optLongOrNull("promoted_at"),
             rolledBackAt = json.optLongOrNull("rolled_back_at"),
+            experimentTaskKind = json.optString("experiment_task_kind")
+                .takeIf { it.isNotBlank() },
             lastError = json.optString("last_error").takeIf { it.isNotBlank() }
         )
     }

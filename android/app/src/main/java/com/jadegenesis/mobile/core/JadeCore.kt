@@ -84,6 +84,8 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.UUID
 
+private const val EVOLUTION_CANARY_TEXT = "Jade Genesis routing canary benchmark: deterministic text analysis sample."
+
 class JadeCore(context: Context) {
     private val appContext = context.applicationContext
     private val identityManager = IdentityManager(appContext)
@@ -216,6 +218,7 @@ class JadeCore(context: Context) {
     }
 
     suspend fun runEvolutionCanaryPair(
+        taskKind: String,
         championConfig: JadeConfig,
         challengerConfig: JadeConfig,
         challengerFirst: Boolean
@@ -224,22 +227,25 @@ class JadeCore(context: Context) {
         val device = profiler.capture()
         val budget = resourceGovernor.evaluate(device)
 
-        suspend fun run(config: JadeConfig, refreshRemote: Boolean) =
-            taskRouter.runGenesisProbeExperiment(
-                identityId = activeIdentity.jadeId,
-                device = device,
-                budget = budget,
-                experimentConfig = config,
-                refreshRemote = refreshRemote
+        suspend fun run(config: JadeConfig, refreshRemote: Boolean) = when (taskKind) {
+            "genesis_probe" -> taskRouter.runGenesisProbeExperiment(
+                identityId = activeIdentity.jadeId, device = device, budget = budget,
+                experimentConfig = config, refreshRemote = refreshRemote
             )
+            "text_analysis" -> taskRouter.runTextAnalysisExperiment(
+                text = EVOLUTION_CANARY_TEXT, device = device, budget = budget,
+                experimentConfig = config, refreshRemote = refreshRemote
+            )
+            else -> error("Type de tâche canary non autorisé : $taskKind")
+        }
 
         return if (challengerFirst) {
-            val challenger = run(challengerConfig, refreshRemote = true)
-            val champion = run(championConfig, refreshRemote = false)
+            val challenger = run(challengerConfig, true)
+            val champion = run(championConfig, false)
             champion to challenger
         } else {
-            val champion = run(championConfig, refreshRemote = true)
-            val challenger = run(challengerConfig, refreshRemote = false)
+            val champion = run(championConfig, true)
+            val challenger = run(challengerConfig, false)
             champion to challenger
         }
     }

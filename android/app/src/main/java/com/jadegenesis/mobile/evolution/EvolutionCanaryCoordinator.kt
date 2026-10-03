@@ -73,6 +73,16 @@ class EvolutionCanaryCoordinator(context: Context) {
             )
         }
 
+        val taskKind = candidate.experimentTaskKind ?: run {
+            evolution.reject(
+                candidate.candidateId,
+                "Candidat canary sans type de tâche sûr."
+            )
+            return stopOrphanSession(
+                activeSession,
+                "Type de tâche canary absent; expérience interrompue."
+            )
+        }
         val champion = parseConfig(activeSession.championConfigJson)
         val challenger = parseConfig(activeSession.challengerConfigJson)
         repeat(pairBudget) {
@@ -81,6 +91,7 @@ class EvolutionCanaryCoordinator(context: Context) {
             }
             val pairIndex = activeSession.pairCount + 1
             val (baselineResult, challengerResult) = core.runEvolutionCanaryPair(
+                taskKind = taskKind,
                 championConfig = champion,
                 challengerConfig = challenger,
                 challengerFirst = pairIndex % 2 == 0
@@ -136,12 +147,18 @@ class EvolutionCanaryCoordinator(context: Context) {
             return null
         }
 
+        val taskKind = candidate.experimentTaskKind ?: run {
+            evolution.reject(candidate.candidateId, "Candidat sans type de tâche canary sûr.")
+            return null
+        }
         val champion = parseConfig(candidate.championConfigJson)
         val challenger = parseConfig(candidate.challengerConfigJson)
         val comparisons = traces.recentByDecisionKind(
             decisionKind = "task_routing",
             limit = SHADOW_TRACE_WINDOW
-        ).map { trace ->
+        ).filter { trace ->
+            trace.taskKind == taskKind
+        }.map { trace ->
             shadowLab.compare(trace, champion.routing, challenger.routing)
         }
         val exact = comparisons.count {

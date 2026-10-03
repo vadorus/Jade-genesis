@@ -181,7 +181,8 @@ class NightCycleEngine(context: Context) {
                     evolution.proposeConfigCandidate(
                         title = it.title,
                         rationale = it.rationale,
-                        proposedConfig = it.proposedConfig
+                        proposedConfig = it.proposedConfig,
+                        experimentTaskKind = it.sourceTaskKind
                     )
                 }
                 val candidates = if (automaticCandidate == null) {

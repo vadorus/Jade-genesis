@@ -26,7 +26,8 @@ class EvolutionEngine(context: Context) {
     fun proposeConfigCandidate(
         title: String,
         rationale: String,
-        proposedConfig: JadeConfig
+        proposedConfig: JadeConfig,
+        experimentTaskKind: String? = null
     ): EvolutionCandidate {
         val champion = JadeConfigRuntime.current().validated()
         val now = System.currentTimeMillis()
@@ -52,6 +53,7 @@ class EvolutionEngine(context: Context) {
             championConfigJson = championJson,
             challengerConfigJson = challengerJson,
             baselineRuntimeEvidence = currentRuntimeEvidence(champion),
+            experimentTaskKind = experimentTaskKind?.trim()?.takeIf { it.isNotBlank() },
             transitions = listOf(
                 EvolutionTransition(
                     status = EvolutionCandidateStatus.CANDIDATE,

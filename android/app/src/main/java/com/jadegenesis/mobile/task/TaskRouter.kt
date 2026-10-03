@@ -131,6 +131,31 @@ class TaskRouter(
         )
     }
 
+    suspend fun runTextAnalysisExperiment(
+        text: String,
+        device: DeviceProfile,
+        budget: ResourceBudget,
+        experimentConfig: JadeConfig,
+        refreshRemote: Boolean = true
+    ): DistributedTaskResult {
+        val cleanText = text.trim()
+        require(cleanText.isNotBlank())
+        require(cleanText.length <= SafetyPolicy.MAX_TEXT_CHARS)
+        return runTask(
+            request = DistributedTaskRequest(
+                taskId = "evo-text-${UUID.randomUUID()}",
+                taskKind = "text_analysis",
+                payload = cleanText,
+                requiredCapability = "text_analysis",
+                workload = TaskWorkload.MEDIUM,
+                createdAt = System.currentTimeMillis()
+            ),
+            device = device, budget = budget,
+            refreshRemote = refreshRemote,
+            configOverride = experimentConfig.validated(), experimentOnly = true
+        )
+    }
+
     suspend fun runFfmpegTranscodeProbe(
         device: DeviceProfile,
         budget: ResourceBudget

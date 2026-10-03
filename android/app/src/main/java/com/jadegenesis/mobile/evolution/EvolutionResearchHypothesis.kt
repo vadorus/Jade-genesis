@@ -100,7 +100,8 @@ object EvolutionResearchHypothesisParser {
                     val value = indexesJson.optInt(index, -1)
                     if (value >= 0) add(value)
                 }
-            }            EvolutionResearchHypothesisDraft(
+            }
+            EvolutionResearchHypothesisDraft(
                 mechanism = json.optString("mechanism").trim().take(240),
                 rationale = json.optString("rationale").trim().take(1_200),
                 prediction = json.optString("prediction").trim().take(600),

@@ -14,10 +14,14 @@ data class DecisionAlternativeTrace(
     val score: Double?,
     val cpuCores: Int,
     val ramAvailableGb: Double,
+    val storageFreeGb: Double = 0.0,
     val activeTaskCount: Int,
     val brainReady: Boolean,
     val brainModel: String,
-    val capabilities: List<String>
+    val capabilities: List<String>,
+    val historyAttempts: Int = 0,
+    val historySuccesses: Int = 0,
+    val averageDurationMs: Double? = null
 )
 
 data class DecisionTrace(
@@ -42,14 +46,18 @@ data class DecisionTrace(
     val outcomeDurationMs: Long,
     val fallbackUsed: Boolean,
     val startedAt: Long,
-    val completedAt: Long
+    val completedAt: Long,
+    val scoringContextVersion: Int = 0
 )
 
 /**
- * Stable JSON codec used by DecisionTraceStore and future Replay Lab export.
+ * Stable JSON codec used by DecisionTraceStore and Replay Lab.
  *
  * Intentionally excludes task payloads and task outputs. The replay instrument
- * records the decision context, not user content.
+ * records the decision context, not user content. scoring_context_version=1
+ * means the trace contains every input currently consumed by TaskRouter's
+ * ranking formula and can therefore be rescored exactly under another
+ * RoutingTuning without executing the task again.
  */
 object DecisionTraceCodec {
 
@@ -66,6 +74,7 @@ object DecisionTraceCodec {
         put("resource_mode", trace.resourceMode.name)
         put("prefer_remote_compute", trace.preferRemoteCompute)
         put("max_parallel_tasks", trace.maxParallelTasks)
+        put("scoring_context_version", trace.scoringContextVersion)
         put("chosen_node_id", trace.chosenNodeId ?: "")
         put("chosen_node_name", trace.chosenNodeName ?: "")
         put("route_reason", trace.routeReason)
@@ -95,9 +104,17 @@ object DecisionTraceCodec {
                             }
                             put("cpu_cores", alternative.cpuCores)
                             put("ram_available_gb", alternative.ramAvailableGb)
+                            put("storage_free_gb", alternative.storageFreeGb)
                             put("active_task_count", alternative.activeTaskCount)
                             put("brain_ready", alternative.brainReady)
                             put("brain_model", alternative.brainModel)
+                            put("history_attempts", alternative.historyAttempts)
+                            put("history_successes", alternative.historySuccesses)
+                            if (alternative.averageDurationMs == null) {
+                                put("average_duration_ms", JSONObject.NULL)
+                            } else {
+                                put("average_duration_ms", alternative.averageDurationMs)
+                            }
                             put(
                                 "capabilities",
                                 JSONArray(alternative.capabilities)
@@ -143,11 +160,23 @@ object DecisionTraceCodec {
                         cpuCores = item.optInt("cpu_cores", 0),
                         ramAvailableGb =
                             item.optDouble("ram_available_gb", 0.0),
+                        storageFreeGb =
+                            item.optDouble("storage_free_gb", 0.0),
                         activeTaskCount =
                             item.optInt("active_task_count", 0),
                         brainReady = item.optBoolean("brain_ready", false),
                         brainModel = item.optString("brain_model"),
-                        capabilities = capabilities
+                        capabilities = capabilities,
+                        historyAttempts =
+                            item.optInt("history_attempts", 0),
+                        historySuccesses =
+                            item.optInt("history_successes", 0),
+                        averageDurationMs = if (item.isNull("average_duration_ms")) {
+                            null
+                        } else {
+                            item.optDouble("average_duration_ms")
+                                .takeIf { it.isFinite() && it >= 0.0 }
+                        }
                     )
                 )
             }
@@ -183,7 +212,9 @@ object DecisionTraceCodec {
                 json.optLong("outcome_duration_ms", 0L),
             fallbackUsed = json.optBoolean("fallback_used", false),
             startedAt = json.optLong("started_at", 0L),
-            completedAt = json.optLong("completed_at", 0L)
+            completedAt = json.optLong("completed_at", 0L),
+            scoringContextVersion =
+                json.optInt("scoring_context_version", 0)
         )
     }
 

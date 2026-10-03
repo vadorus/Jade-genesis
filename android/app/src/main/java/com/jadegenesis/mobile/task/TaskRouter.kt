@@ -287,10 +287,14 @@ class TaskRouter(
                 score = candidate?.score,
                 cpuCores = node.cpuCores,
                 ramAvailableGb = node.ramAvailableGb,
+                storageFreeGb = node.storageFreeGb,
                 activeTaskCount = node.activeTaskCount,
                 brainReady = node.brainReady,
                 brainModel = node.brainModel,
-                capabilities = node.capabilities.sorted()
+                capabilities = node.capabilities.sorted(),
+                historyAttempts = candidate?.historyAttempts ?: 0,
+                historySuccesses = candidate?.historySuccesses ?: 0,
+                averageDurationMs = candidate?.averageDurationMs
             )
         }
 
@@ -625,7 +629,8 @@ class TaskRouter(
                 outcomeDurationMs = result.durationMs,
                 fallbackUsed = result.fallbackUsed,
                 startedAt = result.startedAt,
-                completedAt = result.completedAt
+                completedAt = result.completedAt,
+                scoringContextVersion = 1
             )
         )
     }

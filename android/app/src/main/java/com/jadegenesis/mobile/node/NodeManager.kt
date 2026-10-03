@@ -236,6 +236,8 @@ class NodeManager(
             "research_engine_v1",
             "visual_learning_v1",
             "research_engine_v2",
+            "research_engine_v3",
+            "right_hand_learning_v1",
             "visual_learning_v2",
             "screen_targeting_v1",
             "shared_image_input_v1"

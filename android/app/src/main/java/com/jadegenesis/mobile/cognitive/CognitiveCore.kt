@@ -46,6 +46,19 @@ class CognitiveCore(
 
         recordRuntimeOutcomeQuality(learningUpdate)
 
+        val rightHandMemories = if (context.operation == "answer") {
+            runCatching {
+                RightHandLearningRuntime.currentOrNull()?.contextFor(context.userInput).orEmpty()
+            }.onFailure { error ->
+                logger.log(
+                    DiagnosticLevel.WARN,
+                    "right_hand_learning_context_failed",
+                    "Le contexte bras droit est indisponible pour ce tour; la réponse continue sans lui.",
+                    mapOf("error" to (error.message ?: error::class.java.simpleName))
+                )
+            }.getOrDefault(emptyList())
+        } else emptyList()
+
         val conversationMemories = if (learningUpdate != null) {
             runCatching {
                 conversationLearning
@@ -63,11 +76,12 @@ class CognitiveCore(
             emptyList()
         }
 
-        val workingContext = if (conversationMemories.isEmpty()) {
+        val learnedMemories = (conversationMemories + rightHandMemories).distinctBy { it.id }
+        val workingContext = if (learnedMemories.isEmpty()) {
             context
         } else {
             context.copy(
-                memories = (context.memories + conversationMemories)
+                memories = (context.memories + learnedMemories)
                     .distinctBy { it.id }
             )
         }
@@ -79,6 +93,9 @@ class CognitiveCore(
                 append("Contexte observé : ${workingContext.selfModel.knownNodes.size} nœud(s), mode ${workingContext.selfModel.resourceBudget.mode}.")
                 if (conversationMemories.isNotEmpty()) {
                     append(" ${conversationMemories.size} élément(s) d'expérience conversationnelle locale ajouté(s) sans évincer la mémoire principale.")
+                }
+                if (rightHandMemories.isNotEmpty()) {
+                    append(" ${rightHandMemories.size} élément(s) bras droit ajouté(s): préférences explicites ou connaissances humaines sourcées.")
                 }
             }
         )

@@ -47,6 +47,7 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.resource.ResourceGovernor
 import com.jadegenesis.mobile.research.ResearchEngine
+import com.jadegenesis.mobile.evolution.EvolutionFailureResearchRecord
 import com.jadegenesis.mobile.replay.CapabilityAAReplayReport
 import com.jadegenesis.mobile.replay.CapabilityBranchHarvestReport
 import com.jadegenesis.mobile.replay.CapabilityBranchHarvester
@@ -1137,6 +1138,41 @@ class JadeCore(context: Context) {
     suspend fun memoryCount(): Int = memory.count()
 
     suspend fun activeMemoryCount(): Int = memory.activeCount()
+
+    suspend fun synthesizeEvolutionResearchHypothesis(
+        record: EvolutionFailureResearchRecord
+    ): String {
+        val self = selfModel()
+        val evidenceText = record.evidence.mapIndexed { index, item ->
+            buildString {
+                append("[").append(index).append("] ")
+                append(item.provider).append(" | primary=").append(item.primarySource)
+                append(" | confidence=").append(String.format(java.util.Locale.ROOT, "%.2f", item.confidence))
+                append("\nTITLE: ").append(item.title.take(240))
+                append("\nURL: ").append(item.url.take(800))
+                append("\nEVIDENCE: ").append(item.snippet.take(650))
+            }
+        }.joinToString("\n\n")
+        val prompt = buildString {
+            appendLine("Tu synthétises une hypothèse d'ingénierie pour Jade Genesis.")
+            appendLine("Tu ne proposes ni code, ni commande, ni configuration directement exécutable.")
+            appendLine("Utilise uniquement les preuves numérotées ci-dessous; n'invente aucune source.")
+            appendLine("Question de recherche: ${record.question}")
+            appendLine(evidenceText)
+            appendLine("Réponds UNIQUEMENT en JSON avec les clés:")
+            appendLine("mechanism, rationale, prediction, falsification, evidence_indexes, uncertainty, confidence")
+            appendLine("evidence_indexes est une liste d'indices existants. confidence est entre 0 et 1.")
+        }
+        return brainRouter.think(
+            BrainContext(
+                userInput = prompt,
+                selfModel = self,
+                memories = emptyList(),
+                tools = emptyList(),
+                operation = "evolution_research_hypothesis"
+            )
+        ).text
+    }
 
     suspend fun ask(userInput: String): String {
         runCatching { nodeManager.refreshRemoteNodes() }

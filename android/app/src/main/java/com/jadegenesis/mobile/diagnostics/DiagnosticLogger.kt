@@ -6,7 +6,7 @@ import com.jadegenesis.mobile.model.DiagnosticLogEntry
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.RandomAccessFile
+import java.util.ArrayDeque
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -23,6 +23,48 @@ internal fun redactDiagnosticSecrets(value: String): String {
         "${match.groupValues[1]}=***"
     }
     return text
+}
+
+
+internal fun parseDiagnosticLogLine(line: String): DiagnosticLogEntry? =
+    runCatching {
+        val json = JSONObject(line)
+        val metadataJson = json.optJSONObject("metadata")
+        val metadata = buildMap {
+            if (metadataJson != null) {
+                val keys = metadataJson.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    put(key, metadataJson.optString(key))
+                }
+            }
+        }
+        DiagnosticLogEntry(
+            level = runCatching {
+                DiagnosticLevel.valueOf(
+                    json.optString("level", DiagnosticLevel.INFO.name)
+                )
+            }.getOrDefault(DiagnosticLevel.INFO),
+            event = json.optString("event"),
+            message = json.optString("message"),
+            metadata = metadata,
+            createdAt = json.optLong("created_at")
+        )
+    }.getOrNull()
+
+internal fun readUtf8TailLines(file: File, limit: Int): List<String> {
+    if (limit <= 0 || !file.isFile || file.length() == 0L) return emptyList()
+
+    val tail = ArrayDeque<String>(limit)
+    file.bufferedReader(Charsets.UTF_8).useLines { lines ->
+        lines.forEach { line ->
+            if (line.isNotEmpty()) {
+                if (tail.size == limit) tail.removeFirst()
+                tail.addLast(line)
+            }
+        }
+    }
+    return tail.toList().asReversed()
 }
 
 class DiagnosticLogger(context: Context) {
@@ -96,33 +138,8 @@ class DiagnosticLogger(context: Context) {
         if (!currentLog.exists()) return emptyList()
 
         return runCatching {
-            tailLines(currentLog, safeLimit)
-                .mapNotNull { line ->
-                    runCatching {
-                        val json = JSONObject(line)
-                        val metadataJson = json.optJSONObject("metadata")
-                        val metadata = buildMap {
-                            if (metadataJson != null) {
-                                val keys = metadataJson.keys()
-                                while (keys.hasNext()) {
-                                    val key = keys.next()
-                                    put(key, metadataJson.optString(key))
-                                }
-                            }
-                        }
-                        DiagnosticLogEntry(
-                            level = runCatching {
-                                DiagnosticLevel.valueOf(
-                                    json.optString("level", DiagnosticLevel.INFO.name)
-                                )
-                            }.getOrDefault(DiagnosticLevel.INFO),
-                            event = json.optString("event"),
-                            message = json.optString("message"),
-                            metadata = metadata,
-                            createdAt = json.optLong("created_at")
-                        )
-                    }.getOrNull()
-                }
+            readUtf8TailLines(currentLog, safeLimit)
+                .mapNotNull(::parseDiagnosticLogLine)
                 .reversed()
         }.getOrDefault(emptyList())
     }
@@ -156,35 +173,6 @@ class DiagnosticLogger(context: Context) {
             zip.closeEntry()
         }
         return output.absolutePath
-    }
-
-    private fun tailLines(file: File, limit: Int): List<String> {
-        if (limit <= 0 || !file.isFile || file.length() == 0L) return emptyList()
-
-        RandomAccessFile(file, "r").use { raf ->
-            var position = raf.length() - 1L
-            val lines = ArrayList<String>(limit)
-            val current = StringBuilder()
-
-            while (position >= 0L && lines.size < limit) {
-                raf.seek(position)
-                val value = raf.read()
-                if (value == '\n'.code) {
-                    if (current.isNotEmpty()) {
-                        lines += current.reverse().toString()
-                        current.setLength(0)
-                    }
-                } else if (value != '\r'.code) {
-                    current.append(value.toChar())
-                }
-                position -= 1L
-            }
-
-            if (current.isNotEmpty() && lines.size < limit) {
-                lines += current.reverse().toString()
-            }
-            return lines
-        }
     }
 
     private fun pruneOldBundles() {

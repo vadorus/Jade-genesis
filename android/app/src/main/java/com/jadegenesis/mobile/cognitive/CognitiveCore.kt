@@ -168,16 +168,21 @@ class CognitiveCore(
             !verify ||
             first.backendId.contains("prototype", ignoreCase = true)
         ) {
+            val groundedFirst = applyObservableStateGrounding(
+                executionId = executionId,
+                context = workingContext,
+                result = first
+            )
             recordConversationLearning(executionId, learningUpdate)
             completeConversationLearning(
                 store = conversationLearning,
                 update = learningUpdate,
                 input = context.userInput,
                 profile = answerPlan.profile.name,
-                result = first
+                result = groundedFirst
             )
-            recordComplete(executionId, startedAt, first)
-            return first
+            recordComplete(executionId, startedAt, groundedFirst)
+            return groundedFirst
         }
 
         val verificationStarted = System.nanoTime()
@@ -200,16 +205,21 @@ class CognitiveCore(
                 durationMs = elapsedMs(verificationStarted),
                 success = false
             )
+            val groundedFirst = applyObservableStateGrounding(
+                executionId = executionId,
+                context = workingContext,
+                result = first
+            )
             recordConversationLearning(executionId, learningUpdate)
             completeConversationLearning(
                 store = conversationLearning,
                 update = learningUpdate,
                 input = context.userInput,
                 profile = answerPlan.profile.name,
-                result = first
+                result = groundedFirst
             )
-            recordComplete(executionId, startedAt, first)
-            return first
+            recordComplete(executionId, startedAt, groundedFirst)
+            return groundedFirst
         }
 
         val review = parseReview(verified.text)
@@ -262,6 +272,11 @@ class CognitiveCore(
             }
         }
 
+        val groundedFinal = applyObservableStateGrounding(
+            executionId = executionId,
+            context = workingContext,
+            result = finalResult
+        )
         record(
             executionId,
             CognitivePhase.LEARN,
@@ -273,10 +288,10 @@ class CognitiveCore(
             update = learningUpdate,
             input = context.userInput,
             profile = answerPlan.profile.name,
-            result = finalResult
+            result = groundedFinal
         )
-        recordComplete(executionId, startedAt, finalResult)
-        return finalResult
+        recordComplete(executionId, startedAt, groundedFinal)
+        return groundedFinal
     }
 
     private fun recordRuntimeOutcomeQuality(update: ConversationLearningUpdate?) {
@@ -389,6 +404,31 @@ class CognitiveCore(
                 append(" Ces signaux restent des expériences utilisateur, pas des faits externes automatiquement vérifiés.")
             }
         )
+    }
+
+    private fun applyObservableStateGrounding(
+        executionId: String,
+        context: BrainContext,
+        result: BrainResult
+    ): BrainResult {
+        val decision = ObservableStateGroundingPolicy.apply(
+            input = context.userInput,
+            result = result,
+            selfModel = context.selfModel
+        )
+        if (!decision.applied) return result
+
+        logger.log(
+            DiagnosticLevel.INFO,
+            "observable_state_grounding_applied",
+            "Réponse d'état observable reconstruite uniquement à partir du snapshot runtime disponible.",
+            mapOf(
+                "execution_id" to executionId,
+                "domain" to decision.domain?.name,
+                "node_id" to result.nodeId
+            )
+        )
+        return decision.result
     }
 
     private fun shouldVerify(input: String): Boolean {

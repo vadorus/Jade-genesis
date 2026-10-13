@@ -867,6 +867,7 @@ class NightLearningLab:
                 "frozen_champion_required": True,
                 "sandbox_required": target not in {"observation_only", "outcome_eval"},
                 "automatic_execution": False,
+                "requires_explicit_execution_approval": True,
                 "requires_explicit_promotion_approval": True,
             })
         return output

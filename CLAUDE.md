@@ -11,3 +11,7 @@ Avant **toute action** sur ce projet :
 Si ces documents n'existent pas dans la branche ouverte : **ne pas inventer leur contenu** ; demander la bonne branche ou une instruction explicite.
 
 Ce système coordonne via GitHub ; il ne connecte pas les sessions IA en temps réel.
+
+## Précontrôles et portée réelle
+
+Lire `docs/AI_ENFORCEMENT.md` avant écriture. L’inventaire et un contrôle CI réussi ne créent aucune autorisation, aucun verrou et aucune preuve de revue indépendante. Vérifier à nouveau les réservations avant reprise et avant fusion. Antigravity dispose aussi de `.agents/rules/coordination.md` (`trigger: always_on`).

@@ -1,100 +1,149 @@
 name: Multi-agent coordination gate
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review]
-    branches: [main, master, v013/demo-octobre]
+    branches: [main]
 
+# Never checkout, build, execute or interpolate code/text supplied by the PR.
+# checks:write is limited to reporting the result on the current PR HEAD.
 permissions:
   contents: read
   issues: read
   pull-requests: read
+  checks: write
+
+concurrency:
+  group: coordination-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  multi-agent-gate:
-    name: multi-agent-gate
+  coordination-policy-runner:
+    name: coordination-policy-runner
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Check task ownership, reviewer and overlap
-        uses: actions/github-script@v7
+      - name: Validate metadata and report on PR HEAD
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7, verified via GitHub tag
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const pr = context.payload.pull_request;
             const { owner, repo } = context.repo;
-            const body = pr.body || "";
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner, repo, pull_number: pr.number, per_page: 100
-            });
-            const changed = files.map(f => f.filename);
-            const isCoordination = /^Tâche:\s*COORDINATION\s*$/im.test(body);
-            const docsOnly = changed.length > 0 && changed.every(p =>
-              p.startsWith("docs/") || p.startsWith(".github/") ||
-              ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "scripts/ai_preflight.py"].includes(p)
-            );
-            if (isCoordination && docsOnly) {
-              core.info("Coordination documentaire : dispense de ticket GitHub, revue humaine toujours attendue.");
-              return;
-            }
-
-            // Les PR existantes antérieures au déploiement restent à revoir manuellement.
-            const activation = "2026-10-14T00:00:00Z";
-            if (new Date(pr.created_at) < new Date(activation)) {
-              core.warning("PR historique : compléter la passation avant fusion manuelle.");
-              return;
-            }
-
-            const task = body.match(/^Tâche:\s*#(\d+)\s*$/im);
-            const writer = body.match(/^Auteur-IA:\s*(Claude|Codex|Antigravity|Humain)\s*$/im);
-            const reviewer = body.match(/^Relecteur-IA:\s*(Claude|Codex|Antigravity|Humain)\s*$/im);
-            const tests = body.match(/^Tests:\s*(\S.*)$/im);
-            const errors = [];
-            if (!task) errors.push("Tâche: #<numéro d'issue> obligatoire.");
-            if (!writer) errors.push("Auteur-IA: Claude|Codex|Antigravity|Humain obligatoire.");
-            if (!reviewer) errors.push("Relecteur-IA: Claude|Codex|Antigravity|Humain obligatoire.");
-            if (!tests) errors.push("Tests: résultat ou 'non exécutés + raison' obligatoire.");
-            if (writer && reviewer && writer[1].toLowerCase() === reviewer[1].toLowerCase()) {
-              errors.push("L'agent relecteur doit être distinct de l'auteur.");
-            }
-            if (task) {
-              const issueNumber = Number(task[1]);
-              try {
-                const response = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
-                if (response.data.pull_request) errors.push("La référence Tâche doit être une issue, pas une autre PR.");
-                if (response.data.state !== "open") errors.push("L'issue de référence doit être ouverte.");
-              } catch (e) { errors.push("Issue de référence inaccessible : #" + issueNumber); }
-            }
-            if (errors.length) {
-              for (const error of errors) core.error(error);
-              core.setFailed("PR incomplète : attribution et contrôle multi-IA obligatoires.");
-              return;
-            }
-
-            const current = files.map(f => f.filename).filter(p =>
-              !p.startsWith("docs/") && !p.startsWith(".github/") &&
-              !["AGENTS.md", "CLAUDE.md", "GEMINI.md", "scripts/ai_preflight.py"].includes(p)
-            );
-            const others = await github.paginate(github.rest.pulls.list, {
-              owner, repo, state: "open", base: pr.base.ref, per_page: 100
-            });
-            for (const other of others) {
-              if (other.number === pr.number) continue;
-              const oldTask = (other.body || "").match(/^Tâche:\s*#(\d+)\s*$/im);
-              if (oldTask && oldTask[1] === task[1]) {
-                errors.push("Ticket #" + task[1] + " déjà traité par la PR #" + other.number + ".");
-              }
-              if (current.length) {
-                const theirs = await github.paginate(github.rest.pulls.listFiles, {
-                  owner, repo, pull_number: other.number, per_page: 100
-                });
-                const overlap = theirs.map(f => f.filename).filter(p => current.includes(p));
-                if (overlap.length) {
-                  errors.push("Fichiers déjà modifiés par PR #" + other.number +
-                    " : " + overlap.slice(0, 8).join(", ") +
-                    ". Arbitrer ou intégrer l'autre PR d'abord.");
+            const number = context.payload.pull_request.number;
+            let check;
+            try {
+            const snapshot = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+              if (snapshot.state !== 'open') throw new Error('PR fermée.');
+              const expectedHead = snapshot.head.sha;
+              const expectedBase = snapshot.base.sha;
+              check = (await github.rest.checks.create({
+                owner, repo, name: 'multi-agent-gate', head_sha: expectedHead, status: 'in_progress',
+                external_id: 'coordination-' + context.runId + '-' + context.runAttempt,
+                details_url: 'https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId
+              })).data;
+              await (async () => {
+                // Executed only as trusted inline code from the default branch. No PR checkout.
+                const { owner, repo } = context.repo;
+                const number = context.payload.pull_request.number;
+                const pr = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+                if (pr.state !== 'open') throw new Error('PR fermée : aucun contrôle de fusion.');
+                if (pr.head.sha !== expectedHead || pr.base.sha !== expectedBase) throw new Error('PR modifiée avant le contrôle.');
+                const bootstrap = { "Jade-genesis": 63 }[repo] === number &&
+                  pr.head.repo.full_name === owner + '/' + repo && pr.base.ref === 'main';
+                const allowed = new Set([
+                  'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', '.agents/rules/coordination.md',
+                  'docs/AI_COORDINATION.md', 'docs/AI_START_HERE.md', 'docs/AI_TASK_TEMPLATE.md',
+                  '.github/pull_request_template.md', '.github/workflows/ai-coordination.yml',
+                  'scripts/ai_preflight.py', 'docs/AI_ENFORCEMENT.md'
+                ]);
+                const errors = [];
+                function field(body, name) {
+                  const lines = (body || '').split(/\r?\n/).filter(line => line.startsWith(name + ':'));
+                  if (lines.length !== 1) return null;
+                  return lines[0].slice(name.length + 1).trim() || null;
                 }
-              }
+                function agent(value) { return /^(Claude|Codex|Antigravity|Humain)$/.test(value || ''); }
+                function zones(value) {
+                  if (!value) return null;
+                  const result = value.split(',').map(x => x.trim());
+                  if (result.some(x => !x || x.startsWith('/') || x.includes('\\') ||
+                      /[:*?]/.test(x) || x.split('/').some(p => p === '.' || p === '..') ||
+                      x.replace(/\/$/, '').split('/').some(p => !p))) return null;
+                  return result;
+                }
+                function within(path, scope) {
+                  return scope.some(zone => zone.endsWith('/') ? path.startsWith(zone) : path === zone);
+                }
+                async function filesOf(pull) {
+                  const files = await github.paginate(github.rest.pulls.listFiles, {
+                    owner, repo, pull_number: pull.number, per_page: 100
+                  });
+                  // GitHub caps listFiles at 3000: never treat an incomplete inventory as success.
+                  if (files.length !== pull.changed_files) throw new Error('Inventaire fichiers incomplet : PR #' + pull.number);
+                  return files;
+                }
+                function pathsOf(files) {
+                  return [...new Set(files.flatMap(f => [f.filename, f.previous_filename].filter(Boolean)))];
+                }
+                const files = await filesOf(pr);
+                const paths = pathsOf(files);
+                const task = field(pr.body, 'Tâche');
+                const writer = field(pr.body, 'Auteur-IA');
+                const reviewer = field(pr.body, 'Relecteur-IA');
+                const tests = field(pr.body, 'Tests');
+                if (!agent(writer)) errors.push('Auteur-IA unique et valide obligatoire.');
+                if (!agent(reviewer)) errors.push('Relecteur-IA unique et valide obligatoire.');
+                if (writer === reviewer) errors.push('Auteur et relecteur doivent être distincts.');
+                if (!tests || /^(?:non exécutés|non exécutes|non exécuté|non executes)\s*$/i.test(tests)) {
+                  errors.push('Tests : résultat, ou non exécutés avec une raison.');
+                }
+                if (paths.length === 0) errors.push('Aucun fichier à contrôler.');
+                if (task === 'COORDINATION') {
+                  if (!bootstrap || !paths.every(p => allowed.has(p))) {
+                    errors.push('Exception COORDINATION réservée à la PR initiale et à sa liste exacte de fichiers.');
+                  }
+                } else if (!/^#[1-9]\d*$/.test(task || '')) {
+                  errors.push('Tâche: #<issue ouverte> obligatoire, même pour une PR ancienne.');
+                } else {
+                  const issue = (await github.rest.issues.get({ owner, repo, issue_number: Number(task.slice(1)) })).data;
+                  if (issue.pull_request || issue.state !== 'open') errors.push('La référence doit être une issue ouverte.');
+                  if (field(issue.body, 'Responsable-IA') !== writer) errors.push('Auteur différent de la réservation de l’issue.');
+                  if (field(issue.body, 'Relecteur-IA') !== reviewer) errors.push('Relecteur différent de la réservation de l’issue.');
+                  if (!['Réservée', 'En cours', 'En revue'].includes(field(issue.body, 'Réservation-état'))) {
+                    errors.push('Réservation de l’issue inactive ou absente.');
+                  }
+                  const scope = zones(field(issue.body, 'Zones'));
+                  if (!scope) errors.push('Zones explicites et relatives obligatoires dans l’issue.');
+                  else for (const path of paths) if (!within(path, scope)) errors.push('Hors réservation : ' + path);
+                }
+                const others = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+                for (const summary of others) {
+                  if (summary.number === number) continue;
+                  if (task && task !== 'COORDINATION' && field(summary.body, 'Tâche') === task) {
+                    errors.push('Même tâche déjà traitée par PR #' + summary.number + ', base ' + summary.base.ref);
+                  }
+                  const other = (await github.rest.pulls.get({ owner, repo, pull_number: summary.number })).data;
+                  const overlap = pathsOf(await filesOf(other)).filter(p => paths.includes(p));
+                  if (overlap.length) errors.push('Chevauchement PR #' + other.number + ' : ' + overlap.slice(0, 12).join(', '));
+                }
+                // A head change while reading makes the result unusable. Changes after this check
+                // remain a race: no GitHub metadata query is an atomic reservation.
+                const latest = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+                if (latest.head.sha !== pr.head.sha || latest.base.sha !== pr.base.sha || latest.body !== pr.body) {
+                  errors.push('PR modifiée pendant le contrôle : relancer sur les données actuelles.');
+                }
+                for (const error of errors) core.error(error);
+                if (errors.length) throw new Error('Coordination incomplète ou conflit : arbitrage requis.');
+                else core.info('Inventaire et déclarations cohérents. Ce résultat ne prouve ni autorisation, ni tests, ni revue indépendante.');
+              })();
+              await github.rest.checks.update({ owner, repo, check_run_id: check.id,
+                status: 'completed', conclusion: 'success',
+                output: { title: 'Coordination cohérente', summary: 'Inventaire et déclarations vérifiés ; aucune autorisation ni revue réelle certifiée.' }
+              });
+            } catch (error) {
+              if (check) await github.rest.checks.update({ owner, repo, check_run_id: check.id,
+                status: 'completed', conclusion: 'failure',
+                output: { title: 'Coordination bloquée', summary: String(error.message).slice(0, 6000) }
+              });
+              core.setFailed('Coordination bloquée : ' + error.message);
             }
-            for (const error of errors) core.error(error);
-            if (errors.length) core.setFailed("Conflit multi-agent : arbitrage nécessaire avant fusion.");
-            else core.info("Coordination OK : ticket, auteur, relecteur et absence de chevauchement détectable.");

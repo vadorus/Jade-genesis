@@ -32,3 +32,12 @@ Issues/PR/commits déjà consultés ; justifier pourquoi il ne s'agit pas d'un c
 - Contrôles non effectués :
 - Risques :
 - Décision / approbation attendue :
+
+## Champs structurés de réservation dans l’issue
+
+Responsable-IA: Codex
+Relecteur-IA: Claude
+Réservation-état: Réservée
+Zones: fichier/exact, repertoire/
+
+Ces déclarations ne valent aucune autorisation.

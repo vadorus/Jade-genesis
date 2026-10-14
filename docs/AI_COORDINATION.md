@@ -50,3 +50,7 @@ Attribution explicite → copie isolée → implémentation et tests → PR brou
 - Jade : https://github.com/vadorus/Jade-genesis
 
 Les notes datées dans `AI_START_HERE.md` ne sont **pas** un inventaire automatique. Rafraîchir GitHub avant toute nouvelle action.
+
+## Précontrôles et portée réelle
+
+Lire `docs/AI_ENFORCEMENT.md` avant écriture. L’inventaire et un contrôle CI réussi ne créent aucune autorisation, aucun verrou et aucune preuve de revue indépendante. Vérifier à nouveau les réservations avant reprise et avant fusion. Antigravity dispose aussi de `.agents/rules/coordination.md` (`trigger: always_on`).

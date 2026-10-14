@@ -28,6 +28,4 @@ Tests: non exécutés — expliquer pourquoi, ou donner les commandes et résult
 
 **Validation humaine nécessaire avant fusion :** oui, sans exception.
 
-> Exception unique pour l'installation de la coordination documentaire :
-> `Tâche: COORDINATION` autorisé lorsque tous les fichiers modifiés sont des consignes,
-> documents, gabarits et script de contrôle. Ce n'est pas une exception pour du code.
+> Exception initiale : `Tâche: COORDINATION` limitée à la PR #63 et à sa liste exacte de fichiers ; elle exige aussi auteur, relecteur et tests.

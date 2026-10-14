@@ -316,8 +316,28 @@ private fun CognitiveEventCard(event: CognitiveTraceEvent) {
             }
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
-                Text(event.phase.name, fontFamily = JadeMono, fontSize = 11.sp, color = JadeColors.JadeDim)
+                Text(
+                    "${formatDiagnosticTimestamp(event.createdAt)} · ${event.phase.name}",
+                    fontFamily = JadeMono,
+                    fontSize = 11.sp,
+                    color = JadeColors.JadeDim
+                )
                 Text(event.summary, style = MaterialTheme.typography.bodyMedium, color = JadeColors.Ink)
+                if (!event.backendId.isNullOrBlank() || !event.nodeId.isNullOrBlank()) {
+                    Text(
+                        "Moteur : ${event.backendId ?: "inconnu"} · " +
+                            "Nœud : ${event.nodeId ?: "inconnu"}",
+                        fontFamily = JadeMono,
+                        fontSize = 11.sp,
+                        color = JadeColors.Muted3
+                    )
+                }
+                Text(
+                    "Trace : ${event.id.take(40)}",
+                    fontFamily = JadeMono,
+                    fontSize = 10.sp,
+                    color = JadeColors.Muted3
+                )
             }
             if (event.durationMs > 0) {
                 Text("${event.durationMs} ms", fontFamily = JadeMono, fontSize = 11.sp, color = JadeColors.Muted3)

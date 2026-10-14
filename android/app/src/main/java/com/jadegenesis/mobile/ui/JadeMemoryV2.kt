@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.ui
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -73,6 +74,13 @@ internal fun JadeMemoryV2(
                 eyebrow = "Mémoire v2",
                 title = "Ce que Jade sait",
                 subtitle = "${state.memoryCount} élément(s) persistants"
+            )
+        }
+        item {
+            V2SecondaryButton(
+                text = "Recherches et preuves",
+                onClick = { context.startActivity(Intent(context, ResearchReviewActivity::class.java)) },
+                modifier = Modifier.fillMaxWidth()
             )
         }
         item {

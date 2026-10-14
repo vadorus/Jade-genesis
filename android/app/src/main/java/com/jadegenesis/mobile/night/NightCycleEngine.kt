@@ -21,6 +21,9 @@ import java.util.UUID
 class NightCycleEngine(context: Context) {
     private val appContext = context.applicationContext
     private val store = NightCycleStore(appContext)
+    private val reviewAgenda = NightReviewAgendaStore(appContext)
+    private val evidenceLedger = NightEvidenceLedger(appContext)
+    private val researchProposals = NightResearchProposalInbox(appContext)
     private val diagnostics = DiagnosticLogger(appContext)
     private val core = JadeCore(appContext)
     private val sharedState = SharedGenesisStateBootstrapper(appContext)
@@ -139,6 +142,37 @@ class NightCycleEngine(context: Context) {
             ) {
                 memorySummary =
                     "$memoryBatches lot(s) consolidé(s); plafond nocturne atteint, suite reportée au prochain cycle."
+            }
+            // Prepare a local-only agenda of uncertain memories for a later
+            // evidence-driven review. Do not synchronize private conversation
+            // content, execute a generated tool or rewrite stored knowledge.
+            val reviewPreparation = runCatching {
+                val candidates = NightMemoryReviewPlanner.propose(
+                    core.latestMemories(40), now
+                )
+                reviewAgenda.save(candidates, now)
+                val reviews = NightEvidenceReviewer.reviewAgenda(
+                    candidates, evidenceLedger.evidence(), now
+                )
+                evidenceLedger.saveReviews(reviews)
+                candidates.size to reviews.count {
+                    it.decision == ReviewDecision.CONTESTED
+                }
+            }
+            memorySummary += reviewPreparation.fold(
+                onSuccess = { (count, contested) ->
+                    " Révision nocturne : $count sujet(s), $contested contradiction(s) détectée(s); aucune promotion automatique."
+                },
+                onFailure = { " Agenda de révision indisponible; aucune connaissance modifiée." }
+            )
+            // Inspect only the local summary of an externally prepared,
+            // unapproved research plan. No evidence is appended to the ledger,
+            // no tool is executed, and no private goal leaves the device.
+            val pendingResearch = runCatching { researchProposals.latest() }.getOrNull()
+            if (pendingResearch != null) {
+                memorySummary += " Propositions de Jade à relire : ${pendingResearch.sourceCount} élément(s), " +
+                    "${pendingResearch.hypothesisCount} hypothèse(s), ${pendingResearch.experiments.size} essai(s) proposé(s). " +
+                    "Aucune exécution automatique."
             }
             steps += NightCycleStep(
                 phase = NightCyclePhase.MEMORY_CONSOLIDATION,
@@ -366,7 +400,15 @@ class NightCycleEngine(context: Context) {
                 "runtime_confidence" to runtimeConfidence,
                 "evolution_candidates" to evolutionCandidateCount,
                 "evolution_validated" to evolutionValidatedCount,
-                "duration_ms" to (completedAt - startedAt)
+                "duration_ms" to (completedAt - startedAt),
+                "failed_phases" to NightCyclePolicy.failedPhases(steps)
+                    .joinToString(",") { it.name }
+                    .ifEmpty { "none" },
+                "first_failure" to steps
+                    .firstOrNull { !it.success && it.phase != NightCyclePhase.COMPLETE }
+                    ?.summary
+                    ?.take(200)
+                    .orEmpty()
             )
         )
         return run

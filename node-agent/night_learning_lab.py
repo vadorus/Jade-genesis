@@ -194,10 +194,94 @@ class NightLearningLab:
     def __init__(self, research_provider: ResearchProvider | None = None):
         self.research_provider = research_provider or DuckDuckGoResearchProvider()
 
+    def plan_official_goal_research(self, goal: str) -> dict[str, Any]:
+        """Select audited official sources offline, without sending the goal out.
+
+        This is an explicit API for future Jade orchestration, intentionally
+        separate from the automatic VPS night review (aggregate-only inputs).
+        """
+        from goal_source_research import select_sources
+        from official_source_capture import APPROVED
+
+        selected, status = select_sources(goal)
+        return {
+            "status": status,
+            "goal": goal.strip(),
+            "sources": [
+                {"key": key, "title": APPROVED[key].title, "url": APPROVED[key].url}
+                for key in selected
+            ],
+            "network_used": False,
+            "approval_required": True,
+            "knowledge_verified": False,
+        }
+
+    def research_official_goal(
+        self,
+        goal: str,
+        *,
+        approved: bool = False,
+        authorization_store: Any = None,
+        authorization_id: str = "",
+        opener: Any = None,
+        now_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Fetch only under a durable one-use permission for the exact goal/URLs.
+
+        A legacy approved=True flag is no longer an authorization. The local
+        reviewer must grant the plan returned by official_collection_plan().
+        This entry point remains separate from the automatic VPS Night Cycle.
+        """
+        from research_authorization import ResearchAuthorizationStore, official_collection_plan
+        if approved or not isinstance(authorization_store, ResearchAuthorizationStore):
+            raise PermissionError("A recorded exact-plan authorization is required; approved=True is insufficient")
+        from goal_source_research import investigate_goal
+        plan = official_collection_plan(goal)
+        def collect():
+            if opener is None:
+                return investigate_goal(goal, now_ms=now_ms)
+            return investigate_goal(goal, opener=opener, now_ms=now_ms)
+        return authorization_store.execute(plan, authorization_id, collect)
+
+    def review_official_goal_artifacts(
+        self,
+        research_report: Any,
+        experiment_pairs: list[tuple[Any, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Offline goal/evidence reasoning; no memory promotion or execution.
+
+        Each experiment pair is (JSON report path, exact output FBX path).
+        Inspecting an existing artifact does NOT attest an independent run.
+        """
+        from pathlib import Path
+        from goal_evidence_reasoner import (
+            _load_object, inspect_local_probe, review_goal_evidence,
+            MAX_RESEARCH_JSON, MAX_PASSES,
+        )
+        pairs = experiment_pairs or []
+        if len(pairs) > MAX_PASSES:
+            raise ValueError("Too many experiment reports")
+        source = _load_object(Path(research_report), MAX_RESEARCH_JSON)
+        inspected = [
+            inspect_local_probe(Path(report_path), Path(fbx_path))
+            for report_path, fbx_path in pairs
+        ]
+        return review_goal_evidence(source, checked_probes=inspected)
+
+    def export_official_goal_review(self, research_report: Any,
+                                    experiment_pairs: list[tuple[Any, Any]] | None = None) -> dict[str, Any]:
+        """Build a bounded offline mobile dossier, never a transferable permission."""
+        from pathlib import Path
+        from mobile_research_export import export_mobile_dossier
+        return export_mobile_dossier(Path(research_report), [
+            (Path(report), Path(fbx)) for report, fbx in (experiment_pairs or [])
+        ])
+
     def review(
         self,
         view: dict[str, Any],
         now_ms: int | None = None,
+        *, external_research_allowed: bool = True,
     ) -> dict[str, Any]:
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
         source_revision = max(0, _safe_int(view.get("revision"), 0))
@@ -224,7 +308,7 @@ class NightLearningLab:
         ]
         evidence: list[dict[str, Any]] = []
         research_errors: list[str] = []
-        for question in researchable_questions[:2]:
+        for question in (researchable_questions[:2] if external_research_allowed else []):
             try:
                 found = self.research_provider.search(question["query"])
                 for item in found:
@@ -295,13 +379,19 @@ class NightLearningLab:
             "hypotheses": hypotheses[:MAX_HYPOTHESES],
             "experiments": experiments[:MAX_EXPERIMENTS],
             "improvement_candidates": candidates[:MAX_IMPROVEMENT_CANDIDATES],
-            "external_research_attempted": bool(researchable_questions[:2]),
+            "external_research_attempted": external_research_allowed and bool(researchable_questions[:2]),
             "external_research_evidence_count": len(evidence),
             "automatic_experiment_execution": False,
             "automatic_promotion": False,
             "production_code_rewrite": False,
             "shell_execution": False,
         }
+
+    def draft_local_learning_review(self, view: dict[str, Any], *, now_ms: int | None = None,
+                                    goal: str = "Évaluer les améliorations proposées pour Jade") -> dict[str, Any]:
+        """Prepare review of Jade's aggregate observations without external calls."""
+        from jade_learning_review import export_learning_review
+        return export_learning_review(self.review(view, now_ms=now_ms, external_research_allowed=False), goal=goal)
 
     def _clean_group(self, group: dict[str, Any]) -> dict[str, Any]:
         outcome_samples = max(0, _safe_int(group.get("outcome_samples"), 0))
@@ -867,6 +957,7 @@ class NightLearningLab:
                 "frozen_champion_required": True,
                 "sandbox_required": target not in {"observation_only", "outcome_eval"},
                 "automatic_execution": False,
+                "requires_explicit_execution_approval": True,
                 "requires_explicit_promotion_approval": True,
             })
         return output

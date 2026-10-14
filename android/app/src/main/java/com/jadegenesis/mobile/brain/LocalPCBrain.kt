@@ -56,7 +56,9 @@ class LocalPCBrain(
     )
 
     override fun availableFor(nodes: List<GenesisNode>): Boolean =
-        compatibleNodes(nodes).isNotEmpty()
+        compatibleNodes(nodes).any { it.brainReady }
+
+    override fun unavailableReason(nodes: List<GenesisNode>): String? = DistributedChatAvailability.reason(nodes)
 
     override suspend fun think(context: BrainContext): BrainResult {
         val brainPlan = CognitiveBrainPolicy.plan(context)

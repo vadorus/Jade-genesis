@@ -65,6 +65,54 @@ class MemoryArchitectureTest {
     }
 
     @Test
+    fun olderTopicalKnowledgeOutranksUnrelatedRecentTelemetry() = runBlocking {
+        val relevant = memory(
+            id = "roblox-knowledge",
+            createdAt = 10L,
+            type = "KNOWLEDGE",
+            content = "Roblox Studio importe un maillage Blender."
+        )
+        val noise = (1..12).map { index ->
+            memory("telemetry-$index", createdAt = 1_000L + index)
+        }
+        val dao = FakeMemoryDao().apply {
+            latestItems = noise
+            searchItems = listOf(relevant)
+        }
+
+        val selected = MemoryStore(dao).latestForContext(
+            limit = 4,
+            query = "Comment importer Blender vers Roblox ?"
+        )
+
+        assertEquals("roblox-knowledge", selected.first().id)
+        assertTrue(dao.lastRecalledIds.contains("roblox-knowledge"))
+        assertEquals(selected.map { it.id }.toSet(), dao.lastRecalledIds.toSet())
+        assertEquals(4, selected.size)
+    }
+
+    @Test
+    fun unrelatedSearchReturnsRecentContextWithoutInventedMatch() = runBlocking {
+        val unrelated = memory(
+            id = "roblox-knowledge",
+            createdAt = 10L,
+            content = "Roblox Studio et Blender"
+        )
+        val dao = FakeMemoryDao().apply {
+            latestItems = listOf(memory("recent", createdAt = 1_000L))
+            searchItems = listOf(unrelated)
+        }
+
+        val selected = MemoryStore(dao).latestForContext(
+            limit = 2,
+            query = "Processeur microcode Intel"
+        )
+
+        assertEquals(listOf("recent"), selected.map { it.id })
+        assertEquals(listOf("recent"), dao.lastRecalledIds)
+    }
+
+    @Test
     fun administrativeReadDoesNotInflateRecallCounters() = runBlocking {
         val dao = FakeMemoryDao().apply {
             latestItems = listOf(memory("m1", createdAt = 10L))
@@ -263,7 +311,7 @@ class MemoryArchitectureTest {
             activeByIdItems.filter { it.id in ids }
 
         override suspend fun search(query: String, limit: Int): List<MemoryEntity> =
-            searchItems.take(limit)
+            searchItems.filter { it.content.contains(query, ignoreCase = true) }.take(limit)
 
         override suspend fun markRecalled(ids: List<String>, recalledAt: Long) {
             lastRecalledIds = ids

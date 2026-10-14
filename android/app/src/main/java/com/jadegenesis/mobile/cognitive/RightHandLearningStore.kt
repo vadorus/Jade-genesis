@@ -91,12 +91,27 @@ class RightHandLearningStore(context: Context) {
 
     fun contextMemories(input: String, limit: Int = 3): List<MemorySnapshot> = synchronized(lock) {
         val topics = ConversationLearningPolicy.extractTopics(input, 8).toSet()
-        if (topics.isEmpty()) return@synchronized emptyList()
         val state = load()
-        state.preferences
-            .filter { preference -> preference.topics.any { it in topics } }
+        val safeLimit = limit.coerceIn(1, SafetyPolicy.MAX_RIGHT_HAND_CONTEXT_ITEMS)
+        val validPreferences = state.preferences.filter {
+            RightHandLearningPolicy.isValidStoredStylePreference(it.kind, it.statement)
+        }
+        // Global reply preferences survive topic changes, including
+        // short follow-ups without extractable keywords. Reserve two slots
+        // at most so specific project preferences remain retrievable.
+        val globals = validPreferences
+            .filter { RightHandLearningPolicy.isGlobalReplyPreference(it.kind, it.statement) }
             .sortedByDescending { it.createdAt }
-            .take(limit.coerceIn(1, SafetyPolicy.MAX_RIGHT_HAND_CONTEXT_ITEMS))
+            .take(minOf(2, safeLimit))
+        val topical = validPreferences
+            .filter { preference ->
+                !RightHandLearningPolicy.isGlobalReplyPreference(preference.kind, preference.statement) &&
+                    preference.topics.any { it in topics }
+            }
+            .sortedByDescending { it.createdAt }
+        (globals + topical)
+            .distinctBy { it.id }
+            .take(safeLimit)
             .map { preference ->
                 MemorySnapshot(
                     id = "right-hand:${preference.id}",

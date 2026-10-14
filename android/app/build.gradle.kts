@@ -8,6 +8,11 @@ val jadeKeystorePath = System.getenv("JADE_KEYSTORE_PATH")
 val jadeKeystorePassword = System.getenv("JADE_KEYSTORE_PASSWORD")
 val jadeKeyAlias = System.getenv("JADE_KEY_ALIAS") ?: "jadegenesis"
 
+// Jade Test (independent on-device validation package) is opt-in:
+//   gradle :app:assembleDebug -PjadeValidation=true
+// Without the flag, debug stays the regular com.jadegenesis.mobile build expected by CI.
+val jadeValidation = providers.gradleProperty("jadeValidation").orNull?.toBoolean() == true
+
 android {
     namespace = "com.jadegenesis.mobile"
     compileSdk = 37
@@ -16,8 +21,10 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 40
-        versionName = "0.1.22"
+        versionCode = 41
+        versionName = "0.1.23"
+        // Only used by the independent on-device validation package.
+        testInstrumentationRunner = "com.jadegenesis.mobile.validation.MemoryPersistenceInstrumentation"
     }
 
     buildFeatures {
@@ -47,6 +54,11 @@ android {
     buildTypes {
         getByName("debug") {
             isDebuggable = true
+            if (jadeValidation) {
+                // Validation-only package: cannot replace personal Jade Genesis.
+                applicationIdSuffix = ".validation"
+                versionNameSuffix = "-validation"
+            }
         }
         getByName("release") {
             isDebuggable = false
@@ -54,6 +66,15 @@ android {
             isShrinkResources = false
             signingConfigs.findByName("jadeStable")?.let {
                 signingConfig = it
+            }
+        }
+    }
+
+    sourceSets {
+        getByName("debug") {
+            if (jadeValidation) {
+                // Offline manifest + "Jade Genesis TEST" label, only for Jade Test.
+                manifest.srcFile("src/validation/AndroidManifest.xml")
             }
         }
     }

@@ -80,6 +80,7 @@ import com.jadegenesis.mobile.task.TaskRouter
 import com.jadegenesis.mobile.tools.ToolLab
 import com.jadegenesis.mobile.tools.ToolObservation
 import com.jadegenesis.mobile.tools.ToolRegistry
+import com.jadegenesis.mobile.tools.JsonFileLearningWorkshop
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -92,7 +93,12 @@ class JadeCore(context: Context) {
     private val identityManager = IdentityManager(appContext)
     private val profiler = DeviceProfiler(appContext)
     private val resourceGovernor = ResourceGovernor()
-    private val tools = ToolRegistry(profiler)
+    private val jsonFileWorkshop = JsonFileLearningWorkshop(appContext)
+    private val tools = ToolRegistry(profiler, learnedJsonInfo = { jsonFileWorkshop.catalog() }, executeApprovedJson = {
+        val result = jsonFileWorkshop.executeApprovedFile()
+        "Copie JSON transformée avec l'outil appris ${result.getString("tool_sha256").take(12)}. " +
+            "Original préservé. Résultat consultable dans l'atelier local d'outils."
+    })
     private val memory = MemoryStore(JadeDatabase.get(appContext).memoryDao())
     private val memoryLifecycle = MemoryLifecycleManager(appContext)
     private val selfModelBuilder = SelfModelBuilder()
@@ -1189,7 +1195,7 @@ class JadeCore(context: Context) {
         val context = BrainContext(
             userInput = userInput,
             selfModel = self,
-            memories = memory.latestForContext(14),
+            memories = memory.latestForContext(limit = 14, query = userInput),
             tools = tools.describe()
         )
 
@@ -1197,6 +1203,7 @@ class JadeCore(context: Context) {
         return when (val toolName = first.toolName) {
             null -> first.text
             else -> when (val observation = tools.call(toolName)) {
+                is ToolObservation.LocalFile -> observation.summary
                 is ToolObservation.Device -> {
                     val d = observation.profile
                     val budget = resourceGovernor.evaluate(d)

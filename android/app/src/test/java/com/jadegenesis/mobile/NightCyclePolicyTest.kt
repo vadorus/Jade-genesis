@@ -57,4 +57,29 @@ class NightCyclePolicyTest {
         )
         assertEquals(NightCycleStatus.FAILED, NightCyclePolicy.finalStatus(steps))
     }
+
+    @Test
+    fun failedPhasesNameEveryFailedStepInOrder() {
+        val steps = listOf(
+            NightCycleStep(NightCyclePhase.PREPARE, true, "ok", 1L),
+            NightCycleStep(NightCyclePhase.SYNC_BEFORE, false, "offline", 1L),
+            NightCycleStep(NightCyclePhase.MEMORY_CONSOLIDATION, true, "ok", 1L),
+            NightCycleStep(NightCyclePhase.EVOLUTION_RESEARCH, false, "timeout", 1L),
+            NightCycleStep(NightCyclePhase.SYNC_AFTER, false, "offline", 1L),
+            NightCycleStep(NightCyclePhase.COMPLETE, false, "partial", 1L)
+        )
+        assertEquals(
+            listOf(NightCyclePhase.SYNC_BEFORE, NightCyclePhase.EVOLUTION_RESEARCH, NightCyclePhase.SYNC_AFTER),
+            NightCyclePolicy.failedPhases(steps)
+        )
+    }
+
+    @Test
+    fun successfulRunHasNoFailedPhases() {
+        val steps = listOf(
+            NightCycleStep(NightCyclePhase.PREPARE, true, "ok", 1L),
+            NightCycleStep(NightCyclePhase.COMPLETE, true, "ok", 1L)
+        )
+        assertTrue(NightCyclePolicy.failedPhases(steps).isEmpty())
+    }
 }

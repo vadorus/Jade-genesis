@@ -11,5 +11,8 @@ interface BrainBackend {
     fun availableFor(nodes: List<GenesisNode>): Boolean =
         info.available
 
+    fun unavailableReason(nodes: List<GenesisNode>): String? =
+        if (info.available && availableFor(nodes)) null else "${info.displayName} est indisponible."
+
     suspend fun think(context: BrainContext): BrainResult
 }

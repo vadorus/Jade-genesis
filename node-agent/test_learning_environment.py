@@ -137,6 +137,8 @@ class LearningEnvironmentTest(unittest.TestCase):
         files = list(pack_dir.glob("*.case-pack.json"))
         self.assertEqual(1, len(files))
         verify_case_pack(files[0])
+        # Normal success must not leave a staging file behind on Windows.
+        self.assertEqual([], list(pack_dir.glob(".*.tmp")))
 
     def test_case_pack_tamper_is_detected(self) -> None:
         self._sealed_dataset()

@@ -1,6 +1,6 @@
 # Coordination de développement multi-IA — v1 (14 octobre 2026)
 
-**Portée :** ChatGPT/Codex, Claude/Claude Code et Google Antigravity. Ce document est une proposition en PR brouillon : il ne remplace aucune règle de dépôt existante tant qu'il n'est pas validé.
+**Portée :** ChatGPT/Codex, Claude/Claude Code et Google Antigravity. Consignes communes adoptées le 15 octobre 2026 ; elles complètent les règles métier et ne les remplacent jamais.
 
 ## Principe
 GitHub sert de mémoire de travail commune, **pas** de canal de communication temps réel. Les agents travaillent lorsqu'ils sont lancés par l'utilisateur. Une IA ne peut pas déduire qu'une autre travaille sur un fichier simplement parce qu'elle a accès au même disque : il faut lire les tickets et les PR.

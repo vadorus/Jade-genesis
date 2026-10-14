@@ -1,7 +1,8 @@
 # Contrôle de coordination et limites
 
-Ce correctif complète la PR de coordination existante. Il reste local tant que le
-push puis l'intégration n'ont pas été expressément autorisés.
+Ces contrôles complètent les consignes communes. Leur effet sur les intégrations
+dépend du workflow installé et des protections activées ; aucun texte ne crée de
+permission de commit, push ou intervention sensible.
 
 ## Ce que vérifie le contrôle
 
@@ -12,7 +13,7 @@ push puis l'intégration n'ont pas été expressément autorisés.
 - Aucun succès si une liste de fichiers est tronquée, une requête échoue ou la
   PR change pendant le contrôle. Les anciennes PR n'ont plus de dispense.
 - L'exception `Tâche: COORDINATION` est réservée au numéro de PR initial et à
-  une liste exacte de fichiers. Elle exige aussi auteur, relecteur et tests.
+  un sous-ensemble de la liste fermée de fichiers autorisés. Elle exige aussi auteur, relecteur et tests. Après fusion, cette exception ne peut plus servir car la PR initiale ne peut pas être rouverte.
 
 Le workflow `pull_request_target` exécute seulement sa version déjà intégrée
 dans la branche par défaut (`main`), selon la documentation GitHub actuelle.
@@ -81,12 +82,44 @@ le contrôle hors du pilote et conserver la preuve datée dans la passation.
   ou d'une issue après le contrôle peut rendre un succès ancien obsolète. Le
   workflow réagit aux événements de la PR courante, pas à toutes les réservations.
   Rafraîchir l'inventaire et les contrôles avant fusion humaine.
-- Des identifiants administrateur communs permettent de modifier les protections
-  ou de fabriquer un autre workflow/check. Une séparation effective des droits et
-  un contrôleur externe approuvé sont nécessaires contre un contournement volontaire.
+- Toute personne autorisée à pousser une branche peut créer un autre workflow
+  publiant un faux `multi-agent-gate` depuis l’app GitHub Actions : épingler cette
+  app ne distingue pas les workflows. Les administrateurs peuvent aussi modifier
+  les protections. Une séparation effective des droits et un contrôleur externe
+  approuvé sont nécessaires contre un contournement volontaire.
 - Les fichiers AGENTS.md/CLAUDE.md/GEMINI.md et la règle Antigravity `always_on`
   guident les agents. Ils ne constituent pas une interdiction au niveau du système.
   Leur chargement réel doit être vérifié dans chaque client après intégration.
 - Desktop Commander donne accès à un appareil appairé et en ligne. Il ne réserve
   pas les tâches, ne synchronise pas les conversations et ne lance pas les trois
   IA automatiquement. Sa disponibilité n'autorise aucune action sensible.
+
+## Arbitrage et indisponibilité
+
+Le contrôle est conservateur : une seule PR ouverte dont la liste dépasse la limite
+GitHub de 3000 fichiers ou reste incomplète bloque les autres contrôles. Une PR
+trop volumineuse doit être divisée ou fermée pour reprendre un inventaire complet.
+
+Deux PR qui touchent le même fichier se bloquent mutuellement, même sur des bases
+différentes ou lorsqu'elles sont empilées. Après arbitrage explicite, fermer la PR
+mise en attente en conservant sa branche, ses commits et la possibilité de reprise,
+ou redécouper les périmètres. Ne pas contourner le contrôle avec un faux succès.
+
+## Secours du contrôle de confiance
+
+Un contrôle cassé peut empêcher son propre correctif d'entrer dans la branche par
+défaut. L'administrateur conserve le droit de gérer les rulesets, même sans acteur
+de contournement configuré. En cas d'incident vérifié, après autorisation humaine
+adaptée à l'intervention :
+
+1. Conserver l'erreur, les SHA et les règles actuelles ; ouvrir une issue de suivi
+   avec l'auteur de l'intervention, la raison et les horodatages.
+2. Suspendre temporairement le ruleset concerné (`enforcement: disabled`), sans
+   supprimer sa définition ni élargir les acteurs de contournement.
+3. Publier le seul correctif examiné sur la branche de confiance, puis observer un
+   contrôle accepté et un refus réel sur les nouvelles têtes.
+4. Réactiver le ruleset (`enforcement: active`) et vérifier de nouveau l'interdiction
+   de fusion quand le check échoue, le nom du check, son app et la tête contrôlée.
+5. Clore le suivi avec les preuves et le résultat. Aucune suspension automatique.
+
+Cette procédure n'accorde aucune autorisation générale de désactivation des règles.

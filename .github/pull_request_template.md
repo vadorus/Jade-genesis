@@ -1,9 +1,9 @@
 ## Attribution de la tâche (obligatoire pour les nouvelles PR)
 
 Tâche: #REMPLACER
-Auteur-IA: Claude
-Relecteur-IA: Codex
-Tests: non exécutés — expliquer pourquoi, ou donner les commandes et résultats
+Auteur-IA:
+Relecteur-IA:
+Tests:
 
 ## Vérifications avant modification
 

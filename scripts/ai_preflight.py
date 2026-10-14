@@ -151,7 +151,7 @@ def main():
         result = inspect(args)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 4 if result['errors'] else 0
-    except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError, KeyError) as exc:
+    except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as exc:
         print(json.dumps({'errors': ['STOP : inventaire indisponible ou incomplet (' + type(exc).__name__ + ')'],
                           'write_authorized': False}, ensure_ascii=False))
         return 3

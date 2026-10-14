@@ -38,11 +38,18 @@ object RightHandLearningPolicy {
     )
     private val preferenceMarkers = listOf(
         "je prefere", "je préfère", "j'aime mieux", "j aime mieux",
-        "je souhaite", "pour moi je prefere", "pour moi je préfère"
+        "pour moi je prefere", "pour moi je préfère"
     )
+    // Restrict persisted style preferences to actual reply-style instructions.
+    // "Je veux que tu corriges mon code" is an action request, not a preference.
     private val requestStyleMarkers = listOf(
-        "je veux que tu", "j'aimerais que tu", "j aimerais que tu",
-        "quand tu me reponds", "quand tu me réponds"
+        "je veux que tu repondes", "je veux que tu répondes",
+        "j'aimerais que tu repondes", "j'aimerais que tu répondes",
+        "j aimerais que tu repondes", "je veux que tu sois concis",
+        "je veux que tu sois bref", "j'aimerais que tu sois concis",
+        "quand tu me reponds", "quand tu me réponds",
+        "dans tes reponses", "dans tes réponses",
+        "reponds toujours", "réponds toujours"
     )
 
     fun explicitPreference(input: String): ExplicitPreferenceSignal? {
@@ -66,6 +73,38 @@ object RightHandLearningPolicy {
             topics = ConversationLearningPolicy.extractTopics(clean, 6),
             confidence = match.second
         )
+    }
+
+    /**
+     * A reply-style instruction without a subject restriction applies across
+     * conversations. Merely saying "je veux que tu..." does NOT make an
+     * instruction global: it could be a one-off tool/action request.
+     *
+     * This is deliberately conservative. Unknown cases stay topic-scoped.
+     */
+    fun isGlobalReplyPreference(kind: ExplicitPreferenceKind, statement: String): Boolean {
+        if (kind == ExplicitPreferenceKind.PRIORITY) return false
+        val normalized = ConversationLearningPolicy.normalize(statement)
+        val scoped = listOf(
+            "sur ", "concernant ", "a propos de ", "pour mon ", "pour ma ",
+            "pour mes ", "pour le ", "pour la ", "pour les "
+        )
+        if (scoped.any { marker -> marker in normalized }) return false
+        val explicitGlobal = listOf(
+            "quand tu me reponds", "dans tes reponses", "toutes tes reponses",
+            "des reponses courtes", "des reponses concises",
+            "reponds toujours", "reponds plus court", "reponds brievement",
+            "que tu repondes", "ne te repete pas", "evite de te repeter",
+            "sois concis", "sois bref", "par defaut"
+        )
+        return explicitGlobal.any { marker -> marker in normalized }
+    }
+
+    // Filter REQUEST_STYLE entries accidentally persisted by older versions.
+    fun isValidStoredStylePreference(kind: ExplicitPreferenceKind, statement: String): Boolean {
+        if (kind != ExplicitPreferenceKind.REQUEST_STYLE) return true
+        val normalized = ConversationLearningPolicy.normalize(statement)
+        return requestStyleMarkers.any { ConversationLearningPolicy.normalize(it) in normalized }
     }
 
     fun humanKnowledgeNeed(input: String): HumanKnowledgeNeed? {

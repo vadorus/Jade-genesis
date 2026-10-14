@@ -158,11 +158,9 @@ def archive_sealed_case_pack(
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-        try:
-            os.chmod(temp, 0o400)
-        except OSError:
-            pass
-
+        # Keep the staging name writable. Windows cannot reliably unlink a
+        # read-only hard link when publication fails or another writer wins.
+        # Seal only the final path after the temporary name is removed.
         try:
             os.link(temp, target)
             replayed = False
@@ -172,6 +170,11 @@ def archive_sealed_case_pack(
             if existing != encoded:
                 raise RuntimeError("case_pack_immutable_conflict")
             replayed = True
+
+        # Remove the writable staging hard-link first, then make only the
+        # published immutable name read-only. This order is required on
+        # Windows, where the read-only file attribute applies to all links.
+        temp.unlink(missing_ok=True)
         try:
             os.chmod(target, 0o400)
         except OSError:

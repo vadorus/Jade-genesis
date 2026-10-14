@@ -6,6 +6,7 @@ import com.jadegenesis.mobile.model.ToolInfo
 
 sealed interface ToolObservation {
     data class Device(val profile: DeviceProfile) : ToolObservation
+    data class LocalFile(val summary: String) : ToolObservation
 }
 
 data class JadeTool(
@@ -13,7 +14,11 @@ data class JadeTool(
     val execute: suspend () -> ToolObservation
 )
 
-class ToolRegistry(private val profiler: DeviceProfiler) {
+class ToolRegistry(
+    private val profiler: DeviceProfiler,
+    private val learnedJsonInfo: () -> ToolInfo? = { null },
+    private val executeApprovedJson: (suspend () -> String)? = null
+) {
 
     private val tools = linkedMapOf<String, JadeTool>()
 
@@ -35,11 +40,13 @@ class ToolRegistry(private val profiler: DeviceProfiler) {
         tools[tool.info.name] = tool
     }
 
-    fun names(): List<String> = tools.keys.toList()
+    fun names(): List<String> = tools.keys.toList() + listOfNotNull(learnedJsonInfo()?.name)
 
-    fun describe(): List<ToolInfo> = tools.values.map { it.info }
+    fun describe(): List<ToolInfo> = tools.values.map { it.info } + listOfNotNull(learnedJsonInfo())
 
-    suspend fun call(name: String): ToolObservation =
-        tools[name]?.execute?.invoke()
-            ?: error("Outil inconnu : $name")
+    suspend fun call(name: String): ToolObservation {
+        tools[name]?.let { return it.execute() }
+        require(learnedJsonInfo()?.name == name && executeApprovedJson != null) { "Outil inconnu : $name" }
+        return ToolObservation.LocalFile(executeApprovedJson.invoke())
+    }
 }

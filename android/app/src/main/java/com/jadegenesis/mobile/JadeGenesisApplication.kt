@@ -17,7 +17,11 @@ class JadeGenesisApplication : Application() {
         EvolutionRuntime.initialize(this)
         ConversationLearningRuntime.initialize(this)
         RightHandLearningRuntime.initialize(this)
-        SharedGenesisStateWorker.schedule(this)
-        NightCycleWorker.schedule(this)
+        // This separate validation application must never schedule its normal
+        // VPS sync or autonomous night work on the owner\'s live infrastructure.
+        if (!BuildConfig.APPLICATION_ID.endsWith(".validation")) {
+            SharedGenesisStateWorker.schedule(this)
+            NightCycleWorker.schedule(this)
+        }
     }
 }

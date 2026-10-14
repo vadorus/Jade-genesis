@@ -64,7 +64,10 @@ class MemoryStore(private val dao: MemoryDao) {
      * reste avec les souvenirs actifs les plus récents. Seuls les éléments
      * réellement retournés sont marqués comme rappelés.
      */
-    suspend fun latestForContext(limit: Int = 20): List<MemorySnapshot> {
+    suspend fun latestForContext(
+        limit: Int = 20,
+        query: String = ""
+    ): List<MemorySnapshot> {
         val safeLimit = limit.coerceIn(1, SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
         val protectedQuota = (safeLimit / 4).coerceAtLeast(1).coerceAtMost(2)
         val userFacts = dao.latestUserFacts(protectedQuota)
@@ -76,6 +79,28 @@ class MemoryStore(private val dao: MemoryDao) {
         val selectedById = linkedMapOf<String, MemoryEntity>()
         userFacts.forEach { selectedById.putIfAbsent(it.id, it) }
         consolidated.forEach { selectedById.putIfAbsent(it.id, it) }
+
+        // Search each distinct significant word so an older relevant memory
+        // can compete with recent telemetry. Bound the number of DAO calls and
+        // rows; Room's DAO already excludes superseded memories.
+        val terms = MemoryContextSearch.terms(query)
+        if (terms.isNotEmpty()) {
+            val candidateLimit = (safeLimit * 2)
+                .coerceAtMost(SafetyPolicy.MAX_MEMORY_ITEMS_PER_TASK)
+            val candidates = terms.flatMap { term ->
+                dao.search(term, candidateLimit)
+            }.plus(recent).distinctBy { it.id }
+
+            candidates
+                .map { it to MemoryContextSearch.matchingTerms(it.content, terms) }
+                .filter { (_, matches) -> matches > 0 }
+                .sortedWith(
+                    compareByDescending<Pair<MemoryEntity, Int>> { it.second }
+                        .thenByDescending { it.first.verifiedAt != null }
+                        .thenByDescending { it.first.createdAt }
+                )
+                .forEach { (entity, _) -> selectedById.putIfAbsent(entity.id, entity) }
+        }
         recent.forEach { selectedById.putIfAbsent(it.id, it) }
 
         val selected = selectedById.values.take(safeLimit)

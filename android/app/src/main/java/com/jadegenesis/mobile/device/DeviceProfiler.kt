@@ -56,7 +56,7 @@ class DeviceProfiler(private val context: Context) {
             charging = batteryManager.isCharging,
             powerSaveMode = powerManager.isPowerSaveMode,
             deviceIdleMode = powerManager.isDeviceIdleMode,
-            thermalStatus = thermalStatusName(powerManager.currentThermalStatus),
+            thermalStatus = ThermalStatusReader.read { powerManager.currentThermalStatus },
             capturedAt = System.currentTimeMillis(),
             ramLowThresholdGb = bytesToGb(memoryInfo.threshold)
         )
@@ -82,17 +82,6 @@ class DeviceProfiler(private val context: Context) {
 
     private fun bytesToMb(bytes: Long): Double =
         round((bytes.toDouble() / 1_048_576.0) * 10.0) / 10.0
-
-    private fun thermalStatusName(status: Int): String = when (status) {
-        PowerManager.THERMAL_STATUS_NONE -> "NONE"
-        PowerManager.THERMAL_STATUS_LIGHT -> "LIGHT"
-        PowerManager.THERMAL_STATUS_MODERATE -> "MODERATE"
-        PowerManager.THERMAL_STATUS_SEVERE -> "SEVERE"
-        PowerManager.THERMAL_STATUS_CRITICAL -> "CRITICAL"
-        PowerManager.THERMAL_STATUS_EMERGENCY -> "EMERGENCY"
-        PowerManager.THERMAL_STATUS_SHUTDOWN -> "SHUTDOWN"
-        else -> "UNKNOWN"
-    }
 
     fun nodeId(): String =
         "pixel-${Build.MODEL.lowercase().replace(" ", "-")}-${Build.DEVICE}"

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="jade-session" content="__SESSION_TOKEN__"><title>Jade • Revue des recherches</title>
+<link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<body><main><header><span class="eyebrow">JADE GENESIS · ATELIER LOCAL</span>
+<h1>Atelier d'amélioration de Jade</h1><p>Examiner ses observations, relire ses hypothèses et préparer les essais proposés.</p></header>
+<section id="learning-import"><h2>Importer un compte rendu de Jade</h2><p>Choisis un rapport local de NightLearningLab ou un dossier de revue Jade. L'import n'autorise aucun essai.</p>
+<input id="learning-file" type="file" accept="application/json,.json" aria-label="Compte rendu local de Jade"><button id="import-learning" type="button">Importer pour revue</button></section>
+<div id="error" role="alert" hidden></div><p id="status" role="status">Chargement du dossier…</p>
+<section id="summary" aria-label="Objectif et portée"></section>
+<section aria-label="Revue sur Jade TEST"><h2>Continuer la revue sur Jade TEST</h2>
+<p>Télécharge le dossier affiché, puis importe-le dans « Recherches et preuves » sur Jade TEST. Les passages et les fichiers de preuve sont inclus. Chaque autorisation reste propre à son appareil.</p>
+<button id="export-mobile" type="button">Télécharger le dossier pour Jade TEST</button><p id="export-status" role="status"></p></section>
+<nav><a href="#sources">Sources</a><a href="#proofs">Preuves</a><a href="#experiments">Expériences</a><a href="#audit">Journal</a>
+<button id="refresh" type="button">Actualiser</button></nav>
+<section id="sources"><h2>Sources et passages cités</h2><p>Captures locales non vérifiées. Les empreintes identifient les contenus ; elles ne prouvent pas leur vérité.</p><div id="source-list"></div></section>
+<section id="proofs"><h2>Preuves expérimentales locales</h2><div id="proof-list"></div></section>
+<section id="experiments"><h2>Autoriser un essai précis</h2><p>Une autorisation dure au maximum 15 minutes. Autoriser et lancer sont deux actions séparées. Toute modification du dossier impose une nouvelle revue.</p>
+<div class="identity"><label>Votre nom <input id="reviewer" maxlength="80" autocomplete="off"></label>
+<label>Motif de la décision <textarea id="note" maxlength="500" rows="2"></textarea></label></div>
+<div id="plan-list"></div><h3>Étapes encore bloquées</h3><div id="blocked"></div></section>
+<section id="audit"><h2>Journal local</h2><p>Historique persistant avec empreintes chaînées. Il conserve les décisions déclarées localement, sans attestation indépendante de l’identité du relecteur.</p><div id="event-list"></div></section>
+<footer>Copie isolée sur PC · aucune promotion automatique vers la mémoire de Jade.</footer>
+</main></body></html>

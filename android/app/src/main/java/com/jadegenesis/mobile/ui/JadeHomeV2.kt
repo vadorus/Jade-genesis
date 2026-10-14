@@ -53,6 +53,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jadegenesis.mobile.BuildConfig
+import com.jadegenesis.mobile.brain.DistributedChatAvailability
+import com.jadegenesis.mobile.model.BrainBackendType
 import com.jadegenesis.mobile.model.NodeKind
 import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.night.NightLearningInbox
@@ -84,6 +86,10 @@ internal fun JadeHomeV2(
         it.kind != NodeKind.PHONE && it.status == NodeStatus.ONLINE
     } ?: 0
     val preferred = self?.knownNodes?.firstOrNull { it.nodeId == self.preferredComputeNodeId }
+    val chatUnavailable = if (self?.activeBrain?.backendType == BrainBackendType.PROTOTYPE) {
+        DistributedChatAvailability.reason(self.knownNodes, BuildConfig.APPLICATION_ID.endsWith(".validation"))
+            ?: "Le chat utilise actuellement le cerveau de secours. Consulte les diagnostics du dernier essai."
+    } else null
 
     Column(modifier = modifier.background(JadeColors.Bg)) {
         LazyColumn(
@@ -96,6 +102,7 @@ internal fun JadeHomeV2(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item { V2SecondaryButton(text = "Atelier d'outils JSON", onClick = { context.startActivity(android.content.Intent(context, JsonToolWorkshopActivity::class.java)) }, modifier = Modifier.fillMaxWidth()) }
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -124,7 +131,7 @@ internal fun JadeHomeV2(
                     ) {
                         V2Dot(if (state.error == null) JadeColors.Jade else JadeColors.Warn)
                         Text(
-                            if (state.error == null) "ACTIVE" else "ATTENTION",
+                            if (chatUnavailable != null) "CHAT LIMITÉ" else if (state.error == null) "ACTIVE" else "ATTENTION",
                             fontFamily = JadeMono,
                             fontSize = 11.sp,
                             color = JadeColors.InkMuted
@@ -136,6 +143,13 @@ internal fun JadeHomeV2(
                             modifier = Modifier.size(18.dp)
                         )
                     }
+                }
+            }
+
+            if (chatUnavailable != null) item {
+                V2Card(title = "Chat en secours") {
+                    Text(chatUnavailable, color = JadeColors.Warn)
+                    V2SecondaryButton("Actualiser les nœuds", onClick = { vm.refreshNodes() })
                 }
             }
 

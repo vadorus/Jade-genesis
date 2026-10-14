@@ -18,6 +18,8 @@ android {
         targetSdk = 37
         versionCode = 40
         versionName = "0.1.22"
+        // Only used by the independent on-device validation package.
+        testInstrumentationRunner = "com.jadegenesis.mobile.validation.MemoryPersistenceInstrumentation"
     }
 
     buildFeatures {
@@ -47,6 +49,9 @@ android {
     buildTypes {
         getByName("debug") {
             isDebuggable = true
+            // Validation-only package: cannot replace personal Jade Genesis.
+            applicationIdSuffix = ".validation"
+            versionNameSuffix = "-validation"
         }
         getByName("release") {
             isDebuggable = false

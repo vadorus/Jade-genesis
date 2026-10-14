@@ -103,6 +103,8 @@ class NightLearningInbox(context: Context) {
             return null
         }
 
+        internal fun parseLocalReport(raw: String): NightLearningSnapshot = parse(raw)
+
         private fun parse(raw: String): NightLearningSnapshot {
             require(raw.length <= SafetyPolicy.MAX_SHARED_STATE_EVENT_PAYLOAD_CHARS) {
                 "Snapshot Night Learning trop volumineux."

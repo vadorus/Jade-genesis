@@ -14,3 +14,6 @@ __pycache__/
 /Jade-genesis-main.zip
 /jade-genesis-android-*.zip
 /ci-logs/
+
+# Isolated research captures and temporary experimental assets; never commit
+/capture_local/

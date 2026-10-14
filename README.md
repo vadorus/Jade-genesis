@@ -221,4 +221,15 @@ No software license has been selected yet. The repository is public, but public 
 
 ## Project status
 
+### Isolated PC research review
+
+The local workshop reviews Jade's own NightLearningLab observations, hypotheses,
+experiment criteria and proposals. It imports and exports an offline dossier,
+records interpretations and requires a durable one-use permission for the
+controlled local recheck. Proposed changes to Jade remain blocked until a
+separate isolated execution plan is prepared. See
+[`docs/JADE_GENERAL_LEARNING_REVIEW_2026-10-13.md`](docs/JADE_GENERAL_LEARNING_REVIEW_2026-10-13.md)
+for the current PC/Pixel validation. Personal Jade and the VPS are unchanged;
+research is not automatically promoted into verified memory.
+
 Jade Genesis is under active development. Documentation is updated with meaningful milestones. If documentation and code disagree, the exact source commit and verified implementation take precedence.

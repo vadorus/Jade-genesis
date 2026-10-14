@@ -19,6 +19,57 @@ class RightHandLearningPolicyTest {
     }
 
     @Test
+    fun generalReplyPreferenceFollowsUserAcrossTopics() {
+        val signal = RightHandLearningPolicy.explicitPreference(
+            "Je préfère des réponses courtes avec les points importants en premier."
+        ) ?: error("Préférence attendue")
+        assertTrue(RightHandLearningPolicy.isGlobalReplyPreference(signal.kind, signal.statement))
+    }
+
+    @Test
+    fun topicSpecificReplyPreferenceIsNotGlobal() {
+        val signal = RightHandLearningPolicy.explicitPreference(
+            "Je préfère des réponses courtes pour mon projet Roblox."
+        ) ?: error("Préférence attendue")
+        assertFalse(RightHandLearningPolicy.isGlobalReplyPreference(signal.kind, signal.statement))
+    }
+
+    @Test
+    fun aWishToCreateAProjectIsNotPersonalPreference() {
+        assertNull(RightHandLearningPolicy.explicitPreference(
+            "Je souhaite créer un nouveau jeu Roblox."
+        ))
+    }
+
+    @Test
+    fun oneOffActionRequestIsNotPersistedAsPreference() {
+        assertNull(RightHandLearningPolicy.explicitPreference(
+            "Je veux que tu corriges le code de mon jeu Roblox."
+        ))
+        assertFalse(RightHandLearningPolicy.isValidStoredStylePreference(
+            ExplicitPreferenceKind.REQUEST_STYLE,
+            "Je veux que tu corriges le code de mon jeu Roblox."
+        ))
+    }
+
+    @Test
+    fun explicitReplyStyleInstructionIsPersisted() {
+        val signal = RightHandLearningPolicy.explicitPreference(
+            "Quand tu me réponds, sois concis."
+        ) ?: error("Style attendu")
+        assertEquals(ExplicitPreferenceKind.REQUEST_STYLE, signal.kind)
+        assertTrue(RightHandLearningPolicy.isGlobalReplyPreference(signal.kind, signal.statement))
+    }
+
+    @Test
+    fun generalAvoidanceAppliesAcrossTopics() {
+        val signal = RightHandLearningPolicy.explicitPreference(
+            "Je ne veux pas que tu te répètes dans tes réponses."
+        ) ?: error("Préférence attendue")
+        assertTrue(RightHandLearningPolicy.isGlobalReplyPreference(signal.kind, signal.statement))
+    }
+
+    @Test
     fun ordinaryEmotionalStatementIsNotPromotedToPreference() {
         assertNull(
             RightHandLearningPolicy.explicitPreference(

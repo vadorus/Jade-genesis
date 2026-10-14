@@ -38,6 +38,15 @@ class BrainRouter(backends: List<BrainBackend>) {
             nodes = nodes
         )
 
+        // Selecting the prototype directly is still a degraded chat, even when
+        // no generative call was attempted. Never report it as normal generation.
+        if (primary.info.backendType == BrainBackendType.PROTOTYPE) {
+            val reason = backends.filter { it.info.backendType != BrainBackendType.PROTOTYPE }
+                .firstNotNullOfOrNull { it.unavailableReason(nodes) }
+                ?: "Aucun cerveau génératif n'est disponible."
+            return decorate(primary, primary.think(context)).copy(fallbackUsed = true, fallbackReason = reason)
+        }
+
         return try {
             decorate(primary, primary.think(context))
         } catch (primaryError: Exception) {

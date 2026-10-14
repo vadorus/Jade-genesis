@@ -138,9 +138,10 @@ class DiagnosticLogger(context: Context) {
         if (!currentLog.exists()) return emptyList()
 
         return runCatching {
+            // readUtf8TailLines already returns newest first. Reversing here
+            // used to hide the most recent entries from state.diagnostics.take(20).
             readUtf8TailLines(currentLog, safeLimit)
                 .mapNotNull(::parseDiagnosticLogLine)
-                .reversed()
         }.getOrDefault(emptyList())
     }
 

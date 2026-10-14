@@ -141,7 +141,8 @@ internal object ObservableStateGroundingPolicy {
             appendLine("- Cerveau utilisé pour cette réponse : ${selectedNode.name}.")
         }
         appendLine("- Débit réseau : non mesuré dans le snapshot runtime.")
-        append("- Type d'accès Internet du Pixel : non mesuré dans ce snapshot.")
+        appendLine("- Type d'accès Internet du Pixel : non mesuré dans ce snapshot.")
+        append("- Horodatage individuel des dernières sondes : non disponible dans ce snapshot.")
     }
 
     private fun routeSummary(route: NodeRouteSnapshot): String = buildString {

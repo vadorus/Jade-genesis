@@ -1,0 +1,100 @@
+name: Multi-agent coordination gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+    branches: [main, master, v013/demo-octobre]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  multi-agent-gate:
+    name: multi-agent-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check task ownership, reviewer and overlap
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const body = pr.body || "";
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: pr.number, per_page: 100
+            });
+            const changed = files.map(f => f.filename);
+            const isCoordination = /^Tâche:\s*COORDINATION\s*$/im.test(body);
+            const docsOnly = changed.length > 0 && changed.every(p =>
+              p.startsWith("docs/") || p.startsWith(".github/") ||
+              ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "scripts/ai_preflight.py"].includes(p)
+            );
+            if (isCoordination && docsOnly) {
+              core.info("Coordination documentaire : dispense de ticket GitHub, revue humaine toujours attendue.");
+              return;
+            }
+
+            // Les PR existantes antérieures au déploiement restent à revoir manuellement.
+            const activation = "2026-10-14T00:00:00Z";
+            if (new Date(pr.created_at) < new Date(activation)) {
+              core.warning("PR historique : compléter la passation avant fusion manuelle.");
+              return;
+            }
+
+            const task = body.match(/^Tâche:\s*#(\d+)\s*$/im);
+            const writer = body.match(/^Auteur-IA:\s*(Claude|Codex|Antigravity|Humain)\s*$/im);
+            const reviewer = body.match(/^Relecteur-IA:\s*(Claude|Codex|Antigravity|Humain)\s*$/im);
+            const tests = body.match(/^Tests:\s*(\S.*)$/im);
+            const errors = [];
+            if (!task) errors.push("Tâche: #<numéro d'issue> obligatoire.");
+            if (!writer) errors.push("Auteur-IA: Claude|Codex|Antigravity|Humain obligatoire.");
+            if (!reviewer) errors.push("Relecteur-IA: Claude|Codex|Antigravity|Humain obligatoire.");
+            if (!tests) errors.push("Tests: résultat ou 'non exécutés + raison' obligatoire.");
+            if (writer && reviewer && writer[1].toLowerCase() === reviewer[1].toLowerCase()) {
+              errors.push("L'agent relecteur doit être distinct de l'auteur.");
+            }
+            if (task) {
+              const issueNumber = Number(task[1]);
+              try {
+                const response = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
+                if (response.data.pull_request) errors.push("La référence Tâche doit être une issue, pas une autre PR.");
+                if (response.data.state !== "open") errors.push("L'issue de référence doit être ouverte.");
+              } catch (e) { errors.push("Issue de référence inaccessible : #" + issueNumber); }
+            }
+            if (errors.length) {
+              for (const error of errors) core.error(error);
+              core.setFailed("PR incomplète : attribution et contrôle multi-IA obligatoires.");
+              return;
+            }
+
+            const current = files.map(f => f.filename).filter(p =>
+              !p.startsWith("docs/") && !p.startsWith(".github/") &&
+              !["AGENTS.md", "CLAUDE.md", "GEMINI.md", "scripts/ai_preflight.py"].includes(p)
+            );
+            const others = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: "open", base: pr.base.ref, per_page: 100
+            });
+            for (const other of others) {
+              if (other.number === pr.number) continue;
+              const oldTask = (other.body || "").match(/^Tâche:\s*#(\d+)\s*$/im);
+              if (oldTask && oldTask[1] === task[1]) {
+                errors.push("Ticket #" + task[1] + " déjà traité par la PR #" + other.number + ".");
+              }
+              if (current.length) {
+                const theirs = await github.paginate(github.rest.pulls.listFiles, {
+                  owner, repo, pull_number: other.number, per_page: 100
+                });
+                const overlap = theirs.map(f => f.filename).filter(p => current.includes(p));
+                if (overlap.length) {
+                  errors.push("Fichiers déjà modifiés par PR #" + other.number +
+                    " : " + overlap.slice(0, 8).join(", ") +
+                    ". Arbitrer ou intégrer l'autre PR d'abord.");
+                }
+              }
+            }
+            for (const error of errors) core.error(error);
+            if (errors.length) core.setFailed("Conflit multi-agent : arbitrage nécessaire avant fusion.");
+            else core.info("Coordination OK : ticket, auteur, relecteur et absence de chevauchement détectable.");

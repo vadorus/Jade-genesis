@@ -141,6 +141,7 @@ class CognitiveCore(
             )
             if (decision.applied) {
                 val direct = decision.result.copy(
+                    nodeId = workingContext.selfModel.nodeId,
                     text = decision.result.text +
                         "\n- Source : snapshot local chargé par Jade ; " +
                         "aucune génération distante pour cette réponse."

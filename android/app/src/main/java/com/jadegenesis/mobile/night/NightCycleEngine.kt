@@ -400,7 +400,15 @@ class NightCycleEngine(context: Context) {
                 "runtime_confidence" to runtimeConfidence,
                 "evolution_candidates" to evolutionCandidateCount,
                 "evolution_validated" to evolutionValidatedCount,
-                "duration_ms" to (completedAt - startedAt)
+                "duration_ms" to (completedAt - startedAt),
+                "failed_phases" to NightCyclePolicy.failedPhases(steps)
+                    .joinToString(",") { it.name }
+                    .ifEmpty { "none" },
+                "first_failure" to steps
+                    .firstOrNull { !it.success && it.phase != NightCyclePhase.COMPLETE }
+                    ?.summary
+                    ?.take(200)
+                    .orEmpty()
             )
         )
         return run

@@ -65,4 +65,10 @@ object NightCyclePolicy {
             NightCycleStatus.PARTIAL
         }
     }
+
+    /** Phases that failed in a run, in order, without the synthetic COMPLETE step. */
+    fun failedPhases(steps: List<NightCycleStep>): List<NightCyclePhase> =
+        steps.filter { !it.success && it.phase != NightCyclePhase.COMPLETE }
+            .map { it.phase }
+            .distinct()
 }

@@ -1,1 +1,2 @@
-Validation temporaire du garde-fou ; deuxième tête, aucun code applicatif.
+Validation du résultat stable de coordination ; aucun code applicatif.
+Ancienne tête : b285521d933c67b116c39f3993d08df68e44606d

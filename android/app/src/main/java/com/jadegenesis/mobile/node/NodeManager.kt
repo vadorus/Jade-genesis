@@ -46,6 +46,12 @@ class NodeManager(
     )
     private val registryMutex = Mutex()
 
+    // Only one node refresh at a time. A caller that waited while another
+    // refresh finished reuses that fresh result instead of probing again.
+    private val refreshMutex = Mutex()
+    @Volatile
+    private var lastRefreshFinishedAt = 0L
+
     companion object {
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
@@ -391,44 +397,65 @@ class NodeManager(
     ): GenesisNode = registerNode(host, port, token)
 
     suspend fun refreshRemoteNodes(): List<GenesisNode> {
+        val requestedAt = System.currentTimeMillis()
+        return refreshMutex.withLock {
+            if (lastRefreshFinishedAt >= requestedAt) {
+                // Another refresh completed while this caller was waiting.
+                registryMutex.withLock {
+                    loadStoredNodesUnsafe().map { currentPublicNode(it) }
+                }
+            } else {
+                refreshRemoteNodesExclusive().also {
+                    lastRefreshFinishedAt = System.currentTimeMillis()
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshRemoteNodesExclusive(): List<GenesisNode> {
         val current = registryMutex.withLock {
             loadStoredNodesUnsafe()
         }
-        suspend fun probeAll(attempt: Int): List<StoredNode> = coroutineScope {
+        var refreshed = coroutineScope {
             current.map { node ->
-                async(Dispatchers.IO) { probeNode(node, attempt = attempt) }
+                async(Dispatchers.IO) { probeNode(node, attempt = 0) }
             }.awaitAll()
         }
 
-        var refreshed = probeAll(attempt = 0)
-        val noneReachable = current.isNotEmpty() &&
-            refreshed.none { it.status == NodeStatus.ONLINE } &&
-            refreshed.none { it.status == NodeStatus.ERROR }
-        if (noneReachable) {
-            // A single short probe right after the app/VPN wakes up used to mark
-            // every node OFFLINE and send the conversation straight to the
-            // prototype brain. Retry once, more patiently, before concluding.
+        // A single short probe right after the app or the phone's Tailscale
+        // tunnel wakes up used to mark every node OFFLINE and send the
+        // conversation straight to the prototype brain. When nothing answered,
+        // retry the OFFLINE nodes once, more patiently. ERROR nodes are not
+        // retried and no longer prevent the retry of the others.
+        val retryIds = NodeRefreshPolicy.nodesToRetry(
+            refreshed.map { it.nodeId to it.status }
+        )
+        if (retryIds.isNotEmpty()) {
             logger?.log(
                 DiagnosticLevel.INFO,
                 "node_probe_retry",
                 "Aucun nœud joignable au premier essai ; nouvel essai plus patient.",
-                mapOf("node_count" to current.size)
+                mapOf("retry_count" to retryIds.size, "node_count" to current.size)
             )
             delay(PROBE_RETRY_DELAY_MS)
-            refreshed = probeAll(attempt = 1)
+            val retried = coroutineScope {
+                current.filter { it.nodeId in retryIds }.map { node ->
+                    async(Dispatchers.IO) { probeNode(node, attempt = 1) }
+                }.awaitAll()
+            }.associateBy { it.nodeId }
+            refreshed = refreshed.map { retried[it.nodeId] ?: it }
         }
 
         return registryMutex.withLock {
             val latest = loadStoredNodesUnsafe()
-            val refreshedById = refreshed.associateBy { it.nodeId }
-            val merged = buildList {
-                latest.forEach { node ->
-                    add(refreshedById[node.nodeId] ?: node)
-                }
-                refreshed.forEach { node ->
-                    if (latest.none { it.nodeId == node.nodeId }) add(node)
-                }
-            }
+            // Apply results to the registry as it is now: never re-add a node
+            // deleted during the probe, never overwrite a record changed during
+            // the probe (re-pairing, token or route edit).
+            val merged = NodeRefreshPolicy.mergeProbeResults(
+                snapshot = current,
+                latest = latest,
+                probed = refreshed
+            ) { it.nodeId }
             val normalized = deduplicateStoredNodes(merged)
             saveStoredNodesUnsafe(normalized)
             normalized.map { currentPublicNode(it) }

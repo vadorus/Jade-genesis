@@ -4,7 +4,7 @@ Jade Genesis is an experimental personal AI architecture built around one persis
 
 The project is **not** designed around one permanent LLM as Jade's identity or central brain. Local and external language/vision models remain interchangeable cognitive resources. The long-term goal is for Jade to accumulate structured experience, measure outcomes, consolidate useful evidence and acquire reusable bounded capabilities under explicit safety boundaries.
 
-> Current Android product version: **0.1.24** (`versionCode 42`)
+> Current Android product version: **0.1.23** (`versionCode 41`)
 >
 > Current dependency-free Node Runtime version: **0.1.9** / protocol `jade-genesis-node/0.0.6`
 >
@@ -189,7 +189,7 @@ Detailed architecture: [`docs/ARCHITECTURE_OVERVIEW.md`](docs/ARCHITECTURE_OVERV
 - **0.1.20 — Restricted Procedure Runtime:** deterministic DSL interpreter, developer Skill Registry and one-shot hidden final exam. Implemented.
 - **0.1.20.1 — Cognitive Plumbing Hardening:** durable memory delivery, lifecycle cleanup, Shared State compaction and meaningful Evolution metrics. Implemented on `main`.
 - **0.1.21 — Verified Skill Synthesis Loop:** three-zone environment, bounded teacher, dataset reserve/attestation, Night Cycle crank, measured Skill reuse and Pixel real-traffic path. Protocol V3 completed the live restart/reuse proof on 2026-09-16 for one bounded procedure, with `typed_search_with_llm_hints` provenance.
-- **Current product — Android 0.1.24 / Node 0.1.9:** the source versions above identify the build. Later development-lot labels are not Android release versions.
+- **Current product — Android 0.1.23 / Node 0.1.9:** the source versions above identify the build. Later development-lot labels are not Android release versions.
 - **Development lots 0.1.24–0.1.30:** bounded self-improvement planning, research, competing hypotheses, controlled experiments and explicit-preference learning have been integrated. See the [reasoning model](docs/SELF_IMPROVEMENT_MODEL_0.1.24.md) and [0.1.30 integration](https://github.com/vadorus/Jade-genesis/pull/59). Unit tests and CI validate the implemented mechanisms; they do not establish broad autonomous learning in live personal use.
 - **Future work:** confirmatory acquisition trials, richer Skill retrieval and lifecycle validation, followed by controlled composition/generalisation. Skill composition remains disabled.
 

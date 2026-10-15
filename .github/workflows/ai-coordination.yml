@@ -36,11 +36,33 @@ jobs:
               if (snapshot.state !== 'open') throw new Error('PR fermée.');
               const expectedHead = snapshot.head.sha;
               const expectedBase = snapshot.base.sha;
-              check = (await github.rest.checks.create({
-                owner, repo, name: 'multi-agent-gate', head_sha: expectedHead, status: 'in_progress',
-                external_id: 'coordination-' + context.runId + '-' + context.runAttempt,
-                details_url: 'https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId
-              })).data;
+              // Reuse one result per PR and HEAD. Duplicate failed checks in the same
+              // GitHub check suite can keep a corrected PR blocked on the same SHA.
+              const externalId = 'coordination-pr-' + number + '-head-' + expectedHead;
+              const prior = (await github.paginate(github.rest.checks.listForRef, {
+                owner, repo, ref: expectedHead, check_name: 'multi-agent-gate', filter: 'all', per_page: 100
+              })).filter(run => run.app.id === 15368);
+              if (prior.length > 1 || prior.some(run => run.external_id !== externalId)) {
+                // A check belongs to a commit, not to a PR. Never leave a foreign
+                // or inherited success usable by another PR sharing this commit.
+                for (const run of prior) await github.rest.checks.update({
+                  owner, repo, check_run_id: run.id, status: 'completed', conclusion: 'failure',
+                  output: { title: 'Coordination bloquée', summary: 'SHA partagé ou contrôles hérités : arbitrage requis et nouvelle tête distincte.' }
+                });
+                throw new Error('SHA partagé ou contrôles hérités : nouvelle tête distincte requise.');
+              }
+              if (prior.length === 1) {
+                check = prior[0];
+                await github.rest.checks.update({ owner, repo, check_run_id: check.id,
+                  status: 'in_progress', output: { title: 'Coordination en cours', summary: 'Nouvelle vérification des données actuelles.' }
+                });
+              } else {
+                check = (await github.rest.checks.create({
+                  owner, repo, name: 'multi-agent-gate', head_sha: expectedHead, status: 'in_progress',
+                  external_id: externalId,
+                  details_url: 'https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId
+                })).data;
+              }
               await (async () => {
                 // Executed only as trusted inline code from the default branch. No PR checkout.
                 const { owner, repo } = context.repo;
@@ -119,6 +141,7 @@ jobs:
                 const others = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
                 for (const summary of others) {
                   if (summary.number === number) continue;
+                  if (summary.head.sha === expectedHead) errors.push('SHA partagé avec la PR #' + summary.number + ' : tête distincte requise.');
                   if (task && task !== 'COORDINATION' && field(summary.body, 'Tâche') === task) {
                     errors.push('Même tâche déjà traitée par PR #' + summary.number + ', base ' + summary.base.ref);
                   }
@@ -145,5 +168,8 @@ jobs:
                 status: 'completed', conclusion: 'failure',
                 output: { title: 'Coordination bloquée', summary: String(error.message).slice(0, 6000) }
               });
-              core.setFailed('Coordination bloquée : ' + error.message);
+              // The required check carries policy failure. Keep the transport job
+              // successful after reporting it; infrastructure failures remain visible.
+              if (check) core.error('Coordination bloquée : ' + error.message);
+              else core.setFailed('Contrôle non publié : ' + error.message);
             }

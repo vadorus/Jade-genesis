@@ -22,7 +22,8 @@ class CognitiveCore(
     private data class Review(
         val verdict: String,
         val note: String,
-        val confidence: Double
+        val confidence: Double,
+        val structured: Boolean = false
     )
 
     suspend fun think(context: BrainContext): BrainResult {
@@ -104,19 +105,65 @@ class CognitiveCore(
             operation = "answer",
             userInput = workingContext.userInput
         )
-        val verify = shouldVerify(workingContext.userInput)
+        val localSnapshot = context.operation == "answer" &&
+            ObservableStateFastPathPolicy.eligible(workingContext.userInput) &&
+            ObservableStateGroundingPolicy.isObservableStateQuestion(workingContext.userInput)
+        val verify = !localSnapshot && shouldVerify(workingContext.userInput)
         record(
             executionId,
             CognitivePhase.PLAN,
             buildString {
                 append("Profil ${answerPlan.profile.name} sélectionné : ${answerPlan.reason}")
-                if (verify) {
+                if (localSnapshot) {
+                    append(" Réponse directe depuis le snapshot local, sans génération distante.")
+                } else if (verify) {
                     append(" Une passe CRITIC suivra la première réponse.")
                 } else {
                     append(" Réponse directe sans seconde passe.")
                 }
             }
         )
+
+        // Do not start a remote LLM for a simple, currently observable
+        // question. The model cannot add evidence that the snapshot lacks.
+        // Historical/root-cause questions are excluded by the policy.
+        if (localSnapshot) {
+            val base = BrainResult(
+                text = "",
+                backendId = "local_runtime_snapshot",
+                backendDisplayName = "État local mesuré",
+                brainProfile = "SNAPSHOT"
+            )
+            val decision = ObservableStateGroundingPolicy.apply(
+                input = workingContext.userInput,
+                result = base,
+                selfModel = workingContext.selfModel
+            )
+            if (decision.applied) {
+                val direct = decision.result.copy(
+                    text = decision.result.text +
+                        "\n- Source : snapshot local chargé par Jade ; " +
+                        "aucune génération distante pour cette réponse."
+                )
+                record(
+                    executionId, CognitivePhase.EXECUTE,
+                    "Réponse issue du snapshot runtime local ; aucune génération IA.",
+                    backendId = direct.backendId,
+                    nodeId = workingContext.selfModel.nodeId,
+                    success = true
+                )
+                recordConversationLearning(executionId, learningUpdate)
+                completeConversationLearning(
+                    store = conversationLearning,
+                    update = learningUpdate,
+                    input = context.userInput,
+                    profile = "SNAPSHOT",
+                    result = direct
+                )
+                recordComplete(executionId, startedAt, direct)
+                return direct
+            }
+        }
 
         val executionStarted = System.nanoTime()
         val first = try {
@@ -163,9 +210,21 @@ class CognitiveCore(
             success = first.text.isNotBlank()
         )
 
+        val skipCriticForLatency = CognitiveReviewBudgetPolicy.skipCritic(
+            verificationRequested = verify,
+            initialDurationMs = executionDuration
+        )
+        if (skipCriticForLatency) {
+            record(
+                executionId, CognitivePhase.VERIFY,
+                "Vérification non exécutée : première réponse >= 70 s ; résultat non vérifié.",
+                success = false
+            )
+        }
         if (
             first.toolName != null ||
             !verify ||
+            skipCriticForLatency ||
             first.backendId.contains("prototype", ignoreCase = true)
         ) {
             val groundedFirst = applyObservableStateGrounding(
@@ -230,8 +289,16 @@ class CognitiveCore(
             backendId = verified.backendId,
             nodeId = verified.nodeId.takeIf { it.isNotBlank() },
             durationMs = elapsedMs(verificationStarted),
-            success = true
+            success = review.structured
         )
+        if (!review.structured) {
+            logger.log(
+                DiagnosticLevel.WARN,
+                "critic_unstructured",
+                "Vérification CRITIC non concluante : format structuré absent.",
+                mapOf("execution_id" to executionId)
+            )
+        }
 
         var finalResult = first
         if (review.verdict == "revise") {
@@ -462,6 +529,9 @@ class CognitiveCore(
         if (jsonText != null) {
             runCatching {
                 val json = JSONObject(jsonText)
+                require(isStructuredCognitiveReview(json)) {
+                    "Le verdict CRITIC est incomplet ou invalide."
+                }
                 val verdict = json.optString("verdict", "caution")
                     .lowercase()
                     .takeIf { it in setOf("ok", "caution", "revise") }
@@ -470,7 +540,8 @@ class CognitiveCore(
                     verdict = verdict,
                     note = json.optString("note", "Contrôle effectué.").take(500),
                     confidence = json.optDouble("confidence", 0.5)
-                        .coerceIn(0.0, 1.0)
+                        .coerceIn(0.0, 1.0),
+                    structured = true
                 )
             }
         }

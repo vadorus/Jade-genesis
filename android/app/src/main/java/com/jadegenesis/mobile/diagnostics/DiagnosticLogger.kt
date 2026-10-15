@@ -67,6 +67,10 @@ internal fun readUtf8TailLines(file: File, limit: Int): List<String> {
     return tail.toList().asReversed()
 }
 
+// Tail lines already arrive newest first; parsing must preserve that order.
+internal fun readRecentDiagnosticEntries(file: File, limit: Int): List<DiagnosticLogEntry> =
+    readUtf8TailLines(file, limit).mapNotNull(::parseDiagnosticLogLine)
+
 class DiagnosticLogger(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(
@@ -138,9 +142,7 @@ class DiagnosticLogger(context: Context) {
         if (!currentLog.exists()) return emptyList()
 
         return runCatching {
-            readUtf8TailLines(currentLog, safeLimit)
-                .mapNotNull(::parseDiagnosticLogLine)
-                .reversed()
+            readRecentDiagnosticEntries(currentLog, safeLimit)
         }.getOrDefault(emptyList())
     }
 

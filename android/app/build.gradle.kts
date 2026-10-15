@@ -48,6 +48,12 @@ android {
         getByName("debug") {
             isDebuggable = true
         }
+        create("validation") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".validation"
+            versionNameSuffix = "-validation"
+            matchingFallbacks += listOf("debug")
+        }
         getByName("release") {
             isDebuggable = false
             isMinifyEnabled = false

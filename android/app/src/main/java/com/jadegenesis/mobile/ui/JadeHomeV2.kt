@@ -154,7 +154,7 @@ internal fun JadeHomeV2(
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                             V2Metric(
                                 "CERVEAU",
-                                self?.activeBrain?.displayName ?: "inconnu",
+                                brainStatusLabel(self?.activeBrain, self?.knownNodes.orEmpty()),
                                 Modifier.weight(1f)
                             )
                             V2Metric("NŒUDS", "$onlineRemote distants", Modifier.weight(1f))

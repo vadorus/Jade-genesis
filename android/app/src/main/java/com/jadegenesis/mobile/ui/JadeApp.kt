@@ -263,7 +263,7 @@ private fun JadeHome(
         Spacer(Modifier.height(12.dp))
 
         InfoCard("État") {
-            Text("Cerveau : ${self?.activeBrain?.displayName ?: "inconnu"}")
+            Text("Cerveau : ${brainStatusLabel(self?.activeBrain, self?.knownNodes.orEmpty())}")
             Text("Nœuds distants en ligne : $onlineRemote")
             Text("Mode ressources : ${self?.resourceBudget?.mode ?: "?"}")
             val preferred = self?.knownNodes?.firstOrNull {

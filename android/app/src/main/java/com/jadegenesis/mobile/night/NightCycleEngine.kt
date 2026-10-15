@@ -367,7 +367,7 @@ class NightCycleEngine(context: Context) {
                 "evolution_candidates" to evolutionCandidateCount,
                 "evolution_validated" to evolutionValidatedCount,
                 "duration_ms" to (completedAt - startedAt)
-            )
+            ) + nightCycleFailureMetadata(run.steps)
         )
         return run
     }

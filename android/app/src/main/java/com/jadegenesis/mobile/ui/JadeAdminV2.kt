@@ -109,7 +109,7 @@ internal fun JadeAdminV2(
                     V2KeyValue("Version Android", BuildConfig.VERSION_NAME)
                     V2KeyValue("Jade ID", self?.identity?.jadeId ?: "indisponible")
                     V2KeyValue("Nœud interface", self?.nodeId ?: "inconnu")
-                    V2KeyValue("Cerveau actif", self?.activeBrain?.displayName ?: "inconnu")
+                    V2KeyValue("Cerveau actif", brainStatusLabel(self?.activeBrain, self?.knownNodes.orEmpty()))
                 }
             }
 

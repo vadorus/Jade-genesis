@@ -1,1 +1,1 @@
-Validation temporaire du garde-fou ; aucun code applicatif.
+Validation temporaire du garde-fou ; deuxième tête, aucun code applicatif.

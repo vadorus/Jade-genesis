@@ -58,6 +58,12 @@ class NodeManager(
         private const val MAX_HEALTH_RESPONSE_BYTES = 256 * 1024
         private const val MAX_TASK_RESPONSE_BYTES = 4 * 1024 * 1024
         private const val NODE_STALE_MS = 90_000L
+
+        // Health probe timeouts (connect ms, read ms) per attempt. The second,
+        // more patient round only runs when NO remote node answered the first
+        // one: typically the phone's Tailscale tunnel is still waking up.
+        private val PROBE_TIMEOUTS = listOf(1_800 to 2_800, 4_000 to 7_000)
+        private const val PROBE_RETRY_DELAY_MS = 1_500L
         private const val ASYNC_TASK_TIMEOUT_MS = 180_000L
         private const val ASYNC_POLL_MS = 900L
     }
@@ -388,10 +394,28 @@ class NodeManager(
         val current = registryMutex.withLock {
             loadStoredNodesUnsafe()
         }
-        val refreshed = coroutineScope {
+        suspend fun probeAll(attempt: Int): List<StoredNode> = coroutineScope {
             current.map { node ->
-                async(Dispatchers.IO) { probeNode(node) }
+                async(Dispatchers.IO) { probeNode(node, attempt = attempt) }
             }.awaitAll()
+        }
+
+        var refreshed = probeAll(attempt = 0)
+        val noneReachable = current.isNotEmpty() &&
+            refreshed.none { it.status == NodeStatus.ONLINE } &&
+            refreshed.none { it.status == NodeStatus.ERROR }
+        if (noneReachable) {
+            // A single short probe right after the app/VPN wakes up used to mark
+            // every node OFFLINE and send the conversation straight to the
+            // prototype brain. Retry once, more patiently, before concluding.
+            logger?.log(
+                DiagnosticLevel.INFO,
+                "node_probe_retry",
+                "Aucun nœud joignable au premier essai ; nouvel essai plus patient.",
+                mapOf("node_count" to current.size)
+            )
+            delay(PROBE_RETRY_DELAY_MS)
+            refreshed = probeAll(attempt = 1)
         }
 
         return registryMutex.withLock {
@@ -731,7 +755,8 @@ class NodeManager(
 
     private suspend fun probeNode(
         node: StoredNode,
-        allowIdentityBinding: Boolean = false
+        allowIdentityBinding: Boolean = false,
+        attempt: Int = 0
     ): StoredNode = withContext(Dispatchers.IO) {
         val secureRoutes = node.routes.filter { it.kind == NodeRouteKind.TAILSCALE }
         if (secureRoutes.isEmpty()) {
@@ -748,7 +773,7 @@ class NodeManager(
             )
         }
 
-        val probes = secureRoutes.map { route -> probeRoute(node, route) }
+        val probes = secureRoutes.map { route -> probeRoute(node, route, attempt) }
         val updatedRoutes = node.routes.map { original ->
             probes.firstOrNull { it.route.routeId == original.routeId }?.route
                 ?: original.copy(
@@ -773,7 +798,12 @@ class NodeManager(
                 DiagnosticLevel.WARN,
                 "node_probe_offline",
                 "${node.name} n'est joignable par aucune route Tailscale.",
-                mapOf("node_id" to node.nodeId, "route_count" to secureRoutes.size)
+                mapOf(
+                    "node_id" to node.nodeId,
+                    "route_count" to secureRoutes.size,
+                    "attempt" to attempt + 1,
+                    "error" to error.ifBlank { "unknown" }.take(200)
+                )
             )
             return@withContext updated
         }
@@ -872,7 +902,8 @@ class NodeManager(
         updated
     }
 
-    private fun probeRoute(node: StoredNode, route: StoredRoute): RouteProbe {
+    private fun probeRoute(node: StoredNode, route: StoredRoute, attempt: Int = 0): RouteProbe {
+        val (connectMs, readMs) = PROBE_TIMEOUTS[attempt.coerceIn(0, PROBE_TIMEOUTS.lastIndex)]
         val startedNs = System.nanoTime()
         return try {
             val (code, body) = httpRequest(
@@ -881,8 +912,8 @@ class NodeManager(
                 method = "GET",
                 path = "/health",
                 requestBody = null,
-                connectTimeoutMs = 1_800,
-                readTimeoutMs = 2_800,
+                connectTimeoutMs = connectMs,
+                readTimeoutMs = readMs,
                 maxResponseBytes = MAX_HEALTH_RESPONSE_BYTES
             )
             val latency = (System.nanoTime() - startedNs) / 1_000_000L

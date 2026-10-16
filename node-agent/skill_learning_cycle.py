@@ -353,13 +353,9 @@ def run_first_learning_cycle(
         now_ms=now_ms,
     )
     halt_checkpoint("skill_learning_cycle", "learning_completed")
-    from jade_halt import _GLOBAL_HALT
-    if result.get("state") == "SEALED_FAILED":
-        _GLOBAL_HALT.record_protected_failure(
-            failed=True, threshold=config.get("jade_halt_failure_threshold", 3)
-        )
-    elif result.get("state") == "RETAINED":
-        _GLOBAL_HALT.record_protected_failure(failed=False)
+    # SEALED_FAILED is an ordinary failed learning exam, NOT a protected
+    # regression or a security incident. Keep the protected-failure detector
+    # dormant until a genuine protected-regression signal is integrated.
     return {
         "status": result.get("state", "UNKNOWN"),
         "task_family": TASK_FAMILY,

@@ -9,7 +9,23 @@
 - `halt(reason, source="MANUAL" ou "AUTO:<détecteur>")` peut uniquement arrêter. `rearm(explicit_approval=True, operator=..., reason=...)` est la seule API de réarmement ; une action automatique ne peut pas reprendre l'activité. Cette API ne prouve pas l'identité cryptographique de l'humain : appel réservé à une interface d'administration contrôlée, hors V0.
 - Une interruption produit `halt_blocked` à l'entrée ou `halt_interrupted` à un point de contrôle intermédiaire, avec nom de boucle et étape. Le statut de l'étape est `INTERRUPTED_BY_HALT`, jamais succès, échec, `FAILED_APPROACH` ou résultat candidat statistique. Les exceptions de HALT sont distinctes des exceptions de travail, pour ne pas être converties en erreur par les `except Exception`.
 - Les quatre zones contrôlées sont `adaptive_vps_night_cycle.py` (avant `super().run_once()`, entre phase de base, persistance stratégique et manivelle Skill), `night_learning_lab.py` (avant **chaque** appel de recherche web), `skill_synthesis_loop.py` (itération et évaluation visibles) et `skill_learning_cycle.py` (avant chaque grande étape et chaque appel à l'enseignant).
-- Déclencheurs fournis : `network_guard_violation`, appels répétés non autorisés au `SEALED_TEST`, échecs protégés consécutifs. Seuils configurables et bornés de 2 à 20, seuil d'échecs par défaut 3. Les signaux déjà visibles d'échec final `SEALED_FAILED` sont comptabilisés après retour de `run_attested_learning`. Les chemins hors zones réservées ne sont **pas** instrumentés : la détection d'accès SEALED_TEST n'est donc pas exhaustive.
+- Déclencheurs automatiques **raccordés en V0** : `network_guard_violation` et tentatives répétées non autorisées d'accès au `SEALED_TEST`. Le compteur `record_protected_failure()` existe avec seuil borné de 2 à 20 (valeur par défaut 3), mais **aucun producteur de régression protégée avérée n'y est raccordé en V0** : ce détecteur reste volontairement dormant. Un examen d'apprentissage `SEALED_FAILED` est un résultat ordinaire, **ne doit pas déclencher HALTED** et ne contribue plus à ce compteur. Les chemins hors zones réservées ne sont **pas** instrumentés : la détection d'accès SEALED_TEST n'est donc pas exhaustive.
+
+## Commandes locales de l'opérateur (sans réseau)
+
+Sur le nœud concerné, dans un terminal **interactif**, depuis le dossier racine du dépôt Jade Genesis :
+
+```bash
+python3 node-agent/jade_halt.py status
+python3 node-agent/jade_halt.py halt --reason "maintenance de sécurité"
+python3 node-agent/jade_halt.py rearm --operator "identifiant-de-l-operateur" --reason "incident vérifié et résolu"
+```
+
+La dernière commande affiche `Type REARM to confirm local autonomous resume:` : **saisir exactement `REARM` au clavier**. Un stdin non interactif (pipe, cron, exécution détachée) ou une confirmation incorrecte refuse le réarmement ; il n'existe aucun `--yes` automatique.
+
+Les commandes utilisent `JADE_GENESIS_CONFIG_DIR` s'il est défini, sinon `~/.jade-genesis`. **Employer le même chemin de configuration que le node-agent concerné**, faute de quoi l'état d'un autre dossier serait consulté. `status` ne modifie pas l'état, `halt` arrête localement et `rearm` est une action humaine tracée (opérateur et motif dans le journal). Aucun accès au Pixel ni aux services VPS/PC vivants n'a été effectué durant les tests.
+
+La CLI est **locale uniquement** et ne remplace pas une authentification administrative. Une personne ayant déjà accès au compte Unix qui exécute Jade peut appeler l'API Python ou modifier les fichiers : ce mécanisme n'est pas une frontière de sécurité système.
 
 ## Portée et garanties non fournies
 
@@ -27,7 +43,7 @@
 
 Le contexte `no_python_network()` intercepte `socket.socket`, `socket.create_connection`, `socket.getaddrinfo`, `socket.gethostbyname`, `gethostbyname_ex` et `getnameinfo`; il restaure **exactement** toutes les fonctions, même sur exception. Chaque violation lève `NetworkGuardViolation`, avec nom d'opération seulement : ni domaine, ni URL, ni jeton, ni SEALED_TEST dans les traces.
 
-Les runners déclarés `NO_NETWORK_CALLS_IN_RUNNER` de `local_research_review.py` tournent dans un **processus enfant** via `multiprocessing.get_context("spawn")`. Le parent conserve son `ThreadingHTTPServer` sans remplacement global de socket. Une violation revient au parent, produit `network_guard_violation`, passe localement à `HALTED` et entraîne une erreur de runner. Le DSL déterministe de `procedure_runtime.py`, qui ne contient pas d'opération réseau, bénéficie de la garde uniquement en mode mono-thread ; en contexte serveur multithread, le patch global est explicitement refusé.
+Les runners déclarés `NO_NETWORK_CALLS_IN_RUNNER` de `local_research_review.py` tournent **par défaut** dans un **processus enfant** via `multiprocessing.get_context("spawn")`. Le paramètre du constructeur `offline_runner="spawn"` est le comportement normal ; les tests synthétiques Blender optent explicitement pour `offline_runner="inline"` afin de simuler `subprocess.run` sans lancement de programme externe. Le code de production ne détecte pas `unittest.mock` et les requêtes HTTP ne peuvent pas sélectionner ce mode. **Le mode inline est un outil d'injection de test à n'utiliser que pour les expériences factices.** Le parent conserve son `ThreadingHTTPServer` sans remplacement global de socket. Une violation revient au parent, produit `network_guard_violation`, passe localement à `HALTED` et entraîne une erreur de runner. Le DSL déterministe de `procedure_runtime.py`, qui ne contient pas d'opération réseau, bénéficie de la garde uniquement en mode mono-thread ; en contexte serveur multithread, le patch global est explicitement refusé.
 
 **Ce n'est pas un bac à sable.** Le patch Python n'empêche **ni** un sous-processus (y compris Blender), **ni** du code natif, **ni** un accès réseau hors des fonctions patchées. Avant d'autoriser l'exécution de code autonome `FUTURE_SYNTHESIS` ou de challengers **N5**, l'opérateur DOIT mettre en place une **isolation réseau au niveau système** : utilisateur/processus dédié avec règles de pare-feu sortantes explicites, ou conteneur/espace de noms réellement sans réseau. **Sans cette isolation, exécution de code généré interdite.** Cette V0 n'ajoute aucune dépendance, aucun conteneur et aucune activation de code N5.
 
@@ -41,7 +57,8 @@ python scripts/ai_preflight.py --repo vadorus/Jade-genesis --base main --task 71
   --path node-agent/network_guard.py --path node-agent/test_network_guard.py \
   --path node-agent/adaptive_vps_night_cycle.py --path node-agent/night_learning_lab.py \
   --path node-agent/skill_synthesis_loop.py --path node-agent/skill_learning_cycle.py \
-  --path node-agent/local_research_review.py --path node-agent/procedure_runtime.py \
+  --path node-agent/local_research_review.py --path node-agent/test_local_research_review.py \
+  --path node-agent/procedure_runtime.py \
   --path docs/JADE_HALT_V0.md
 python -m unittest discover -s node-agent -p 'test_*.py' -v
 ```

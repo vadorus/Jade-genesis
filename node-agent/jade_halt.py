@@ -210,3 +210,58 @@ def run_steps(steps: Iterable[tuple[str, Callable[[], Any]]],
         halt.checkpoint(loop, name + ":completed")
         output.append(value)
     return output
+
+
+def main(argv: list[str] | None = None, *, halt: JadeHalt | None = None) -> int:
+    """Local operator CLI. Rearming requires a terminal and typed confirmation.
+
+    This is not exposed to the Node Runtime API and does not authenticate a
+    remote user. OS access to the node is a prerequisite for running the CLI.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        description="Manage Jade's node-local cooperative emergency stop."
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+    actions.add_parser("status", help="Read the persisted local HALT state.")
+    stop = actions.add_parser("halt", help="Stop autonomous local loops.")
+    stop.add_argument("--reason", required=True, help="Reason for the stop.")
+    resume = actions.add_parser("rearm", help="Manually resume after review.")
+    resume.add_argument("--operator", required=True, help="Named human operator.")
+    resume.add_argument("--reason", required=True, help="Reason for resuming.")
+    args = parser.parse_args(argv)
+    controller = halt if halt is not None else JadeHalt()
+
+    if args.action == "status":
+        result = controller.status()
+    elif args.action == "halt":
+        result = controller.halt(args.reason, source="MANUAL")
+    else:
+        # No --yes flag or environment variable may bypass this check.
+        if not sys.stdin.isatty():
+            print("Rearm refused: interactive terminal required.", file=sys.stderr)
+            return 2
+        try:
+            typed = input("Type REARM to confirm local autonomous resume: ")
+        except (EOFError, KeyboardInterrupt):
+            print("Rearm cancelled.", file=sys.stderr)
+            return 2
+        if typed.strip() != "REARM":
+            print("Rearm cancelled: confirmation did not match.", file=sys.stderr)
+            return 2
+        try:
+            result = controller.rearm(
+                explicit_approval=True, operator=args.operator, reason=args.reason
+            )
+        except PermissionError as exc:
+            print(f"Rearm refused: {exc}", file=sys.stderr)
+            return 2
+
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

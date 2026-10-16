@@ -317,6 +317,16 @@ def run_first_learning_cycle(
 
     halt_checkpoint("skill_learning_cycle", "teacher_setup")
     teacher = HybridSkillTeacher(OllamaSkillTeacher(config, core))
+
+    def guarded_teacher(request: dict[str, Any]) -> dict[str, Any]:
+        # The resilient synthesis implementation is outside this issue's zones.
+        # Wrap EACH external attempt, including the return boundary, without
+        # touching the trainer's immutable exam internals.
+        halt_checkpoint("skill_synthesis_loop", "teacher_attempt")
+        proposal = teacher(request)
+        halt_checkpoint("skill_synthesis_loop", "teacher_result")
+        return proposal
+
     append_attribution_event(
         "night_skill_learning_triggered",
         {
@@ -336,12 +346,20 @@ def run_first_learning_cycle(
     result = run_attested_learning(
         identity,
         GOAL_ID,
-        teacher,
+        guarded_teacher,
         teacher_id="hybrid-teacher-v3",
         source_model="ollama-code-profile+typed-search",
         max_candidates=4,
         now_ms=now_ms,
     )
+    halt_checkpoint("skill_learning_cycle", "learning_completed")
+    from jade_halt import _GLOBAL_HALT
+    if result.get("state") == "SEALED_FAILED":
+        _GLOBAL_HALT.record_protected_failure(
+            failed=True, threshold=config.get("jade_halt_failure_threshold", 3)
+        )
+    elif result.get("state") == "RETAINED":
+        _GLOBAL_HALT.record_protected_failure(failed=False)
     return {
         "status": result.get("state", "UNKNOWN"),
         "task_family": TASK_FAMILY,

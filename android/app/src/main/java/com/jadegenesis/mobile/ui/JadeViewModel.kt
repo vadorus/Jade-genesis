@@ -84,13 +84,18 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<JadeUiState> = _state.asStateFlow()
 
     init {
-        refresh()
+        refresh(probeNodesAfterLoad = true)
     }
 
-    fun refresh() {
+    fun refresh(probeNodesAfterLoad: Boolean = false) {
         viewModelScope.launch {
             runCatching { loadBundle(initialize = true) }
-                .onSuccess { applyBundle(it, loading = false) }
+                .onSuccess {
+                    applyBundle(it, loading = false)
+                    // Without this, every node shows UNKNOWN (stale) at app
+                    // start until the user taps "Actualiser les nœuds".
+                    if (probeNodesAfterLoad) refreshNodes()
+                }
                 .onFailure { e ->
                     _state.value = _state.value.copy(
                         loading = false,

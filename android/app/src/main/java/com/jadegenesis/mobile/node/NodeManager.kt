@@ -44,9 +44,14 @@ class NodeManager(
         "jade_genesis_nodes",
         Context.MODE_PRIVATE
     )
-    private val registryMutex = Mutex()
-
     companion object {
+        // Shared by every NodeManager, including separate JadeCore instances.
+        private val registryMutex = Mutex()
+        private val refreshCoordinator = NodeRefreshCoordinator()
+        // Protected by refreshCoordinator: only a single patient attempt can start.
+        private var lastPatientRetryAtMs: Long? = null
+        private const val PROBE_PATIENT_RETRY_COOLDOWN_MS = 60_000L
+
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
         private const val KEY_REMOTE_NODES_V1 = "remote_nodes_v1"
@@ -58,6 +63,12 @@ class NodeManager(
         private const val MAX_HEALTH_RESPONSE_BYTES = 256 * 1024
         private const val MAX_TASK_RESPONSE_BYTES = 4 * 1024 * 1024
         private const val NODE_STALE_MS = 90_000L
+
+        // Health probe timeouts (connect ms, read ms) per attempt. The second,
+        // more patient round only runs when NO remote node answered the first
+        // one: typically the phone's Tailscale tunnel is still waking up.
+        private val PROBE_TIMEOUTS = listOf(1_800 to 2_800, 4_000 to 7_000)
+        private const val PROBE_RETRY_DELAY_MS = 1_500L
         private const val ASYNC_TASK_TIMEOUT_MS = 180_000L
         private const val ASYNC_POLL_MS = 900L
     }
@@ -384,27 +395,76 @@ class NodeManager(
         token: String
     ): GenesisNode = registerNode(host, port, token)
 
-    suspend fun refreshRemoteNodes(): List<GenesisNode> {
+    suspend fun refreshRemoteNodes(): List<GenesisNode> =
+        refreshCoordinator.refreshOrReuse(
+            refresh = { refreshRemoteNodesExclusive() },
+            reuse = {
+                registryMutex.withLock {
+                    loadStoredNodesUnsafe().map { currentPublicNode(it) }
+                }
+            }
+        )
+
+    private suspend fun refreshRemoteNodesExclusive(): List<GenesisNode> {
         val current = registryMutex.withLock {
             loadStoredNodesUnsafe()
         }
-        val refreshed = coroutineScope {
+        var refreshed = coroutineScope {
             current.map { node ->
-                async(Dispatchers.IO) { probeNode(node) }
+                async(Dispatchers.IO) { probeNode(node, attempt = 0) }
             }.awaitAll()
+        }
+
+        // A single short probe right after the app or the phone's Tailscale
+        // tunnel wakes up used to mark every node OFFLINE and send the
+        // conversation straight to the prototype brain. When nothing answered,
+        // retry the OFFLINE nodes once, more patiently. ERROR nodes are not
+        // retried and no longer prevent the retry of the others.
+        val retryIds = NodeRefreshPolicy.nodesToRetry(
+            refreshed.map { it.nodeId to it.status }
+        )
+        if (retryIds.isNotEmpty()) {
+            val nowMs = System.nanoTime() / 1_000_000L
+            if (NodeRefreshPolicy.shouldRunPatientRetry(
+                    nowMs, lastPatientRetryAtMs, PROBE_PATIENT_RETRY_COOLDOWN_MS
+                )) {
+                lastPatientRetryAtMs = nowMs
+                logger?.log(
+                    DiagnosticLevel.INFO,
+                    "node_probe_retry",
+                    "Aucun nœud joignable au premier essai ; nouvel essai plus patient.",
+                    mapOf("retry_count" to retryIds.size, "node_count" to current.size)
+                )
+                delay(PROBE_RETRY_DELAY_MS)
+                val retried = coroutineScope {
+                    current.filter { it.nodeId in retryIds }.map { node ->
+                        async(Dispatchers.IO) { probeNode(node, attempt = 1) }
+                    }.awaitAll()
+                }.associateBy { it.nodeId }
+                refreshed = refreshed.map { retried[it.nodeId] ?: it }
+            } else {
+                logger?.log(
+                    DiagnosticLevel.INFO,
+                    "node_probe_retry_skipped_cooldown",
+                    "Nouvel essai patient évité : période de récupération active.",
+                    mapOf(
+                        "retry_count" to retryIds.size,
+                        "cooldown_ms" to PROBE_PATIENT_RETRY_COOLDOWN_MS
+                    )
+                )
+            }
         }
 
         return registryMutex.withLock {
             val latest = loadStoredNodesUnsafe()
-            val refreshedById = refreshed.associateBy { it.nodeId }
-            val merged = buildList {
-                latest.forEach { node ->
-                    add(refreshedById[node.nodeId] ?: node)
-                }
-                refreshed.forEach { node ->
-                    if (latest.none { it.nodeId == node.nodeId }) add(node)
-                }
-            }
+            // Apply results to the registry as it is now: never re-add a node
+            // deleted during the probe, never overwrite a record changed during
+            // the probe (re-pairing, token or route edit).
+            val merged = NodeRefreshPolicy.mergeProbeResults(
+                snapshot = current,
+                latest = latest,
+                probed = refreshed
+            ) { it.nodeId }
             val normalized = deduplicateStoredNodes(merged)
             saveStoredNodesUnsafe(normalized)
             normalized.map { currentPublicNode(it) }
@@ -731,7 +791,8 @@ class NodeManager(
 
     private suspend fun probeNode(
         node: StoredNode,
-        allowIdentityBinding: Boolean = false
+        allowIdentityBinding: Boolean = false,
+        attempt: Int = 0
     ): StoredNode = withContext(Dispatchers.IO) {
         val secureRoutes = node.routes.filter { it.kind == NodeRouteKind.TAILSCALE }
         if (secureRoutes.isEmpty()) {
@@ -748,7 +809,7 @@ class NodeManager(
             )
         }
 
-        val probes = secureRoutes.map { route -> probeRoute(node, route) }
+        val probes = secureRoutes.map { route -> probeRoute(node, route, attempt) }
         val updatedRoutes = node.routes.map { original ->
             probes.firstOrNull { it.route.routeId == original.routeId }?.route
                 ?: original.copy(
@@ -773,7 +834,12 @@ class NodeManager(
                 DiagnosticLevel.WARN,
                 "node_probe_offline",
                 "${node.name} n'est joignable par aucune route Tailscale.",
-                mapOf("node_id" to node.nodeId, "route_count" to secureRoutes.size)
+                mapOf(
+                    "node_id" to node.nodeId,
+                    "route_count" to secureRoutes.size,
+                    "attempt" to attempt + 1,
+                    "error" to error.ifBlank { "unknown" }.take(200)
+                )
             )
             return@withContext updated
         }
@@ -872,7 +938,8 @@ class NodeManager(
         updated
     }
 
-    private fun probeRoute(node: StoredNode, route: StoredRoute): RouteProbe {
+    private fun probeRoute(node: StoredNode, route: StoredRoute, attempt: Int = 0): RouteProbe {
+        val (connectMs, readMs) = PROBE_TIMEOUTS[attempt.coerceIn(0, PROBE_TIMEOUTS.lastIndex)]
         val startedNs = System.nanoTime()
         return try {
             val (code, body) = httpRequest(
@@ -881,8 +948,8 @@ class NodeManager(
                 method = "GET",
                 path = "/health",
                 requestBody = null,
-                connectTimeoutMs = 1_800,
-                readTimeoutMs = 2_800,
+                connectTimeoutMs = connectMs,
+                readTimeoutMs = readMs,
                 maxResponseBytes = MAX_HEALTH_RESPONSE_BYTES
             )
             val latency = (System.nanoTime() - startedNs) / 1_000_000L

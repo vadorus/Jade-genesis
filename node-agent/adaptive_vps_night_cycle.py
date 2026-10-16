@@ -154,7 +154,10 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
             halt_checkpoint("adaptive_vps_night_cycle", "entry", initial=True)
         except HaltInterrupted as exc:
             return interrupted_result(exc)
-        result = super().run_once(force=force, now_ms=now_ms)
+        try:
+            result = super().run_once(force=force, now_ms=now_ms)
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
         if result.get("status") not in {"SUCCESS", "PARTIAL"}:
             return result
         if not str(result.get("run_id", "")).strip():

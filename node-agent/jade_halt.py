@@ -21,7 +21,7 @@ SCHEMA = 1
 INTERRUPTED = "INTERRUPTED_BY_HALT"
 
 
-class HaltInterrupted(RuntimeError):
+class HaltInterrupted(BaseException):
     """A cooperative boundary stopped execution without counting an error."""
 
     def __init__(self, loop: str, step: str, *, initial: bool):

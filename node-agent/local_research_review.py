@@ -15,7 +15,6 @@ import subprocess
 import threading
 from typing import Any
 import uuid
-from unittest.mock import Mock
 
 from goal_evidence_reasoner import (
     _load_object, MAX_RESEARCH_JSON, inspect_local_probe, review_goal_evidence,
@@ -58,7 +57,14 @@ def _offline_research_child(conn, workspace: str, research: str,
 
 class LocalResearchReview:
     def __init__(self, workspace: Path, *, research: str = DEFAULT_RESEARCH,
-                 runs: tuple[str, ...] = DEFAULT_RUNS, blender: Path | None = None):
+                 runs: tuple[str, ...] = DEFAULT_RUNS, blender: Path | None = None,
+                 offline_runner: str = "spawn"):
+        # Trusted constructor-only injection for synthetic offline tests.
+        # HTTP request data cannot select or override this policy. The default
+        # always uses the guarded spawned process in real operation.
+        if offline_runner not in {"spawn", "inline"}:
+            raise ValueError("unknown_offline_runner")
+        self.offline_runner = offline_runner
         self.root = workspace.resolve(strict=True)
         self.capture = self._inside(self.root / "capture_local")
         if not self.capture.is_dir() or not (self.root / "node-agent").is_dir():
@@ -262,11 +268,9 @@ class LocalResearchReview:
 
     def _run(self, plan: dict, dossier: dict, script_bytes: bytes | None) -> dict:
         if plan.get("network") == "NO_NETWORK_CALLS_IN_RUNNER":
-            # Existing test harnesses replace subprocess.run with a Mock that
-            # creates synthetic Blender output. Such a callable cannot cross
-            # spawn's process boundary: retain dependency injection for those
-            # in-memory tests only (no real executable starts in that case).
-            if isinstance(subprocess.run, Mock):
+            if self.offline_runner == "inline":
+                # Explicit trusted test injection only. Never chosen by an
+                # HTTP request or by introspecting mocked production functions.
                 return self._run_inline(plan, dossier, script_bytes)
             return self._run_spawned(plan, dossier, script_bytes)
         return self._run_inline(plan, dossier, script_bytes)

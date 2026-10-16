@@ -137,6 +137,16 @@ class JadeHalt:
                         operator=clean_operator, reason=clean_reason)
             return dict(state)
 
+    def network_violation(self, *, runner: str, operation: str) -> None:
+        # Operations are allowlisted symbols, never hostnames/URLs/tokens.
+        clean = operation if operation in {
+            "socket", "create_connection", "getaddrinfo",
+            "gethostbyname", "gethostbyname_ex", "getnameinfo"
+        } else "unknown"
+        with self.lock:
+            self._event("network_guard_violation", loop=runner, step=clean)
+            self.halt("network_guard_violation", source="AUTO:network_guard")
+
     def checkpoint(self, loop: str, step: str = "entry", *, initial: bool = False) -> None:
         with self.lock:
             if self._load()["state"] == "HALTED":

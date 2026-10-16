@@ -27,6 +27,7 @@ from vps_night_cycle import (
     _safe_int,
 )
 from shared_genesis_state import SharedGenesisStateStore, _GLOBAL_STORE
+from jade_halt import HaltInterrupted, checkpoint as halt_checkpoint, interrupted_result
 
 SCHEMA_VERSION = 1
 MAX_SHARED_STRATEGIES = 20
@@ -148,13 +149,22 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
         force: bool = False,
         now_ms: int | None = None,
     ) -> dict[str, Any]:
-        result = super().run_once(force=force, now_ms=now_ms)
+        # The base supervisor has no halt support; stop it before entry.
+        try:
+            halt_checkpoint("adaptive_vps_night_cycle", "entry", initial=True)
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
+        try:
+            result = super().run_once(force=force, now_ms=now_ms)
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
         if result.get("status") not in {"SUCCESS", "PARTIAL"}:
             return result
         if not str(result.get("run_id", "")).strip():
             return result
 
         try:
+            halt_checkpoint("adaptive_vps_night_cycle", "strategy_registry")
             registry_result = self._persist_latest_strategy_candidates(result)
             self._last_registry_result = registry_result
             result.update({
@@ -167,6 +177,8 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
                 "strategy_activation_performed": False,
                 "strategy_promotion_performed": False,
             })
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
         except Exception as exc:
             self._last_registry_result = {
                 "status": "ERROR",
@@ -187,10 +199,13 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
             )
 
         try:
+            halt_checkpoint("adaptive_vps_night_cycle", "skill_learning")
             skill_learning = self._run_skill_learning_phase(result, now_ms=now_ms)
             self._last_skill_learning_result = skill_learning
             result["skill_learning_cycle_status"] = "OK"
             result["skill_learning_cycle"] = skill_learning
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
         except Exception as exc:
             self._last_skill_learning_result = {
                 "status": "ERROR",
@@ -205,6 +220,10 @@ class AdaptiveVpsNightCycleSupervisor(VpsNightCycleSupervisor):
                 "Le cycle principal reste valide mais la manivelle Skill 0.1.21 a échoué.",
                 error=type(exc).__name__,
             )
+        try:
+            halt_checkpoint("adaptive_vps_night_cycle", "completed")
+        except HaltInterrupted as exc:
+            return interrupted_result(exc)
         return result
 
     def _run_skill_learning_phase(

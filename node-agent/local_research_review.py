@@ -8,6 +8,7 @@ import argparse
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import multiprocessing
 from pathlib import Path
 import secrets
 import subprocess
@@ -25,14 +26,45 @@ from research_authorization import (
 from official_source_capture import APPROVED
 from jade_learning_review import SCHEMA as LEARNING_SCHEMA, export_learning_review, learning_review_state
 from shared_store_lock import atomic_write_text
+from jade_halt import _GLOBAL_HALT
+from network_guard import NetworkGuardViolation, no_python_network
 
 DEFAULT_RESEARCH = "jade_learning_review.json"
 DEFAULT_RUNS = ()
 
 
+def _offline_research_child(conn, workspace: str, research: str,
+                            runs: tuple[str, ...], blender: str | None,
+                            plan: dict, dossier: dict,
+                            script_bytes: bytes | None) -> None:
+    """Spawn target: never install the socket monkeypatch in HTTP-server threads."""
+    try:
+        service = LocalResearchReview(
+            Path(workspace), research=research, runs=runs,
+            blender=Path(blender) if blender else None,
+        )
+        with no_python_network():
+            result = service._run_inline(plan, dossier, script_bytes)
+        conn.send(("OK", result))
+    except NetworkGuardViolation as exc:
+        conn.send(("NETWORK", exc.operation))
+    except BaseException as exc:
+        # Do not send file paths, source texts or credentials across the boundary.
+        conn.send(("ERROR", type(exc).__name__))
+    finally:
+        conn.close()
+
+
 class LocalResearchReview:
     def __init__(self, workspace: Path, *, research: str = DEFAULT_RESEARCH,
-                 runs: tuple[str, ...] = DEFAULT_RUNS, blender: Path | None = None):
+                 runs: tuple[str, ...] = DEFAULT_RUNS, blender: Path | None = None,
+                 offline_runner: str = "spawn"):
+        # Trusted constructor-only injection for synthetic offline tests.
+        # HTTP request data cannot select or override this policy. The default
+        # always uses the guarded spawned process in real operation.
+        if offline_runner not in {"spawn", "inline"}:
+            raise ValueError("unknown_offline_runner")
+        self.offline_runner = offline_runner
         self.root = workspace.resolve(strict=True)
         self.capture = self._inside(self.root / "capture_local")
         if not self.capture.is_dir() or not (self.root / "node-agent").is_dir():
@@ -235,6 +267,54 @@ class LocalResearchReview:
         return {"result": result, "summary": summary, "knowledge_verified": False}
 
     def _run(self, plan: dict, dossier: dict, script_bytes: bytes | None) -> dict:
+        if plan.get("network") == "NO_NETWORK_CALLS_IN_RUNNER":
+            if self.offline_runner == "inline":
+                # Explicit trusted test injection only. Never chosen by an
+                # HTTP request or by introspecting mocked production functions.
+                return self._run_inline(plan, dossier, script_bytes)
+            return self._run_spawned(plan, dossier, script_bytes)
+        return self._run_inline(plan, dossier, script_bytes)
+
+    def _run_spawned(self, plan: dict, dossier: dict,
+                     script_bytes: bytes | None) -> dict:
+        context = multiprocessing.get_context("spawn")
+        receive, send = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_offline_research_child,
+            args=(send, str(self.root), self.research.name,
+                  tuple(report.parent.name for report, _fbx in self.pairs),
+                  str(self.blender) if self.blender else None,
+                  plan, dossier, script_bytes),
+        )
+        try:
+            process.start()
+            send.close()
+            if not receive.poll(75):
+                process.terminate()
+                process.join(timeout=5)
+                raise RuntimeError("offline_runner_timeout")
+            status, payload = receive.recv()
+            process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+                raise RuntimeError("offline_runner_did_not_exit")
+            if status == "NETWORK":
+                _GLOBAL_HALT.network_violation(
+                    runner="local_research_review", operation=str(payload)
+                )
+                raise RuntimeError("network_guard_violation")
+            if status != "OK" or process.exitcode != 0:
+                raise RuntimeError("offline_runner_error")
+            return payload
+        finally:
+            receive.close()
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            send.close()
+
+    def _run_inline(self, plan: dict, dossier: dict, script_bytes: bytes | None) -> dict:
         destination = self._inside(Path(plan["output_root"]) / str(uuid.uuid4()))
         destination.mkdir(parents=True, exist_ok=False)
         action = plan["action_id"]

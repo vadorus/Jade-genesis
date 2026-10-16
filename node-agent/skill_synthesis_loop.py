@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from procedure_runtime import execute_skill
+from jade_halt import checkpoint as halt_checkpoint, _GLOBAL_HALT
 from skill_spec import ALLOWED_OPS, BODY_KIND, normalize_skill_spec
 from skill_teacher_contract import REQUEST_KIND, teacher_dsl_contract
 
@@ -482,6 +483,11 @@ class SkillSynthesisLoop:
             if not isinstance(case, dict):
                 continue
             partition = str(case.get("partition", ""))
+            if partition == "SEALED_TEST":
+                # A visible examination set must never contain sealed material.
+                _GLOBAL_HALT.record_sealed_access(final_exam=False)
+                raise PermissionError("sealed_test_visible_during_training")
+            halt_checkpoint("skill_synthesis_loop", "visible_evaluation")
             if partition not in {"TRAIN", "VALIDATION"}:
                 continue
             summary[partition]["total"] += 1
@@ -553,6 +559,7 @@ class SkillSynthesisLoop:
     ) -> dict[str, Any]:
         """Acquire one exact-family skill through visible iteration + final exam."""
 
+        halt_checkpoint("skill_synthesis_loop", "entry", initial=True)
         goal = self.goals.get(identity_id, goal_id)
         if goal.get("state") not in {"OPEN", "VISIBLE_TESTING"}:
             raise ValueError("learning_goal_not_open")
@@ -577,6 +584,7 @@ class SkillSynthesisLoop:
 
         frozen: dict[str, Any] | None = None
         for index in range(limit):
+            halt_checkpoint("skill_synthesis_loop", "teacher_attempt")
             request = self._teacher_request(goal, learning_view, previous_attempts)
             proposal = teacher(json.loads(json.dumps(request)))
             proposal_body = self._proposal_feedback_body(proposal)
@@ -658,6 +666,7 @@ class SkillSynthesisLoop:
             },
             base_now + len(previous_attempts),
         )
+        halt_checkpoint("skill_synthesis_loop", "sealed_final_exam")
         exam = self.ledger.run_sealed_skill_exam(
             identity_id,
             goal["dataset_id"],

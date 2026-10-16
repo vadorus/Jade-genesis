@@ -48,6 +48,8 @@ from ollama_skill_teacher import OllamaSkillTeacher
 
 GOAL_ID = "first-real-normalize-label-v3"
 
+from jade_halt import checkpoint as halt_checkpoint
+
 
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
@@ -218,6 +220,7 @@ def run_first_learning_cycle(
     *,
     now_ms: int | None = None,
 ) -> dict[str, Any]:
+    halt_checkpoint("skill_learning_cycle", "entry", initial=True)
     identity = str(identity_id or "").strip()
     if not identity:
         return {
@@ -233,6 +236,7 @@ def run_first_learning_cycle(
             "automatic_learning": False,
         }
 
+    halt_checkpoint("skill_learning_cycle", "registry_lookup")
     registry = open_archive_skill_registry()
     selected = registry.selected_skill(identity, TASK_FAMILY)
     if selected is not None:
@@ -244,6 +248,7 @@ def run_first_learning_cycle(
             "gap": _gap_score(identity),
         }
 
+    halt_checkpoint("skill_learning_cycle", "attestation_ingest")
     attestation_ingest = ingest_configured_attestations(identity, config, now_ms=now_ms)
     pool = ready_dataset_pool(identity, TASK_FAMILY)
     gap = _gap_score(identity)
@@ -310,7 +315,18 @@ def run_first_learning_cycle(
             "teacher_called": False,
         }
 
+    halt_checkpoint("skill_learning_cycle", "teacher_setup")
     teacher = HybridSkillTeacher(OllamaSkillTeacher(config, core))
+
+    def guarded_teacher(request: dict[str, Any]) -> dict[str, Any]:
+        # The resilient synthesis implementation is outside this issue's zones.
+        # Wrap EACH external attempt, including the return boundary, without
+        # touching the trainer's immutable exam internals.
+        halt_checkpoint("skill_synthesis_loop", "teacher_attempt")
+        proposal = teacher(request)
+        halt_checkpoint("skill_synthesis_loop", "teacher_result")
+        return proposal
+
     append_attribution_event(
         "night_skill_learning_triggered",
         {
@@ -326,15 +342,20 @@ def run_first_learning_cycle(
         },
         now_ms=now_ms,
     )
+    halt_checkpoint("skill_learning_cycle", "attested_learning")
     result = run_attested_learning(
         identity,
         GOAL_ID,
-        teacher,
+        guarded_teacher,
         teacher_id="hybrid-teacher-v3",
         source_model="ollama-code-profile+typed-search",
         max_candidates=4,
         now_ms=now_ms,
     )
+    halt_checkpoint("skill_learning_cycle", "learning_completed")
+    # SEALED_FAILED is an ordinary failed learning exam, NOT a protected
+    # regression or a security incident. Keep the protected-failure detector
+    # dormant until a genuine protected-regression signal is integrated.
     return {
         "status": result.get("state", "UNKNOWN"),
         "task_family": TASK_FAMILY,

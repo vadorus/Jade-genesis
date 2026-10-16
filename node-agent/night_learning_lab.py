@@ -15,6 +15,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
+from jade_halt import checkpoint as halt_checkpoint
 from typing import Any, Protocol
 
 SCHEMA_VERSION = 1
@@ -283,6 +284,7 @@ class NightLearningLab:
         now_ms: int | None = None,
         *, external_research_allowed: bool = True,
     ) -> dict[str, Any]:
+        halt_checkpoint("night_learning_lab", "entry", initial=True)
         now = _now_ms() if now_ms is None else max(0, int(now_ms))
         source_revision = max(0, _safe_int(view.get("revision"), 0))
         runtime = _payload(_latest_entity(view, "runtime_eval_snapshot"))
@@ -309,6 +311,8 @@ class NightLearningLab:
         evidence: list[dict[str, Any]] = []
         research_errors: list[str] = []
         for question in (researchable_questions[:2] if external_research_allowed else []):
+            # Immediately before EVERY provider call, including the second.
+            halt_checkpoint("night_learning_lab", "research_web_request")
             try:
                 found = self.research_provider.search(question["query"])
                 for item in found:
@@ -319,6 +323,7 @@ class NightLearningLab:
                 research_errors.append(
                     f"{question['question_id']}:{type(exc).__name__}"
                 )
+        halt_checkpoint("night_learning_lab", "research_complete")
         evidence = self._dedupe_evidence(evidence)[:MAX_RESEARCH_EVIDENCE]
 
         hypotheses = self._hypotheses(

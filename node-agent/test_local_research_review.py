@@ -179,8 +179,32 @@ class LocalReviewTests(unittest.TestCase):
         executable.write_bytes(b"synthetic fake executable never launched")
         script=self.root/"node-agent"/"blender_fbx_roundtrip_probe.py"
         script.write_bytes(b"# synthetic test fixture, never executed\n")
-        self.service.blender=executable
+        # Explicit dependency injection: these Blender fixtures only simulate
+        # subprocess.run and MUST NOT be sent to a spawned process.
+        self.service = LocalResearchReview(
+            self.root, research="research.json", runs=("probe",),
+            blender=executable, offline_runner="inline",
+        )
         return executable,script
+
+    def test_offline_default_uses_spawn_even_with_mocked_subprocess(self):
+        # A monkeypatch must never silently switch production to unguarded inline.
+        self.assertEqual("spawn", self.service.offline_runner)
+        with patch("local_research_review.subprocess.run") as process, \
+             patch.object(self.service, "_run_spawned", return_value={"runner": "spawn"}) as spawn:
+            result = self.service._run(
+                {"network": "NO_NETWORK_CALLS_IN_RUNNER"}, {}, None
+            )
+        self.assertEqual({"runner": "spawn"}, result)
+        spawn.assert_called_once()
+        process.assert_not_called()
+
+    def test_invalid_offline_runner_injection_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown_offline_runner"):
+            LocalResearchReview(
+                self.root, research="research.json", runs=("probe",),
+                offline_runner="disabled",
+            )
 
     def test_blender_gate_builds_fixed_command_and_checks_synthetic_result(self):
         self.configure_fake_blender()

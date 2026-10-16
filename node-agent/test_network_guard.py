@@ -14,10 +14,11 @@ from network_guard import NetworkGuardViolation, no_python_network
 
 
 def _spawned_probe(send, operation: str):
+    # urllib imports ssl which subclasses socket.socket; load it before the guard.
+    import urllib.request
     try:
         with no_python_network():
             if operation == "HTTP":
-                import urllib.request
                 urllib.request.urlopen("http://invalid.invalid", timeout=0.1)
             elif operation == "SOCKET":
                 socket.socket()

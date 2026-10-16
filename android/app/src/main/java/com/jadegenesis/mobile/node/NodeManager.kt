@@ -44,15 +44,14 @@ class NodeManager(
         "jade_genesis_nodes",
         Context.MODE_PRIVATE
     )
-    private val registryMutex = Mutex()
-
-    // Only one node refresh at a time. A caller that waited while another
-    // refresh finished reuses that fresh result instead of probing again.
-    private val refreshMutex = Mutex()
-    @Volatile
-    private var lastRefreshFinishedAt = 0L
-
     companion object {
+        // Shared by every NodeManager, including separate JadeCore instances.
+        private val registryMutex = Mutex()
+        private val refreshCoordinator = NodeRefreshCoordinator()
+        // Protected by refreshCoordinator: only a single patient attempt can start.
+        private var lastPatientRetryAtMs: Long? = null
+        private const val PROBE_PATIENT_RETRY_COOLDOWN_MS = 60_000L
+
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
         private const val KEY_REMOTE_NODES_V1 = "remote_nodes_v1"
@@ -396,21 +395,15 @@ class NodeManager(
         token: String
     ): GenesisNode = registerNode(host, port, token)
 
-    suspend fun refreshRemoteNodes(): List<GenesisNode> {
-        val requestedAt = System.currentTimeMillis()
-        return refreshMutex.withLock {
-            if (lastRefreshFinishedAt >= requestedAt) {
-                // Another refresh completed while this caller was waiting.
+    suspend fun refreshRemoteNodes(): List<GenesisNode> =
+        refreshCoordinator.refreshOrReuse(
+            refresh = { refreshRemoteNodesExclusive() },
+            reuse = {
                 registryMutex.withLock {
                     loadStoredNodesUnsafe().map { currentPublicNode(it) }
                 }
-            } else {
-                refreshRemoteNodesExclusive().also {
-                    lastRefreshFinishedAt = System.currentTimeMillis()
-                }
             }
-        }
-    }
+        )
 
     private suspend fun refreshRemoteNodesExclusive(): List<GenesisNode> {
         val current = registryMutex.withLock {
@@ -431,19 +424,35 @@ class NodeManager(
             refreshed.map { it.nodeId to it.status }
         )
         if (retryIds.isNotEmpty()) {
-            logger?.log(
-                DiagnosticLevel.INFO,
-                "node_probe_retry",
-                "Aucun nœud joignable au premier essai ; nouvel essai plus patient.",
-                mapOf("retry_count" to retryIds.size, "node_count" to current.size)
-            )
-            delay(PROBE_RETRY_DELAY_MS)
-            val retried = coroutineScope {
-                current.filter { it.nodeId in retryIds }.map { node ->
-                    async(Dispatchers.IO) { probeNode(node, attempt = 1) }
-                }.awaitAll()
-            }.associateBy { it.nodeId }
-            refreshed = refreshed.map { retried[it.nodeId] ?: it }
+            val nowMs = System.nanoTime() / 1_000_000L
+            if (NodeRefreshPolicy.shouldRunPatientRetry(
+                    nowMs, lastPatientRetryAtMs, PROBE_PATIENT_RETRY_COOLDOWN_MS
+                )) {
+                lastPatientRetryAtMs = nowMs
+                logger?.log(
+                    DiagnosticLevel.INFO,
+                    "node_probe_retry",
+                    "Aucun nœud joignable au premier essai ; nouvel essai plus patient.",
+                    mapOf("retry_count" to retryIds.size, "node_count" to current.size)
+                )
+                delay(PROBE_RETRY_DELAY_MS)
+                val retried = coroutineScope {
+                    current.filter { it.nodeId in retryIds }.map { node ->
+                        async(Dispatchers.IO) { probeNode(node, attempt = 1) }
+                    }.awaitAll()
+                }.associateBy { it.nodeId }
+                refreshed = refreshed.map { retried[it.nodeId] ?: it }
+            } else {
+                logger?.log(
+                    DiagnosticLevel.INFO,
+                    "node_probe_retry_skipped_cooldown",
+                    "Nouvel essai patient évité : période de récupération active.",
+                    mapOf(
+                        "retry_count" to retryIds.size,
+                        "cooldown_ms" to PROBE_PATIENT_RETRY_COOLDOWN_MS
+                    )
+                )
+            }
         }
 
         return registryMutex.withLock {

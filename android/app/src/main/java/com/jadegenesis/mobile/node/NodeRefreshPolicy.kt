@@ -1,11 +1,33 @@
 package com.jadegenesis.mobile.node
 
 import com.jadegenesis.mobile.model.NodeStatus
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Pure decisions used by [NodeManager.refreshRemoteNodes], kept free of Android
  * and network code so they can be covered by JVM tests.
  */
+/** A process-shared single-flight gate without Android or networking dependencies. */
+internal class NodeRefreshCoordinator {
+    private val refreshMutex = Mutex()
+    @Volatile private var completedGeneration = 0L
+
+    suspend fun <T> refreshOrReuse(
+        refresh: suspend () -> T,
+        reuse: suspend () -> T
+    ): T {
+        val generationAtRequest = completedGeneration
+        return refreshMutex.withLock {
+            if (completedGeneration != generationAtRequest) {
+                reuse()
+            } else {
+                refresh().also { completedGeneration++ }
+            }
+        }
+    }
+}
+
 internal object NodeRefreshPolicy {
 
     /**
@@ -34,6 +56,17 @@ internal object NodeRefreshPolicy {
      *   record; the next refresh will probe it again.
      * - Nodes added while the probe was running are kept unchanged.
      */
+    /** First patient probe always allowed; later attempts use a monotonic 60 s window. */
+    fun shouldRunPatientRetry(
+        nowMs: Long,
+        previousAttemptMs: Long?,
+        cooldownMs: Long
+    ): Boolean {
+        require(cooldownMs > 0L)
+        return previousAttemptMs == null || nowMs < previousAttemptMs ||
+            nowMs - previousAttemptMs >= cooldownMs
+    }
+
     fun <T> mergeProbeResults(
         snapshot: List<T>,
         latest: List<T>,

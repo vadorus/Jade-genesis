@@ -15,6 +15,7 @@ import subprocess
 import threading
 from typing import Any
 import uuid
+from unittest.mock import Mock
 
 from goal_evidence_reasoner import (
     _load_object, MAX_RESEARCH_JSON, inspect_local_probe, review_goal_evidence,

@@ -4,6 +4,11 @@ import com.jadegenesis.mobile.model.NodeStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicInteger
 
 class NodeRefreshPolicyTest {
 
@@ -85,5 +90,89 @@ class NodeRefreshPolicyTest {
             snapshot = listOf(vps), latest = listOf(vps, added), probed = listOf(probedVps)
         ) { it.id }
         assertEquals(listOf(probedVps, added), merged)
+    }
+
+    @Test
+    fun patientRetryRunsOnFirstRefresh() {
+        assertTrue(NodeRefreshPolicy.shouldRunPatientRetry(1000L, null, 60_000L))
+    }
+
+    @Test
+    fun patientRetrySkippedWithinSixtySeconds() {
+        assertEquals(false, NodeRefreshPolicy.shouldRunPatientRetry(59_999L, 0L, 60_000L))
+    }
+
+    @Test
+    fun patientRetryAllowedAtSixtySeconds() {
+        assertTrue(NodeRefreshPolicy.shouldRunPatientRetry(60_000L, 0L, 60_000L))
+    }
+
+    @Test
+    fun simultaneousDistinctCallersReuseOneProbe() = runBlocking {
+        val coordinator = NodeRefreshCoordinator()
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val probes = AtomicInteger(0)
+        var storedResult = -1
+
+        val callerOne = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.refreshOrReuse(
+                refresh = {
+                    probes.incrementAndGet()
+                    started.complete(Unit)
+                    release.await()
+                    storedResult = 42
+                    storedResult
+                },
+                reuse = { storedResult }
+            )
+        }
+        started.await()
+        val callerTwo = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.refreshOrReuse(
+                refresh = { probes.incrementAndGet(); -2 },
+                reuse = { storedResult }
+            )
+        }
+        release.complete(Unit)
+
+        assertEquals(42, callerOne.await())
+        assertEquals(42, callerTwo.await())
+        assertEquals(1, probes.get())
+    }
+
+    @Test
+    fun requestAfterCompletedRefreshStartsNewProbe() = runBlocking {
+        val coordinator = NodeRefreshCoordinator()
+        val probes = AtomicInteger(0)
+        val first = coordinator.refreshOrReuse(
+            refresh = { probes.incrementAndGet() },
+            reuse = { -1 }
+        )
+        val second = coordinator.refreshOrReuse(
+            refresh = { probes.incrementAndGet() },
+            reuse = { -1 }
+        )
+        assertEquals(1, first)
+        assertEquals(2, second)
+        assertEquals(2, probes.get())
+    }
+
+    @Test
+    fun failedRefreshDoesNotSuppressNextProbe() = runBlocking {
+        val coordinator = NodeRefreshCoordinator()
+        val probes = AtomicInteger(0)
+        try {
+            coordinator.refreshOrReuse(
+                refresh = { probes.incrementAndGet(); error("synthetic failure") },
+                reuse = { -1 }
+            )
+        } catch (_: IllegalStateException) {
+            // A failed refresh must not be marked completed.
+        }
+        assertEquals(2, coordinator.refreshOrReuse(
+            refresh = { probes.incrementAndGet() },
+            reuse = { -1 }
+        ))
     }
 }

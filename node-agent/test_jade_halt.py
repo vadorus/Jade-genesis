@@ -1,5 +1,8 @@
 """Regression tests for the local cooperative HALT (synthetic data only)."""
 import json
+import io
+from contextlib import ExitStack
+from types import SimpleNamespace
 import tempfile
 import threading
 import unittest
@@ -131,6 +134,112 @@ class HaltTests(unittest.TestCase):
                 with self.assertRaises(HaltInterrupted):
                     lab.review({"entities": []})
         self.assertEqual(1, len(calls))
+
+
+    def test_cli_status_and_halt_use_only_the_local_state(self):
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(
+                0, jade_halt.main(["halt", "--reason", "operator inspection"], halt=self.halt)
+            )
+            self.assertEqual(0, jade_halt.main(["status"], halt=self.halt))
+        lines = output.getvalue().strip().splitlines()
+        self.assertEqual("HALTED", json.loads(lines[0])["state"])
+        self.assertEqual("HALTED", json.loads(lines[1])["state"])
+        self.assertEqual("MANUAL", json.loads(lines[1])["source"])
+
+    def test_cli_rearm_requires_interactive_terminal(self):
+        self.halt.halt("stop")
+        stdin = SimpleNamespace(isatty=lambda: False)
+        with patch("sys.stdin", stdin), \
+             patch("builtins.input", side_effect=AssertionError("must not prompt")), \
+             patch("sys.stderr", new_callable=io.StringIO):
+            result = jade_halt.main(
+                ["rearm", "--operator", "reviewer", "--reason", "reviewed"],
+                halt=self.halt,
+            )
+        self.assertEqual(2, result)
+        self.assertTrue(self.halt.is_halted())
+
+    def test_cli_rearm_rejects_wrong_confirmation(self):
+        self.halt.halt("stop")
+        stdin = SimpleNamespace(isatty=lambda: True)
+        with patch("sys.stdin", stdin), \
+             patch("builtins.input", return_value="NO"), \
+             patch("sys.stderr", new_callable=io.StringIO):
+            result = jade_halt.main(
+                ["rearm", "--operator", "reviewer", "--reason", "reviewed"],
+                halt=self.halt,
+            )
+        self.assertEqual(2, result)
+        self.assertTrue(self.halt.is_halted())
+
+    def test_cli_rearm_records_named_human_and_reason(self):
+        self.halt.halt("stop")
+        stdin = SimpleNamespace(isatty=lambda: True)
+        with patch("sys.stdin", stdin), \
+             patch("builtins.input", return_value="REARM") as confirm, \
+             patch("sys.stdout", new_callable=io.StringIO) as output:
+            result = jade_halt.main(
+                ["rearm", "--operator", "human-reviewer", "--reason", "incident reviewed"],
+                halt=self.halt,
+            )
+        self.assertEqual(0, result)
+        self.assertFalse(self.halt.is_halted())
+        confirm.assert_called_once()
+        self.assertEqual("RUNNING", json.loads(output.getvalue())["state"])
+        events = [json.loads(line) for line in self.halt.journal_path.read_text().splitlines()]
+        self.assertEqual("human-reviewer", events[-1]["operator"])
+        self.assertEqual("incident reviewed", events[-1]["reason"])
+
+    def test_cli_corrupt_state_still_requires_human_confirmation(self):
+        self.halt.path.write_text("corrupt", encoding="utf-8")
+        stdin = SimpleNamespace(isatty=lambda: False)
+        with patch("sys.stdin", stdin), patch("sys.stderr", new_callable=io.StringIO):
+            result = jade_halt.main(
+                ["rearm", "--operator", "human", "--reason", "recovery"],
+                halt=self.halt,
+            )
+        self.assertEqual(2, result)
+        self.assertTrue(self.halt.is_halted())
+
+    def test_normal_sealed_failed_exam_does_not_trigger_emergency_halt(self):
+        import skill_learning_cycle as cycle
+
+        class FakeTeacher:
+            call_count = 1
+            def status(self):
+                return {"synthetic": True}
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(jade_halt, "_GLOBAL_HALT", self.halt))
+            mocks = {
+                "open_archive_skill_registry": SimpleNamespace(
+                    selected_skill=lambda *args: None
+                ),
+                "ingest_configured_attestations": {"accepted": 0},
+                "ready_dataset_pool": [object(), object(), object()],
+                "_gap_score": {"score": 3.0},
+                "_existing_goal": {"state": "OPEN"},
+                "OllamaSkillTeacher": object(),
+                "HybridSkillTeacher": FakeTeacher(),
+                "append_attribution_event": {},
+                "run_attested_learning": {"state": "SEALED_FAILED"},
+            }
+            for name, value in mocks.items():
+                if name in {"OllamaSkillTeacher", "HybridSkillTeacher"}:
+                    stack.enter_context(patch.object(cycle, name, return_value=value))
+                else:
+                    stack.enter_context(patch.object(cycle, name, return_value=value))
+            should_not_count = stack.enter_context(patch.object(
+                self.halt, "record_protected_failure",
+                side_effect=AssertionError("normal learning result counted as security incident")
+            ))
+            result = cycle.run_first_learning_cycle(
+                {"learning_trial_enabled": True}, "synthetic-identity"
+            )
+            should_not_count.assert_not_called()
+        self.assertEqual("SEALED_FAILED", result["status"])
+        self.assertFalse(self.halt.is_halted())
 
 if __name__ == "__main__":
     unittest.main()

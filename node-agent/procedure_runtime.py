@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+from contextlib import nullcontext
+from jade_halt import _GLOBAL_HALT
+from network_guard import no_python_network
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -417,8 +421,19 @@ def execute_skill(
         max_steps=max(1, int(max_steps)),
         max_cost_units=max(1, int(max_cost_units)),
     )
-    result = _eval_node(spec["body"], normalized_input, budget)
-    _validate_contract_value(result, spec["output_contract"], "output")
+    # The DSL is pure, but detect accidental Python socket/DNS calls as
+    # defense in depth. Never patch socket globally inside a threaded server.
+    guard = (
+        no_python_network(
+            on_violation=lambda exc: _GLOBAL_HALT.network_violation(
+                runner="procedure_runtime", operation=exc.operation
+            )
+        )
+        if threading.active_count() == 1 else nullcontext()
+    )
+    with guard:
+        result = _eval_node(spec["body"], normalized_input, budget)
+        _validate_contract_value(result, spec["output_contract"], "output")
 
     return {
         "skill_id": spec["skill_id"],

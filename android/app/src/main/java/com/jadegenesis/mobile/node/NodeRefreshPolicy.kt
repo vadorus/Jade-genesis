@@ -4,10 +4,6 @@ import com.jadegenesis.mobile.model.NodeStatus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/**
- * Pure decisions used by [NodeManager.refreshRemoteNodes], kept free of Android
- * and network code so they can be covered by JVM tests.
- */
 /** A process-shared single-flight gate without Android or networking dependencies. */
 internal class NodeRefreshCoordinator {
     private val refreshMutex = Mutex()
@@ -28,6 +24,10 @@ internal class NodeRefreshCoordinator {
     }
 }
 
+/**
+ * Pure decisions used by [NodeManager.refreshRemoteNodes], kept free of Android
+ * and network code so they can be covered by JVM tests.
+ */
 internal object NodeRefreshPolicy {
 
     /**
@@ -46,16 +46,6 @@ internal object NodeRefreshPolicy {
             .toSet()
     }
 
-    /**
-     * Applies probe results to the registry as it is now, not as it was when the
-     * probe started.
-     *
-     * - A node deleted while the probe was running is not added back.
-     * - A node whose stored record changed while the probe was running
-     *   (re-pairing, token or route edit, another probe) keeps the newer stored
-     *   record; the next refresh will probe it again.
-     * - Nodes added while the probe was running are kept unchanged.
-     */
     /** First patient probe always allowed; later attempts use a monotonic 60 s window. */
     fun shouldRunPatientRetry(
         nowMs: Long,
@@ -67,6 +57,16 @@ internal object NodeRefreshPolicy {
             nowMs - previousAttemptMs >= cooldownMs
     }
 
+    /**
+     * Applies probe results to the registry as it is now, not as it was when the
+     * probe started.
+     *
+     * - A node deleted while the probe was running is not added back.
+     * - A node whose stored record changed while the probe was running
+     *   (re-pairing, token or route edit, another probe) keeps the newer stored
+     *   record; the next refresh will probe it again.
+     * - Nodes added while the probe was running are kept unchanged.
+     */
     fun <T> mergeProbeResults(
         snapshot: List<T>,
         latest: List<T>,

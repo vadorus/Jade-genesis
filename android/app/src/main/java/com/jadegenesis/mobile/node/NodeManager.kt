@@ -48,9 +48,21 @@ class NodeManager(
         // Shared by every NodeManager, including separate JadeCore instances.
         private val registryMutex = Mutex()
         private val refreshCoordinator = NodeRefreshCoordinator()
-        // Protected by refreshCoordinator: only a single patient attempt can start.
+        // Written under refreshCoordinator (a single patient attempt can start);
+        // cleared by onNetworkRestored() from a system callback thread.
+        @Volatile
         private var lastPatientRetryAtMs: Long? = null
         private const val PROBE_PATIENT_RETRY_COOLDOWN_MS = 60_000L
+
+        /**
+         * A validated network came back after a loss. The 60 s cooldown exists to
+         * keep messages fast while the phone is offline; it must not delay the
+         * reconnection probe, which typically needs the patient attempt while the
+         * Tailscale tunnel wakes up.
+         */
+        fun onNetworkRestored() {
+            lastPatientRetryAtMs = null
+        }
 
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"

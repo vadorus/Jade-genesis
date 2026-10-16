@@ -16,6 +16,9 @@ import com.jadegenesis.mobile.model.QueuedTaskSnapshot
 import com.jadegenesis.mobile.model.RuntimeNodeSnapshot
 import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.model.ToolCandidateSnapshot
+import com.jadegenesis.mobile.node.NetworkRestoreWatcher
+import com.jadegenesis.mobile.node.NodeManager
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,16 +109,21 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshNodes() {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(
-                nodeBusy = true,
-                nodeMessage = "Jade sonde les routes enregistrées…",
-                error = null
-            )
-            runCatching {
-                val self = core.refreshNodes()
-                Pair(self, core.runtimeSnapshots(self.knownNodes))
-            }.onSuccess { (self, runtimes) ->
+        viewModelScope.launch { refreshNodesNow() }
+    }
+
+    /** Probes the nodes and updates the UI; returns the number of remote nodes ONLINE, or -1 on failure. */
+    private suspend fun refreshNodesNow(): Int {
+        _state.value = _state.value.copy(
+            nodeBusy = true,
+            nodeMessage = "Jade sonde les routes enregistrées…",
+            error = null
+        )
+        return runCatching {
+            val self = core.refreshNodes()
+            Pair(self, core.runtimeSnapshots(self.knownNodes))
+        }.fold(
+            onSuccess = { (self, runtimes) ->
                 val online = self.knownNodes.count { it.status == NodeStatus.ONLINE }
                 _state.value = _state.value.copy(
                     nodeBusy = false,
@@ -124,14 +132,46 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     nodeMessage = "Registre rafraîchi : $online nœud(s) distant(s) en ligne.",
                     error = null
                 )
-            }.onFailure { e ->
+                online
+            },
+            onFailure = { e ->
                 _state.value = _state.value.copy(
                     nodeBusy = false,
                     nodeMessage = "",
                     error = e.message ?: e.toString()
                 )
+                -1
+            }
+        )
+    }
+
+    // 0.1.25: re-check the nodes when a validated network comes back after a loss.
+    // Before, they stayed OFFLINE until the app was reopened (measured: 76 s+).
+    private var networkRestoreJob: Job? = null
+    private val networkRestoreWatcher = NetworkRestoreWatcher(
+        context = application,
+        onRestored = { viewModelScope.launch { onNetworkRestored() } }
+    ).also { it.start() }
+
+    private fun onNetworkRestored() {
+        if (networkRestoreJob?.isActive == true) return
+        networkRestoreJob = viewModelScope.launch {
+            NodeManager.onNetworkRestored()
+            // Let the phone's Tailscale tunnel come back before probing.
+            delay(NETWORK_RESTORE_FIRST_PROBE_DELAY_MS)
+            val online = refreshNodesNow()
+            if (online == 0) {
+                // Tunnel slower than expected: one later attempt, never a loop.
+                delay(NETWORK_RESTORE_SECOND_PROBE_DELAY_MS)
+                NodeManager.onNetworkRestored()
+                refreshNodesNow()
             }
         }
+    }
+
+    override fun onCleared() {
+        networkRestoreWatcher.stop()
+        super.onCleared()
     }
 
     fun registerNode(host: String, port: Int, token: String) {
@@ -686,3 +726,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 }
+
+// Delays used when a validated network comes back (see onNetworkRestored).
+private const val NETWORK_RESTORE_FIRST_PROBE_DELAY_MS = 3_000L
+private const val NETWORK_RESTORE_SECOND_PROBE_DELAY_MS = 12_000L

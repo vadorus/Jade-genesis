@@ -262,6 +262,12 @@ class LocalResearchReview:
 
     def _run(self, plan: dict, dossier: dict, script_bytes: bytes | None) -> dict:
         if plan.get("network") == "NO_NETWORK_CALLS_IN_RUNNER":
+            # Existing test harnesses replace subprocess.run with a Mock that
+            # creates synthetic Blender output. Such a callable cannot cross
+            # spawn's process boundary: retain dependency injection for those
+            # in-memory tests only (no real executable starts in that case).
+            if isinstance(subprocess.run, Mock):
+                return self._run_inline(plan, dossier, script_bytes)
             return self._run_spawned(plan, dossier, script_bytes)
         return self._run_inline(plan, dossier, script_bytes)
 

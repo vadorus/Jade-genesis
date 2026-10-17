@@ -18,7 +18,7 @@ import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NetworkRestoreWatcher
 import com.jadegenesis.mobile.node.NodeManager
-import kotlinx.coroutines.Job
+import com.jadegenesis.mobile.node.CoalescingRunner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -147,25 +147,24 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     // 0.1.25: re-check the nodes when a validated network comes back after a loss.
     // Before, they stayed OFFLINE until the app was reopened (measured: 76 s+).
-    private var networkRestoreJob: Job? = null
+    // A reconnection signalled while a re-check is running is not dropped: the
+    // runner does one more full re-check afterwards (Codex review of #74).
+    private val networkRestoreRunner = CoalescingRunner(viewModelScope) { recheckAfterRestore() }
     private val networkRestoreWatcher = NetworkRestoreWatcher(
         context = application,
-        onRestored = { viewModelScope.launch { onNetworkRestored() } }
+        onRestored = { networkRestoreRunner.request() }
     ).also { it.start() }
 
-    private fun onNetworkRestored() {
-        if (networkRestoreJob?.isActive == true) return
-        networkRestoreJob = viewModelScope.launch {
+    private suspend fun recheckAfterRestore() {
+        NodeManager.onNetworkRestored()
+        // Let the phone's Tailscale tunnel come back before probing.
+        delay(NETWORK_RESTORE_FIRST_PROBE_DELAY_MS)
+        val online = refreshNodesNow()
+        if (online == 0) {
+            // Tunnel slower than expected: one later attempt, never a loop.
+            delay(NETWORK_RESTORE_SECOND_PROBE_DELAY_MS)
             NodeManager.onNetworkRestored()
-            // Let the phone's Tailscale tunnel come back before probing.
-            delay(NETWORK_RESTORE_FIRST_PROBE_DELAY_MS)
-            val online = refreshNodesNow()
-            if (online == 0) {
-                // Tunnel slower than expected: one later attempt, never a loop.
-                delay(NETWORK_RESTORE_SECOND_PROBE_DELAY_MS)
-                NodeManager.onNetworkRestored()
-                refreshNodesNow()
-            }
+            refreshNodesNow()
         }
     }
 
@@ -727,6 +726,6 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-// Delays used when a validated network comes back (see onNetworkRestored).
+// Delays used when a validated network comes back (see recheckAfterRestore).
 private const val NETWORK_RESTORE_FIRST_PROBE_DELAY_MS = 3_000L
 private const val NETWORK_RESTORE_SECOND_PROBE_DELAY_MS = 12_000L

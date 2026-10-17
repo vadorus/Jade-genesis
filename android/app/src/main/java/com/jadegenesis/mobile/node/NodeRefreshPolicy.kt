@@ -46,6 +46,24 @@ internal object NodeRefreshPolicy {
             .toSet()
     }
 
+    /** When a patient retry started, and in which network generation. */
+    data class PatientRetryMark(val atMs: Long, val generation: Long)
+
+    /**
+     * Patient retry decision across network reconnections: a mark left by a
+     * refresh from an earlier network generation never blocks the current one,
+     * even when it was written after the reconnection was signalled.
+     */
+    fun shouldRunPatientRetry(
+        nowMs: Long,
+        previous: PatientRetryMark?,
+        generation: Long,
+        cooldownMs: Long
+    ): Boolean {
+        if (previous == null || previous.generation < generation) return true
+        return shouldRunPatientRetry(nowMs, previous.atMs, cooldownMs)
+    }
+
     /** First patient probe always allowed; later attempts use a monotonic 60 s window. */
     fun shouldRunPatientRetry(
         nowMs: Long,

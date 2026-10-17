@@ -34,6 +34,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 
 class NodeManager(
     context: Context,
@@ -48,20 +49,24 @@ class NodeManager(
         // Shared by every NodeManager, including separate JadeCore instances.
         private val registryMutex = Mutex()
         private val refreshCoordinator = NodeRefreshCoordinator()
-        // Written under refreshCoordinator (a single patient attempt can start);
-        // cleared by onNetworkRestored() from a system callback thread.
+        // Written only under refreshCoordinator (a single patient attempt can
+        // start). A mark records the network generation its refresh started
+        // in, so a refresh that began before a reconnection can never restore
+        // the 60 s cooldown for the refreshes that follow it.
         @Volatile
-        private var lastPatientRetryAtMs: Long? = null
+        private var lastPatientRetry: NodeRefreshPolicy.PatientRetryMark? = null
+        private val networkGeneration = AtomicLong(0L)
         private const val PROBE_PATIENT_RETRY_COOLDOWN_MS = 60_000L
 
         /**
          * A validated network came back after a loss. The 60 s cooldown exists to
          * keep messages fast while the phone is offline; it must not delay the
          * reconnection probe, which typically needs the patient attempt while the
-         * Tailscale tunnel wakes up.
+         * Tailscale tunnel wakes up. Starting a new network generation makes
+         * every earlier mark irrelevant, without racing with a running refresh.
          */
         fun onNetworkRestored() {
-            lastPatientRetryAtMs = null
+            networkGeneration.incrementAndGet()
         }
 
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
@@ -418,6 +423,8 @@ class NodeManager(
         )
 
     private suspend fun refreshRemoteNodesExclusive(): List<GenesisNode> {
+        // Network generation this refresh belongs to (see onNetworkRestored).
+        val generation = networkGeneration.get()
         val current = registryMutex.withLock {
             loadStoredNodesUnsafe()
         }
@@ -438,9 +445,9 @@ class NodeManager(
         if (retryIds.isNotEmpty()) {
             val nowMs = System.nanoTime() / 1_000_000L
             if (NodeRefreshPolicy.shouldRunPatientRetry(
-                    nowMs, lastPatientRetryAtMs, PROBE_PATIENT_RETRY_COOLDOWN_MS
+                    nowMs, lastPatientRetry, generation, PROBE_PATIENT_RETRY_COOLDOWN_MS
                 )) {
-                lastPatientRetryAtMs = nowMs
+                lastPatientRetry = NodeRefreshPolicy.PatientRetryMark(nowMs, generation)
                 logger?.log(
                     DiagnosticLevel.INFO,
                     "node_probe_retry",

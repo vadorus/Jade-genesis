@@ -21,8 +21,8 @@ android {
         applicationId = "com.jadegenesis.mobile"
         minSdk = 31
         targetSdk = 37
-        versionCode = 42
-        versionName = "0.1.24"
+        versionCode = 44
+        versionName = "0.1.26"
         // Only used by the independent on-device validation package.
         testInstrumentationRunner = "com.jadegenesis.mobile.validation.MemoryPersistenceInstrumentation"
     }

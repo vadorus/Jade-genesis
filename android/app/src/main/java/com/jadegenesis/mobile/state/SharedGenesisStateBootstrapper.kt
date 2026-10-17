@@ -85,6 +85,10 @@ class SharedGenesisStateBootstrapper(context: Context) {
                 put("resource_mode", budget.mode.name)
                 put("recommended_working_set_mb", budget.recommendedWorkingSetMb)
                 put("captured_at", device.capturedAt)
+                // #78: presence is not use. The VPS night cycle decides on the
+                // last real use, not on the age of this background snapshot.
+                put("user_activity_tracked", true)
+                put("last_user_activity_at", UserActivityTracker.lastActivityAt(appContext))
             }.toString()
         )
 

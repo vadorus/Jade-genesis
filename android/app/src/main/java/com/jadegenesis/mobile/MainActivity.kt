@@ -12,6 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.jadegenesis.mobile.screen.FocusCropActivity
 import com.jadegenesis.mobile.screen.ScreenObserverRepository
+import com.jadegenesis.mobile.state.UserActivityTracker
 import com.jadegenesis.mobile.ui.JadeAppV2
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +28,12 @@ class MainActivity : ComponentActivity() {
             JadeAppV2()
         }
         confirmSharedImageIfPresent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // #78: Jade on screen = real use (the VPS night cycle waits for 2 h without it).
+        UserActivityTracker.markActive(this)
     }
 
     override fun onNewIntent(intent: Intent) {

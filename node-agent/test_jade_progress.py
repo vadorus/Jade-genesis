@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from jade_progress import DAY_MS, generate_report, format_text
 
@@ -91,7 +92,8 @@ class ProgressReportTest(unittest.TestCase):
         })
         self.write("jade-halt.json", {
             "schema_version": 1, "state": "RUNNING", "reason": TOKEN_CANARY,
-            "at_ms": THIS + 30,
+            "source": "MANUAL", "at_ms": THIS + 30,
+            "sealed_access_violations": 0, "consecutive_protected_failures": 0,
         })
         self.jsonl("jade-halt.jsonl", [
             {"kind": "halt_transition", "at_ms": THIS + 100, "reason": TOKEN_CANARY},
@@ -111,7 +113,7 @@ class ProgressReportTest(unittest.TestCase):
         self.assertEqual(current["skills"], {
             "goals_opened": 1, "candidates_proposed": 2,
             "sealed_passed": 1, "sealed_failed": 0,
-            "skills_retained": 1, "teacher_calls": 2,
+            "skills_retained": 1, "teacher_calls": None,
         })
         self.assertEqual(previous["skills"]["candidates_proposed"], 1)
         self.assertEqual(report["delta"]["skills"]["candidates_proposed"], 1)
@@ -139,7 +141,7 @@ class ProgressReportTest(unittest.TestCase):
         self.assertIsNone(current["cycles"]["skipped"])
         self.assertIsNone(current["cycles"]["skip_reasons"])
         self.assertIsNone(current["security"]["halt_transitions"])
-        self.assertIsNone(report["halt_state"])
+        self.assertEqual(report["halt_state"], "RUNNING")
         self.assertIsNone(report["delta"]["skills"]["teacher_calls"])
         self.assertFalse(list(self.root.iterdir()))
 
@@ -164,7 +166,7 @@ class ProgressReportTest(unittest.TestCase):
         self.assertIsNone(result["current"]["metrics"]["skills"]["candidates_proposed"])
         self.assertIsNone(result["current"]["metrics"]["skills"]["teacher_calls"])
         self.assertIsNone(result["previous"]["metrics"]["skills"]["teacher_calls"])
-        self.assertIn("weekly_teacher_attempts_not_reconstructible", result["warnings"])
+        self.assertIn("weekly_candidate_attempts_not_reconstructible", result["warnings"])
 
     def test_no_file_write_and_no_secret_in_text_or_json(self):
         self.fixture()
@@ -190,7 +192,7 @@ class ProgressReportTest(unittest.TestCase):
         obj = json.loads(result.stdout)
         self.assertEqual(obj["schema_version"], 1)
         self.assertEqual(obj["days"], 7)
-        self.assertIsNone(obj["halt_state"])
+        self.assertEqual(obj["halt_state"], "RUNNING")
         self.assertEqual(result.stderr, "")
 
     def test_nested_store_shapes_fail_closed(self):
@@ -223,6 +225,81 @@ class ProgressReportTest(unittest.TestCase):
             generate_report(self.root, days=0, now_ms=NOW)
         with self.assertRaises(ValueError):
             generate_report(self.root, days=366, now_ms=NOW)
+
+    @staticmethod
+    def valid_halt(state="HALTED"):
+        return {"schema_version": 1, "state": state, "reason": "synthetic",
+                "source": "MANUAL", "at_ms": 10,
+                "sealed_access_violations": 0, "consecutive_protected_failures": 0}
+
+    def assert_halt_parity_readonly(self, raw, expected, *, unreadable=False):
+        # The oracle may journal corrupt state, so give it a separate directory.
+        from jade_halt import JadeHalt
+        with tempfile.TemporaryDirectory() as case_dir, tempfile.TemporaryDirectory() as oracle_dir:
+            case, oracle = Path(case_dir), Path(oracle_dir)
+            for directory in (case, oracle):
+                path = directory / "jade-halt.json"
+                if unreadable:
+                    path.mkdir()  # read_text raises OSError on every platform.
+                elif raw is not None:
+                    path.write_bytes(raw)
+                (directory / "jade-halt.jsonl").write_text(
+                    '{"kind":"existing_synthetic_event","at_ms":1}\n', encoding="utf-8")
+                (directory / "jade-halt.json.bak").write_text(
+                    json.dumps(self.valid_halt("HALTED")), encoding="utf-8")
+            actual_oracle = JadeHalt(oracle / "jade-halt.json")._load()["state"]
+            self.assertEqual(actual_oracle, expected)
+            def snapshot():
+                return {str(p.relative_to(case)): hashlib.sha256(p.read_bytes()).hexdigest()
+                        if p.is_file() else "directory" for p in case.rglob("*")}
+            before = snapshot()
+            with patch.object(JadeHalt, "status", side_effect=AssertionError("Writer called")), \
+                    patch.object(JadeHalt, "_load", side_effect=AssertionError("Loader called")):
+                report = generate_report(case, now_ms=NOW)
+            self.assertEqual(report["halt_state"], expected)
+            self.assertEqual(before, snapshot())
+            return report
+
+    def test_halt_absent_matches_running_without_creating_files(self):
+        report = self.assert_halt_parity_readonly(None, "RUNNING")
+        self.assertNotIn("halt_state_unreadable_fail_closed", report["warnings"])
+
+    def test_halt_unreadable_matches_fail_closed_and_preserves_journal(self):
+        for raw in (b"{bad json", b"\xff\xfe"):
+            with self.subTest(raw=raw):
+                report = self.assert_halt_parity_readonly(raw, "HALTED")
+                self.assertIn("halt_state_unreadable_fail_closed", report["warnings"])
+                self.assertIn("HALTED (état illisible, fail-closed)", format_text(report))
+        report = self.assert_halt_parity_readonly(None, "HALTED", unreadable=True)
+        self.assertIn("halt_state_unreadable_fail_closed", report["warnings"])
+
+    def test_halt_invalid_schema_or_fields_matches_fail_closed(self):
+        cases = [[], {"schema_version": 1, "state": "RUNNING"}]
+        for field, value in (("schema_version", 2), ("state", "UNKNOWN"),
+                             ("reason", None), ("source", 7)):
+            cases.append({**self.valid_halt("RUNNING"), field: value})
+        for field in ("reason", "source", "at_ms", "sealed_access_violations",
+                      "consecutive_protected_failures"):
+            missing = self.valid_halt("RUNNING"); del missing[field]; cases.append(missing)
+        for field in ("at_ms", "sealed_access_violations", "consecutive_protected_failures"):
+            for value in (-1, "0", 1.5, None):
+                cases.append({**self.valid_halt("RUNNING"), field: value})
+        for value in cases:
+            with self.subTest(value=value):
+                report = self.assert_halt_parity_readonly(json.dumps(value).encode(), "HALTED")
+                self.assertIn("halt_state_unreadable_fail_closed", report["warnings"])
+
+    def test_halt_valid_halted_matches_runtime_without_writing(self):
+        report = self.assert_halt_parity_readonly(json.dumps(self.valid_halt()).encode(), "HALTED")
+        self.assertNotIn("halt_state_unreadable_fail_closed", report["warnings"])
+
+    def test_teacher_calls_is_unknown_without_real_counter(self):
+        self.fixture()
+        report = generate_report(self.root, now_ms=NOW)
+        self.assertIsNone(report["current"]["metrics"]["skills"]["teacher_calls"])
+        self.assertIsNone(report["previous"]["metrics"]["skills"]["teacher_calls"])
+        self.assertIsNone(report["delta"]["skills"]["teacher_calls"])
+        self.assertIn("teacher_calls_not_recorded", report["warnings"])
 
 
 if __name__ == "__main__":

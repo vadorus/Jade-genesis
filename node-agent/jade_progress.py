@@ -103,12 +103,38 @@ def _read_jsonl(root: Path, key: str,
     return entries
 
 
+def _read_halt_state(root: Path, warnings: set[str]) -> str:
+    """Mirror JadeHalt._load validation without recovery, logging or writes.
+
+    Keep these checks in parity with jade_halt.py; that file is outside this
+    report's reserved scope. Never call the runtime loader/status from here.
+    """
+    path = root / SOURCES["halt_state"]
+    try:
+        if not path.exists():
+            return "RUNNING"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+            raise ValueError("invalid_schema")
+        if raw.get("state") not in {"RUNNING", "HALTED"}:
+            raise ValueError("invalid_state")
+        if not isinstance(raw.get("reason"), str) or not isinstance(raw.get("source"), str):
+            raise ValueError("invalid_metadata")
+        for key in ("at_ms", "sealed_access_violations", "consecutive_protected_failures"):
+            if not isinstance(raw.get(key), int) or raw[key] < 0:
+                raise ValueError("invalid_count")
+        return raw["state"]
+    except (OSError, UnicodeError, ValueError, TypeError):
+        warnings.add("halt_state_unreadable_fail_closed")
+        return "HALTED"
+
+
 def _goal_attempts(goals: dict[str, Any], start: int,
                    end: int) -> int | None:
     """Count documented attempts only if the entire observable goal fits.
 
     The goal store has no per-attempt timestamps. For goals straddling a
-    boundary, never invent a weekly candidate/teacher count.
+    boundary, never invent a weekly candidate count.
     """
     count = 0
     for goal in goals.values():
@@ -147,15 +173,12 @@ def _metrics(root_data: dict[str, Any], start: int,
             )
             total = _goal_attempts(records, start, end)
             output["skills"]["candidates_proposed"] = total
-            # Each persisted candidate_count is one completed teacher attempt.
-            # Failed or unpersisted teacher calls cannot be reconstructed.
-            output["skills"]["teacher_calls"] = total
             if total is None:
-                warnings.add("weekly_teacher_attempts_not_reconstructible")
-            elif total > 0:
-                warnings.add("teacher_calls_persisted_lower_bound")
+                warnings.add("weekly_candidate_attempts_not_reconstructible")
         else:
             warnings.add("invalid_shape:" + SOURCES["goals"])
+    # Candidates do not measure actual teacher/model requests.
+    warnings.add("teacher_calls_not_recorded")
 
     ledger = root_data["ledger"]
     if ledger is not None:
@@ -267,6 +290,7 @@ def _metrics(root_data: dict[str, Any], start: int,
                         failed[phase] = failed.get(phase, 0) + 1
             output["cycles"]["failed_phases"] = dict(sorted(failed.items()))
             warnings.add("cycle_skips_not_durably_recorded")
+            warnings.add("cycle_failures_not_durably_recorded")
             warnings.add("cycle_history_bounded")
         else:
             warnings.add("incomplete_cycle_history")
@@ -310,13 +334,9 @@ def generate_report(config_dir: Path | str | None = None, *,
         "attribution": _read_jsonl(root, "attribution", warnings),
         "strategies": _read_json(root, "strategies", "history", warnings),
         "cycles": _read_json(root, "cycles", "runs", warnings),
-        "halt_state": _read_json(root, "halt_state", None, warnings),
         "halt_events": _read_jsonl(root, "halt_events", warnings),
     }
-    state = data["halt_state"]
-    if state is not None and state.get("state") not in {"RUNNING", "HALTED"}:
-        warnings.add("invalid_halt_state")
-        state = None
+    state = _read_halt_state(root, warnings)
     size = days * DAY_MS
     previous = _metrics(data, now - 2 * size, now - size, warnings)
     current = _metrics(data, now - size, now, warnings)
@@ -337,16 +357,23 @@ def generate_report(config_dir: Path | str | None = None, *,
             "start_ms": now - 2 * size, "end_ms": now - size, "metrics": previous
         },
         "delta": delta,
-        "halt_state": state["state"] if state is not None else None,
+        "halt_state": state,
         "warnings": sorted(warnings),
     }
 
 
+def _pretty(value: Any) -> str:
+    return "inconnu" if value is None else str(value)
+
+
 def format_text(report: dict[str, Any]) -> str:
+    halt_label = report["halt_state"]
+    if "halt_state_unreadable_fail_closed" in report["warnings"]:
+        halt_label = "HALTED (état illisible, fail-closed)"
     lines = [
         "Jade Genesis — progression (lecture seule, V0)",
         "Période : {} jour(s) | HALT actuel : {}".format(
-            report["days"], report["halt_state"] or "inconnu"
+            report["days"], halt_label
         ),
     ]
     current = report["current"]["metrics"]
@@ -356,10 +383,8 @@ def format_text(report: dict[str, Any]) -> str:
         lines.append(section.upper())
         for name in names:
             a, b, d = current[section][name], previous[section][name], report["delta"][section][name]
-            def pretty(value: Any) -> str:
-                return "inconnu" if value is None else str(value)
             lines.append("  {} : {} | avant {} | delta {}".format(
-                name, pretty(a), pretty(b), pretty(d)
+                name, _pretty(a), _pretty(b), _pretty(d)
             ))
     phases = current["cycles"].get("failed_phases")
     if phases is not None:

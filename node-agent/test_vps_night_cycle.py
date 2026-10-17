@@ -359,6 +359,7 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         supervisor.run_once(now_ms=NIGHT_0200_PARIS - 3 * HOUR_MS)                 # 23:00
         supervisor.run_once(now_ms=NIGHT_0200_PARIS)
         reloaded = NightCycleDecisionLog(Path(self.temp.name) / "night-cycle-decisions.json")
+        self.assertEqual(0, reloaded.last_started_at())
         self.assertEqual(
             [("SKIPPED", "outside_night_window"), ("SKIPPED", "pixel_in_use")],
             [(row["status"], row["reason"]) for row in reloaded.load()],
@@ -374,15 +375,95 @@ class VpsNightCycleSupervisorTest(unittest.TestCase):
         self.assertEqual(MAX_DECISIONS, len(rows))
         self.assertEqual(10, rows[0]["at"])
 
-    def test_invalid_window_is_reported_and_keeps_the_old_cadence(self) -> None:
+    def test_invalid_window_is_reported_and_keeps_the_previous_behaviour(self) -> None:
         supervisor = self.supervisor(window="nuit")
         self.assertTrue(supervisor.status()["night_window_invalid"])
         self.assertEqual("", supervisor.status()["night_window_paris"])
+        # Presence rule unchanged without a valid window, even with a 0.1.27 app.
         self.charging_phone(NIGHT_0200_PARIS, last_use=NIGHT_0200_PARIS - 4 * HOUR_MS)
-        first = supervisor.run_once(now_ms=NIGHT_0200_PARIS)
+        blocked = supervisor.run_once(now_ms=NIGHT_0200_PARIS)
+        self.assertEqual(("SKIPPED", "pixel_active"), (blocked["status"], blocked["reason"]))
+        later = NIGHT_0200_PARIS + 3 * HOUR_MS                  # snapshot now 3 h old
+        first = supervisor.run_once(now_ms=later)
         self.assertEqual("SUCCESS", first["status"])
-        second = supervisor.run_once(now_ms=NIGHT_0200_PARIS + HOUR_MS)
+        second = supervisor.run_once(now_ms=later + HOUR_MS)
         self.assertEqual(("SKIPPED", "cadence_guard"), (second["status"], second["reason"]))
+
+    # --- Codex review of #80 -----------------------------------------------------
+
+    @staticmethod
+    def next_dst_sunday(month: int) -> int:
+        """01:00 UTC on the next last-Sunday of [month] after the real clock."""
+        from vps_night_cycle import _last_sunday_0100_utc
+        year = datetime.now(timezone.utc).year
+        moment = _last_sunday_0100_utc(year, month)
+        if moment.timestamp() * 1_000 <= time.time() * 1_000 + 2 * 86_400_000:
+            moment = _last_sunday_0100_utc(year + 1, month)
+        return int(moment.timestamp() * 1_000)
+
+    def test_end_of_summer_time_night_runs_only_once(self) -> None:
+        change = self.next_dst_sunday(10)                     # 03:00 summer -> 02:00 winter
+        before = change - 2 * HOUR_MS                         # 01:00 Paris (summer, UTC+2)
+        after = change + 5 * 60 * 1_000                       # 02:05 Paris (winter, UTC+1)
+        self.assertEqual(night_window_start_ms(before, (30, 390)),
+                         night_window_start_ms(after, (30, 390)))
+        self.charging_phone(before, last_use=before - 4 * HOUR_MS)
+        supervisor = self.supervisor(window="00:30-06:30")
+        self.assertEqual("SUCCESS", supervisor.run_once(now_ms=before)["status"])
+        again = supervisor.run_once(now_ms=after)
+        self.assertEqual(("SKIPPED", "already_ran_tonight"), (again["status"], again["reason"]))
+        self.assertEqual("SUCCESS", supervisor.run_once(now_ms=after + 24 * HOUR_MS)["status"])
+
+    def test_start_of_summer_time_night_runs_only_once(self) -> None:
+        change = self.next_dst_sunday(3)                      # 02:00 winter -> 03:00 summer
+        before = change - HOUR_MS + 10 * 60 * 1_000           # 01:10 Paris (winter, UTC+1)
+        after = change + HOUR_MS                              # 04:00 Paris (summer, UTC+2)
+        self.assertEqual(night_window_start_ms(before, (30, 390)),
+                         night_window_start_ms(after, (30, 390)))
+        self.charging_phone(before, last_use=before - 4 * HOUR_MS)
+        supervisor = self.supervisor(window="00:30-06:30")
+        self.assertEqual("SUCCESS", supervisor.run_once(now_ms=before)["status"])
+        again = supervisor.run_once(now_ms=after)
+        self.assertEqual(("SKIPPED", "already_ran_tonight"), (again["status"], again["reason"]))
+
+    def test_crash_before_the_report_consumes_the_night(self) -> None:
+        self.charging_phone(NIGHT_0200_PARIS, last_use=NIGHT_0200_PARIS - 4 * HOUR_MS)
+        supervisor = self.supervisor(window="00:30-06:30")
+        original = supervisor._execute
+        def crash(view, started_at):
+            raise RuntimeError("boom")
+        supervisor._execute = crash
+        with self.assertRaises(RuntimeError):
+            supervisor.run_once(now_ms=NIGHT_0200_PARIS)
+        supervisor._execute = original
+        retry = supervisor.run_once(now_ms=NIGHT_0200_PARIS + 15 * 60 * 1_000)
+        self.assertEqual(("SKIPPED", "already_attempted_tonight"), (retry["status"], retry["reason"]))
+        self.assertEqual("SUCCESS", supervisor.run_once(now_ms=NIGHT_0200_PARIS + 24 * HOUR_MS)["status"])
+
+    def test_trace_names_failed_phases_and_concurrent_runs(self) -> None:
+        self.seed(NIGHT_0200_PARIS - 5 * 60 * 1_000, include_reviews=False, phone_extra={
+            "user_activity_tracked": True,
+            "last_user_activity_at": NIGHT_0200_PARIS - 4 * HOUR_MS,
+        })
+        supervisor = self.supervisor(window="00:30-06:30")
+        result = supervisor.run_once(now_ms=NIGHT_0200_PARIS)
+        self.assertEqual("PARTIAL", result["status"])
+        supervisor._run_lock.acquire()
+        try:
+            busy = supervisor.run_once(now_ms=NIGHT_0200_PARIS + 1_000)
+        finally:
+            supervisor._run_lock.release()
+        self.assertEqual("already_running", busy["reason"])
+        rows = [(row["status"], row["reason"]) for row in supervisor.decisions.load()]
+        self.assertEqual(("STARTED", "eligible"), rows[0])
+        self.assertEqual("PARTIAL", rows[1][0])
+        self.assertTrue(rows[1][1].startswith("failed_phases:"), rows[1])
+        self.assertEqual(("SKIPPED", "already_running"), rows[2])
+
+    def test_partial_deployment_new_app_without_window_keeps_presence_rule(self) -> None:
+        self.charging_phone(NIGHT_0200_PARIS, last_use=NIGHT_0200_PARIS - 4 * HOUR_MS)
+        result = self.supervisor().run_once(now_ms=NIGHT_0200_PARIS)
+        self.assertEqual(("SKIPPED", "pixel_active"), (result["status"], result["reason"]))
 
 
 if __name__ == "__main__":

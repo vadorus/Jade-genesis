@@ -135,8 +135,10 @@ def paris_offset_ms(utc_ms: int) -> int:
 def night_window_start_ms(now_ms: int, window: tuple[int, int]) -> int | None:
     """UTC start of the night window containing now_ms, or None outside it.
 
-    A window may cross midnight (e.g. 23:00-05:00). Around a DST change the
-    start can be off by one hour, which never changes "same night or not".
+    A window may cross midnight (e.g. 23:00-05:00). "Inside or not" uses the
+    offset at now; the start instant uses the offset in force AT THE START
+    (Codex review of #80: on the night summer time ends, 02:05 Paris after the
+    clock goes back must give the same start as 01:00 Paris before it).
     """
     start, end = window
     offset = paris_offset_ms(now_ms)
@@ -154,7 +156,18 @@ def night_window_start_ms(now_ms: int, window: tuple[int, int]) -> int | None:
         start_local = local_midnight - day_ms + start * 60_000
     else:
         return None
-    return start_local - offset
+    return local_to_utc_ms(start_local)
+
+
+def local_to_utc_ms(local_ms: int) -> int:
+    """Paris wall-clock time (as ms) -> UTC, with the offset of that instant.
+
+    Two passes settle the offset across a DST change. For a wall time that
+    exists twice (02:00-03:00 on the last Sunday of October) the first one
+    (summer time) is returned; a skipped one (March) maps to summer time.
+    """
+    guess = local_ms - paris_offset_ms(local_ms - 2 * 60 * 60 * 1_000)
+    return local_ms - paris_offset_ms(guess)
 
 
 class NightCycleDecisionLog:
@@ -180,6 +193,12 @@ class NightCycleDecisionLog:
             rows = raw.get("decisions", [])
             return [row for row in rows if isinstance(row, dict)][-MAX_DECISIONS:] \
                 if isinstance(rows, list) else []
+
+    def last_started_at(self) -> int:
+        return max(
+            (_safe_int(row.get("at"), 0) for row in self.load() if row.get("status") == "STARTED"),
+            default=0,
+        )
 
     def record(self, at_ms: int, status: str, reason: str) -> None:
         with self.lock:
@@ -269,6 +288,7 @@ class VpsNightCyclePolicy:
         now_ms: int,
         force: bool = False,
         night_window: tuple[int, int] | None = None,
+        last_attempt_started_at: int = 0,
     ) -> tuple[bool, str]:
         if not str(view.get("identity_id", "")).strip():
             return False, "shared_state_identity_unbound"
@@ -296,11 +316,17 @@ class VpsNightCyclePolicy:
                 return False, "outside_night_window"
             if last_protected_completed_at >= window_start:
                 return False, "already_ran_tonight"
+            # One START per night: a cycle that crashed before saving its
+            # report must not be retried every 15 minutes (Codex review of #80).
+            if last_attempt_started_at >= window_start:
+                return False, "already_attempted_tonight"
 
         # #78: a phone that publishes in the background (every 15 min, all
         # night while charging) is present, not in use. An app that tracks
         # real use says so; older apps keep the conservative presence rule.
-        if phone_payload.get("user_activity_tracked") is True:
+        # Only with a night window configured: without it the behaviour is
+        # exactly the previous one, whatever the app version (partial deploy).
+        if night_window is not None and phone_payload.get("user_activity_tracked") is True:
             last_use = _safe_int(phone_payload.get("last_user_activity_at"), 0)
             if last_use > 0 and now_ms - last_use < PIXEL_INACTIVE_AFTER_MS:
                 return False, "pixel_in_use"
@@ -406,6 +432,9 @@ class VpsNightCycleSupervisor:
         if not self.enabled:
             return self._skipped(now, "requires_vps")
         if not self._run_lock.acquire(blocking=False):
+            # Not recorded for a non-VPS node (requires_vps above): the
+            # supervisor is disabled there and has nothing to audit.
+            self._record_decision(now, "SKIPPED", "already_running")
             return self._skipped(now, "already_running")
         try:
             view = self.state_store.supervision_view()
@@ -419,15 +448,18 @@ class VpsNightCycleSupervisor:
                 now_ms=now,
                 force=force,
                 night_window=self.night_window,
+                last_attempt_started_at=self.decisions.last_started_at(),
             )
             if not allowed:
                 self._record_decision(now, "SKIPPED", reason)
                 return self._skipped(now, reason)
+            # Durable BEFORE running: a crash still consumes the night.
+            self._record_decision(now, "STARTED", "forced" if force else "eligible")
             report = self._execute(view, now)
             self._record_decision(
                 _safe_int(report.get("completed_at"), now),
                 str(report.get("status", "")),
-                "forced" if force else "eligible",
+                _outcome_reason(report),
             )
             return report
         finally:
@@ -724,6 +756,18 @@ class VpsNightCycleSupervisor:
     def _log(self, level: str, event: str, message: str, **metadata: Any) -> None:
         if self.logger is not None:
             self.logger(level, event, message, **metadata)
+
+
+def _outcome_reason(report: dict[str, Any]) -> str:
+    """SUCCESS -> 'completed'; PARTIAL -> codes of the failed phases (no summaries)."""
+    failed = [
+        str(step.get("phase", ""))
+        for step in report.get("steps", [])
+        if isinstance(step, dict) and step.get("success") is False
+    ]
+    if not failed:
+        return "completed"
+    return ("failed_phases:" + ",".join(failed))[:60]
 
 
 def runCatchingLearning(

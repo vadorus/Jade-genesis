@@ -18,7 +18,7 @@ Current responsibilities include persistent identity, local structured memory, d
 
 ## 0.1.27 night cycle: presence is not use (issue #78)
 
-The background worker publishes a `phone_node_snapshot` every 15 minutes, all night while the phone charges, and the VPS night cycle treated any snapshot younger than 2 h as "Pixel active": it never ran at night. 0.1.27 adds `user_activity_tracked: true` and `last_user_activity_at` to the snapshot. This timestamp changes only when Jade comes to the foreground (`MainActivity.onResume`) or a message is sent (`JadeViewModel.send`), at most once a minute, and never from background work. The VPS (node-agent, same issue) decides on it; an older app without the field keeps the previous presence rule. The VPS sees a new use only after the next sync (up to about 15 minutes).
+The background worker publishes a `phone_node_snapshot` every 15 minutes, all night while the phone charges, and the VPS night cycle treated any snapshot younger than 2 h as "Pixel active": it never ran at night. 0.1.27 adds `user_activity_tracked: true` and `last_user_activity_at` to the snapshot. This timestamp changes only when Jade comes to the foreground (`MainActivity.onResume`) or a message is sent (`JadeViewModel.send`), at most once a minute, and never from background work. The VPS (node-agent, same issue) decides on it only when its night window (`night_cycle_window_paris`) is configured; without that window, or with an older app, the previous presence rule applies unchanged. The VPS sees a new use only after the next sync (up to about 15 minutes).
 
 ## 0.1.26 network restore (issue #77)
 

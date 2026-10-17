@@ -46,6 +46,23 @@ internal object NodeRefreshPolicy {
             .toSet()
     }
 
+    /**
+     * Whether an ONLINE node must be shown "à vérifier" (UNKNOWN): not seen for
+     * [staleAfterMs], or last seen before the phone lost every physical network
+     * ([networkLostAtMs], 0 = no loss recorded). Non-ONLINE nodes keep their status.
+     */
+    fun isStale(
+        online: Boolean,
+        lastSeenAtMs: Long,
+        nowMs: Long,
+        staleAfterMs: Long,
+        networkLostAtMs: Long
+    ): Boolean {
+        if (!online || lastSeenAtMs <= 0L) return false
+        if (networkLostAtMs > 0L && lastSeenAtMs <= networkLostAtMs) return true
+        return nowMs - lastSeenAtMs > staleAfterMs
+    }
+
     /** When a patient retry started, and in which network generation. */
     data class PatientRetryMark(val atMs: Long, val generation: Long)
 

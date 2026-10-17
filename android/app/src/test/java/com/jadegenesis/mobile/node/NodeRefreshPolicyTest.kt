@@ -2,6 +2,7 @@ package com.jadegenesis.mobile.node
 
 import com.jadegenesis.mobile.model.NodeStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.coroutines.CompletableDeferred
@@ -174,5 +175,35 @@ class NodeRefreshPolicyTest {
             refresh = { probes.incrementAndGet() },
             reuse = { -1 }
         ))
+    }
+
+    // --- "à vérifier" after a loss of every physical network (0.1.26) ----------
+
+    @Test
+    fun onlineNodeSeenBeforeTheLossIsStale() {
+        assertTrue(NodeRefreshPolicy.isStale(
+            online = true, lastSeenAtMs = 1_000L, nowMs = 2_000L,
+            staleAfterMs = 90_000L, networkLostAtMs = 1_500L
+        ))
+    }
+
+    @Test
+    fun probeAfterTheLossMakesTheNodeFreshAgain() {
+        assertFalse(NodeRefreshPolicy.isStale(
+            online = true, lastSeenAtMs = 3_000L, nowMs = 4_000L,
+            staleAfterMs = 90_000L, networkLostAtMs = 1_500L
+        ))
+    }
+
+    @Test
+    fun withoutLossTheNinetySecondRuleIsUnchanged() {
+        assertFalse(NodeRefreshPolicy.isStale(true, 1_000L, 91_000L, 90_000L, 0L))
+        assertTrue(NodeRefreshPolicy.isStale(true, 1_000L, 91_001L, 90_000L, 0L))
+    }
+
+    @Test
+    fun nonOnlineOrNeverSeenNodesKeepTheirStatus() {
+        assertFalse(NodeRefreshPolicy.isStale(false, 1_000L, 2_000L, 90_000L, 1_500L))
+        assertFalse(NodeRefreshPolicy.isStale(true, 0L, 2_000L, 90_000L, 1_500L))
     }
 }

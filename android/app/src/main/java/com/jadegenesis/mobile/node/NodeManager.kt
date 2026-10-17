@@ -69,6 +69,19 @@ class NodeManager(
             networkGeneration.incrementAndGet()
         }
 
+        // Wall-clock time of the last loss of every physical network (0 = none).
+        private val physicalNetworkLostAtMs = AtomicLong(0L)
+
+        /**
+         * 0.1.26: no physical network left. Nodes last seen before this moment
+         * are shown "à vérifier" (UNKNOWN) instead of keeping their old ONLINE
+         * state and latencies (real Pixel test, 17/10/2026). Nothing is written
+         * to the registry: the next successful probe makes them ONLINE again.
+         */
+        fun onPhysicalNetworkLost(nowMs: Long = System.currentTimeMillis()) {
+            physicalNetworkLostAtMs.set(nowMs)
+        }
+
         private const val KEY_REMOTE_NODES_V2 = "remote_nodes_v2"
         private const val KEY_REMOTE_NODES_V2_BACKUP = "remote_nodes_v2_backup"
         private const val KEY_REMOTE_NODES_V1 = "remote_nodes_v1"
@@ -1104,10 +1117,13 @@ class NodeManager(
             )
 
     private fun currentPublicNode(node: StoredNode): GenesisNode {
-        val stale =
-            node.status == NodeStatus.ONLINE &&
-                node.lastSeenAt > 0L &&
-                System.currentTimeMillis() - node.lastSeenAt > NODE_STALE_MS
+        val stale = NodeRefreshPolicy.isStale(
+            online = node.status == NodeStatus.ONLINE,
+            lastSeenAtMs = node.lastSeenAt,
+            nowMs = System.currentTimeMillis(),
+            staleAfterMs = NODE_STALE_MS,
+            networkLostAtMs = physicalNetworkLostAtMs.get()
+        )
         return node.publicNode(stale)
     }
 

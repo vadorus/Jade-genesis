@@ -5,8 +5,8 @@ Native Android / Pixel application for Jade Genesis.
 Current package/version:
 
 - application ID: `com.jadegenesis.mobile`
-- versionName: `0.1.25`
-- versionCode: `43`
+- versionName: `0.1.26`
+- versionCode: `44`
 - minSdk: `31`
 - compileSdk / targetSdk: `37`
 
@@ -15,6 +15,16 @@ Current package/version:
 The Android app is Jade's primary personal-device presence. It owns a local persistent copy of Jade's identity and state and remains usable when richer PC/VPS resources are unavailable.
 
 Current responsibilities include persistent identity, local structured memory, device profiling/self-model state, Jetpack Compose UI, tool registry, authenticated Node Runtime communication, Shared Genesis State cache/outbox, Runtime Evaluation/outcome data, and visibility into distributed learning/night-cycle state.
+
+## 0.1.26 network restore (issue #77)
+
+0.1.25 (#74) re-checked the nodes when the network came back, but listened to the system default network. On the Pixel that default network is the Tailscale VPN, and the real test of 17/10/2026 showed no re-check after cutting Wi-Fi and data. 0.1.26:
+
+- watches the physical networks only (`INTERNET` + `NOT_VPN`: Wi-Fi, mobile data, Ethernet). "Lost" means no validated physical network left; a Wi-Fi to mobile handover with an overlap is not a loss;
+- shows the remote nodes "à vérifier" (UNKNOWN) as soon as every physical network is gone, instead of their old ONLINE state and latencies. Nothing is written to the node registry; the next successful probe makes them ONLINE again;
+- writes each step to the diagnostic log (`network_watch_registered` with `default_is_vpn`, `network_physical_lost` / `network_physical_back`, `network_restore_deferred`, `network_restore_triggered`, `network_recheck_started`, `network_recheck_probe`). Metadata holds counters, booleans and transport kinds only.
+
+The VPN explanation remains a hypothesis until these logs are read on the Pixel. Re-checks on open, on "Actualiser" and before each message are unchanged.
 
 ## Conversation status
 

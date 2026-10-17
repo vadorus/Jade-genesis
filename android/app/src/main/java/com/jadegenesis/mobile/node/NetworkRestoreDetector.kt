@@ -4,36 +4,35 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * Decides when a "network is back" event should trigger a node re-check.
+ * Decides when a network restoration should trigger a node re-check.
  *
- * Pure state machine, free of Android classes so it can be covered by JVM
- * tests. [NetworkRestoreWatcher] feeds it the system callbacks and provides a
- * [RetryScheduler] backed by a main-thread Handler.
+ * Pure logic (no Android types) so it can be covered by JVM tests. Rules:
+ * - a re-check needs a loss first: the network already present at start-up,
+ *   or reported again without any loss in between, never triggers;
+ * - starting without a validated network counts as a loss (Android sends no
+ *   onLost when there was nothing to lose);
+ * - two triggers are at least [minIntervalMs] apart. A return that comes too
+ *   soon is not dropped: a single retry is scheduled at the end of the
+ *   interval and fires if the network is still validated then;
+ * - a new loss or [stop] cancels the pending retry.
  *
- * Rules:
- * - Only a validated network that returns AFTER a loss triggers. A validated
- *   network already present when watching starts does not: the app probes its
- *   nodes when it opens. If watching starts with NO validated network, that
- *   counts as a loss, so the first network that arrives triggers.
- * - Repeated "still validated" callbacks without a loss in between never
- *   trigger.
- * - Two triggers are at least [minIntervalMs] apart. A reconnection that comes
- *   too soon is not dropped: a retry is scheduled for the end of the interval
- *   and fires if the network is still validated then, because Android does not
- *   have to call back again once the network is stable.
- * - [onRestored] is never called while the detector's lock is held.
+ * [onRestored] and [onDeferred] are always called outside the internal lock.
  */
 internal class NetworkRestoreDetector(
     private val scheduler: RetryScheduler,
     private val onRestored: () -> Unit,
-    private val minIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS
+    private val minIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS,
+    private val onDeferred: (delayMs: Long) -> Unit = {}
 ) {
     interface RetryScheduler {
-        /** Calls [NetworkRestoreDetector.onRetryDue] once, about [delayMs] from now. */
         fun schedule(delayMs: Long)
-
-        /** Drops a pending retry, if any. */
         fun cancel()
+    }
+
+    private sealed interface Decision {
+        object None : Decision
+        object Fire : Decision
+        data class Deferred(val delayMs: Long) : Decision
     }
 
     private var lostSinceLastTrigger = false
@@ -46,7 +45,6 @@ internal class NetworkRestoreDetector(
         require(minIntervalMs > 0L)
     }
 
-    /** Watching starts; [validatedNow] = a validated network is already the default. */
     fun onStart(validatedNow: Boolean) {
         synchronized(this) {
             stopped = false
@@ -55,7 +53,6 @@ internal class NetworkRestoreDetector(
         }
     }
 
-    /** The default network is gone or no longer validated. */
     fun onNetworkLost() {
         synchronized(this) {
             validatedNow = false
@@ -64,22 +61,20 @@ internal class NetworkRestoreDetector(
         }
     }
 
-    /** The system reported a validated default network. */
     fun onNetworkValidated(nowMs: Long) {
-        val fire = synchronized(this) {
+        val decision = synchronized(this) {
             validatedNow = true
             evaluateLocked(nowMs)
         }
-        if (fire) onRestored()
+        dispatch(decision)
     }
 
-    /** The retry scheduled by [RetryScheduler.schedule] is due. */
     fun onRetryDue(nowMs: Long) {
-        val fire = synchronized(this) {
+        val decision = synchronized(this) {
             retryScheduled = false
-            validatedNow && evaluateLocked(nowMs)
+            if (validatedNow) evaluateLocked(nowMs) else Decision.None
         }
-        if (fire) onRestored()
+        dispatch(decision)
     }
 
     fun stop() {
@@ -89,20 +84,30 @@ internal class NetworkRestoreDetector(
         }
     }
 
-    private fun evaluateLocked(nowMs: Long): Boolean {
-        if (stopped || !lostSinceLastTrigger) return false
+    private fun dispatch(decision: Decision) {
+        when (decision) {
+            Decision.Fire -> onRestored()
+            is Decision.Deferred -> onDeferred(decision.delayMs)
+            Decision.None -> Unit
+        }
+    }
+
+    private fun evaluateLocked(nowMs: Long): Decision {
+        if (stopped || !lostSinceLastTrigger) return Decision.None
         val previous = lastTriggerAtMs
+        // A clock going backwards (should not happen with elapsedRealtime) must
+        // never block re-checks forever: treat it as "interval elapsed".
         if (previous != null && nowMs >= previous && nowMs - previous < minIntervalMs) {
-            if (!retryScheduled) {
-                retryScheduled = true
-                scheduler.schedule(previous + minIntervalMs - nowMs)
-            }
-            return false
+            if (retryScheduled) return Decision.None
+            val delayMs = previous + minIntervalMs - nowMs
+            retryScheduled = true
+            scheduler.schedule(delayMs)
+            return Decision.Deferred(delayMs)
         }
         lostSinceLastTrigger = false
         lastTriggerAtMs = nowMs
         cancelRetryLocked()
-        return true
+        return Decision.Fire
     }
 
     private fun cancelRetryLocked() {
@@ -118,9 +123,92 @@ internal class NetworkRestoreDetector(
 }
 
 /**
- * Runs [block] for each [request], never twice at the same time. A request that
- * arrives while [block] is running is not dropped: [block] runs once more after
- * the current run, however many requests arrived meanwhile. Thread-safe.
+ * Tracks the validated PHYSICAL networks (Wi-Fi, mobile data, Ethernet) and
+ * feeds [NetworkRestoreDetector] with "lost" / "validated" transitions.
+ *
+ * 0.1.26: 0.1.25 watched the system default network. With Tailscale running,
+ * that default network is the VPN, which can stay present and validated while
+ * Wi-Fi and data are cut, so no loss and no return were ever seen (real Pixel
+ * test, 17/10/2026). The Android watcher now registers for non-VPN networks
+ * only and reports each of them here, identified by an opaque id.
+ *
+ * "Lost" = no validated physical network left. "Back" = at least one again.
+ * A Wi-Fi -> mobile handover with an overlap is therefore not a loss.
+ *
+ * [onPhysicalLost] and [log] are called outside the internal lock.
+ * Log metadata never contains addresses, network names or tokens.
+ */
+internal class PhysicalNetworkMonitor(
+    private val detector: NetworkRestoreDetector,
+    private val onPhysicalLost: () -> Unit = {},
+    private val log: (event: String, metadata: Map<String, Any?>) -> Unit = { _, _ -> }
+) {
+    private val validated = HashSet<String>()
+    private var online = false
+
+    fun start(initialValidated: Collection<String>) {
+        val onlineNow = synchronized(this) {
+            validated.clear()
+            validated.addAll(initialValidated)
+            online = validated.isNotEmpty()
+            online
+        }
+        detector.onStart(onlineNow)
+    }
+
+    /** Capabilities of one physical network changed ([usable] = INTERNET + VALIDATED). */
+    fun onNetworkChanged(id: String, usable: Boolean, transport: String, nowMs: Long) {
+        update(nowMs, transport) {
+            if (usable) validated.add(id) else validated.remove(id)
+        }
+    }
+
+    /** One physical network disappeared. */
+    fun onNetworkLost(id: String, nowMs: Long) {
+        update(nowMs, TRANSPORT_NONE) { validated.remove(id) }
+    }
+
+    val validatedCount: Int
+        get() = synchronized(this) { validated.size }
+
+    private fun update(nowMs: Long, transport: String, change: () -> Unit) {
+        val transition = synchronized(this) {
+            change()
+            val nowOnline = validated.isNotEmpty()
+            val changed = nowOnline != online
+            online = nowOnline
+            Transition(nowOnline, changed, validated.size)
+        }
+        if (transition.changed) {
+            log(
+                if (transition.online) EVENT_PHYSICAL_BACK else EVENT_PHYSICAL_LOST,
+                mapOf(
+                    "validated_networks" to transition.count,
+                    "last_change_transport" to transport
+                )
+            )
+        }
+        if (transition.online) {
+            detector.onNetworkValidated(nowMs)
+        } else {
+            detector.onNetworkLost()
+            if (transition.changed) onPhysicalLost()
+        }
+    }
+
+    private data class Transition(val online: Boolean, val changed: Boolean, val count: Int)
+
+    companion object {
+        const val EVENT_PHYSICAL_LOST = "network_physical_lost"
+        const val EVENT_PHYSICAL_BACK = "network_physical_back"
+        const val TRANSPORT_NONE = "none"
+    }
+}
+
+/**
+ * Runs [block] in [scope], never twice at the same time, and never drops a
+ * request: a request made while a run is active schedules exactly one more run
+ * after it (several requests during one run are merged into that one).
  */
 internal class CoalescingRunner(
     private val scope: CoroutineScope,
@@ -142,21 +230,21 @@ internal class CoalescingRunner(
         val job = scope.launch {
             do {
                 block()
+                // Deciding to finish and clearing `running` happen under the
+                // same lock, so a concurrent request() is either seen here or
+                // starts a new run itself.
                 val again = synchronized(lock) {
                     if (pending) {
                         pending = false
                         true
                     } else {
-                        // Decided and released under the same lock, so a
-                        // request racing with the end of the run starts a
-                        // new one instead of being lost.
                         running = false
                         false
                     }
                 }
             } while (again)
         }
-        // Cancelled (even before starting) or failed: release the runner.
+        // A failed or cancelled run must not block the runner forever.
         job.invokeOnCompletion { cause ->
             if (cause != null) {
                 synchronized(lock) {

@@ -256,4 +256,113 @@ class NetworkRestoreDetectorTest {
     fun noMarkAllowsThePatientRetry() {
         assertTrue(NodeRefreshPolicy.shouldRunPatientRetry(5L, null, 0L, 60_000L))
     }
+
+    // --- physical networks, VPN excluded (0.1.26, real Pixel test 17/10) --------
+
+    private class Recorder {
+        val events = mutableListOf<String>()
+        var losses = 0
+        val log: (String, Map<String, Any?>) -> Unit = { event, _ -> events += event }
+    }
+
+    private fun monitor(fired: AtomicInteger, recorder: Recorder, scheduler: FakeScheduler = FakeScheduler()) =
+        PhysicalNetworkMonitor(
+            detector = detector(scheduler, fired),
+            onPhysicalLost = { recorder.losses++ },
+            log = recorder.log
+        )
+
+    @Test
+    fun cutOfWifiAndDataIsSeenEvenThoughTheVpnStaysUp() {
+        // The VPN is never reported to the monitor (NOT_VPN request): only the
+        // physical networks count, so the cut and the return are both visible.
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("wifi-100"))
+        m.onNetworkChanged("wifi-100", usable = true, transport = "wifi", nowMs = 1_000L)
+        m.onNetworkLost("wifi-100", 2_000L)
+        assertEquals(1, rec.losses)
+        assertEquals(listOf(PhysicalNetworkMonitor.EVENT_PHYSICAL_LOST), rec.events)
+        m.onNetworkChanged("wifi-242", usable = false, transport = "wifi", nowMs = 30_000L)
+        assertEquals(0, fired.get())                    // connected, not validated yet
+        m.onNetworkChanged("wifi-242", usable = true, transport = "wifi", nowMs = 32_000L)
+        assertEquals(1, fired.get())
+        assertEquals(PhysicalNetworkMonitor.EVENT_PHYSICAL_BACK, rec.events.last())
+    }
+
+    @Test
+    fun handoverWithOverlapIsNotALoss() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("wifi-1"))
+        m.onNetworkChanged("cell-2", usable = true, transport = "cellular", nowMs = 1_000L)
+        m.onNetworkLost("wifi-1", 2_000L)
+        assertEquals(0, rec.losses)
+        assertEquals(0, fired.get())
+        assertTrue(rec.events.isEmpty())
+        assertEquals(1, m.validatedCount)
+    }
+
+    @Test
+    fun lastNetworkLosingValidationCountsAsALoss() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("wifi-1"))
+        m.onNetworkChanged("wifi-1", usable = false, transport = "wifi", nowMs = 1_000L)
+        assertEquals(1, rec.losses)
+        m.onNetworkChanged("wifi-1", usable = true, transport = "wifi", nowMs = 20_000L)
+        assertEquals(1, fired.get())
+    }
+
+    @Test
+    fun openingWithoutPhysicalNetworkTriggersOnTheFirstOne() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(emptyList())
+        m.onNetworkChanged("cell-7", usable = true, transport = "cellular", nowMs = 5_000L)
+        assertEquals(1, fired.get())
+        // No loss callback at start: nothing was lost while the app watched.
+        assertEquals(0, rec.losses)
+    }
+
+    @Test
+    fun onlyTransitionsAreLoggedNotEveryCallback() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("wifi-1"))
+        repeat(5) { m.onNetworkChanged("wifi-1", usable = true, transport = "wifi", nowMs = 1_000L + it) }
+        m.onNetworkLost("wifi-1", 2_000L)
+        m.onNetworkLost("wifi-1", 2_001L)                 // duplicate callback
+        assertEquals(listOf(PhysicalNetworkMonitor.EVENT_PHYSICAL_LOST), rec.events)
+        assertEquals(1, rec.losses)
+        assertEquals(0, fired.get())
+    }
+
+    @Test
+    fun deferredReturnIsReportedThenFiredByTheRetry() {
+        val fired = AtomicInteger()
+        val deferred = mutableListOf<Long>()
+        val scheduler = FakeScheduler()
+        val d = NetworkRestoreDetector(
+            scheduler = scheduler,
+            onRestored = { fired.incrementAndGet() },
+            minIntervalMs = 15_000L,
+            onDeferred = { deferred += it }
+        )
+        val m = PhysicalNetworkMonitor(d)
+        m.start(listOf("wifi-1"))
+        m.onNetworkLost("wifi-1", 1_000L)
+        m.onNetworkChanged("wifi-2", usable = true, transport = "wifi", nowMs = 10_000L)   // fire 1
+        m.onNetworkLost("wifi-2", 11_000L)
+        m.onNetworkChanged("wifi-3", usable = true, transport = "wifi", nowMs = 13_000L)   // too soon
+        assertEquals(listOf(12_000L), deferred)
+        assertEquals(1, fired.get())
+        d.onRetryDue(25_000L)
+        assertEquals(2, fired.get())
+    }
 }

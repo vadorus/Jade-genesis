@@ -534,4 +534,98 @@ class NetworkRestoreDetectorTest {
         assertEquals(1, fired.get())                     // the return is not lost
         assertEquals(1, m.validatedCount)
     }
+
+    // --- 0.1.28 (#81): active check, no callback under the VPN ------------------
+
+    @Test
+    fun cutAndReturnAreSeenByTheActiveCheckWithoutAnyCallback() {
+        // Real 0.1.26 test: 2 physical networks at start, then no callback at all.
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val metadata = mutableListOf<Map<String, Any?>>()
+        val m = PhysicalNetworkMonitor(
+            detector = detector(FakeScheduler(), fired),
+            onPhysicalLost = { rec.losses++ },
+            log = { event, meta -> rec.events += event; metadata += meta }
+        )
+        m.start(listOf("100", "101"))
+        m.reconcileAfterRegistration(listOf("100", "101"), 500L)
+        m.onSnapshot(30_000L) { emptyList() }                  // cut, seen by the poll
+        assertEquals(1, rec.losses)
+        assertEquals(listOf(PhysicalNetworkMonitor.EVENT_PHYSICAL_LOST), rec.events)
+        assertEquals(PhysicalNetworkMonitor.SOURCE_POLL, metadata.last()["source"])
+        m.onSnapshot(55_000L) { emptyList() }                  // still cut: nothing new
+        assertEquals(1, rec.losses)
+        m.onSnapshot(80_000L) { listOf("242") }                // back, new netId
+        assertEquals(1, fired.get())
+        assertEquals(PhysicalNetworkMonitor.EVENT_PHYSICAL_BACK, rec.events.last())
+    }
+
+    @Test
+    fun pollAfterACallbackReturnDoesNotTriggerTwice() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.onNetworkLost("A", 1_000L)
+        m.onNetworkChanged("B", usable = true, transport = "wifi", nowMs = 20_000L)
+        assertEquals(1, fired.get())
+        m.onSnapshot(45_000L) { listOf("B") }
+        m.onSnapshot(70_000L) { listOf("B", "C") }
+        assertEquals(1, fired.get())
+        assertEquals(1, rec.losses)
+    }
+
+    @Test
+    fun failedReadKeepsTheState() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.onSnapshot(10_000L) { null }
+        assertEquals(1, m.validatedCount)
+        assertEquals(0, rec.losses)
+        assertTrue(rec.events.isEmpty())
+    }
+
+    @Test
+    fun callbackCannotBeAppliedBetweenTheReadAndItsUse() {
+        // The read runs under the monitor's lock: a callback arriving during the
+        // read waits and is applied after, never overwritten by the older list.
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        val inRead = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val poll = Thread {
+            m.onSnapshot(10_000L) {
+                inRead.countDown()
+                release.await()
+                listOf("A")                                    // read before B appeared
+            }
+        }
+        poll.start()
+        assertTrue(inRead.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val callback = Thread { m.onNetworkChanged("B", usable = true, transport = "cellular", nowMs = 10_050L) }
+        callback.start()
+        callback.join(200)
+        assertTrue(callback.isAlive)
+        release.countDown()
+        poll.join(2_000)
+        callback.join(2_000)
+        assertEquals(2, m.validatedCount)                      // B kept
+    }
+
+    @Test
+    fun rawLogIsCappedAndDropsAreReportedOnce() {
+        val limiter = RawLogLimiter(maxPerWindow = 3, windowMs = 1_000L)
+        repeat(3) { assertTrue(limiter.check(100L + it).write) }
+        assertFalse(limiter.check(200L).write)
+        assertFalse(limiter.check(300L).write)
+        val next = limiter.check(1_200L)
+        assertTrue(next.write)
+        assertEquals(2, next.droppedBefore)
+        assertEquals(0, limiter.check(1_300L).droppedBefore)
+    }
 }

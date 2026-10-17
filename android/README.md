@@ -5,8 +5,8 @@ Native Android / Pixel application for Jade Genesis.
 Current package/version:
 
 - application ID: `com.jadegenesis.mobile`
-- versionName: `0.1.27`
-- versionCode: `45`
+- versionName: `0.1.28`
+- versionCode: `46`
 - minSdk: `31`
 - compileSdk / targetSdk: `37`
 
@@ -15,6 +15,13 @@ Current package/version:
 The Android app is Jade's primary personal-device presence. It owns a local persistent copy of Jade's identity and state and remains usable when richer PC/VPS resources are unavailable.
 
 Current responsibilities include persistent identity, local structured memory, device profiling/self-model state, Jetpack Compose UI, tool registry, authenticated Node Runtime communication, Shared Genesis State cache/outbox, Runtime Evaluation/outcome data, and visibility into distributed learning/night-cycle state.
+
+## 0.1.28 network restore under the VPN (issue #81)
+
+Real test of 0.1.26 (17/10): `default_is_vpn=true`, 2 validated physical networks at start, then Wi-Fi and data cut (default network `none`) and no `network_physical_lost` ever logged. Android did not report the loss to the physical-network callback while the Tailscale VPN was up. 0.1.28:
+
+- **active check**: while Jade is on screen (process importance FOREGROUND), every 25 s it reads the validated physical networks itself (`allNetworks`, VPN excluded) and feeds the same monitor. The cut then shows the nodes "à vérifier" and the return triggers the re-check, with or without callbacks. Transitions carry `source` (`callback`, `reconcile`, `poll`). Nothing runs off screen;
+- **raw callback log** (`network_callback_raw`, at most 40 per 10 minutes, then `network_callback_raw_dropped`): every `onAvailable`, `onLost`, `onCapabilitiesChanged`, `onBlockedStatusChanged` for the physical request and for the default network (scope `physical` / `default`), with the opaque netId, transport, VPN, validated, blocked. It should explain why the callbacks stay silent.
 
 ## 0.1.27 night cycle: presence is not use (issue #78)
 

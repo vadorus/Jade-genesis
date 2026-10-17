@@ -1,5 +1,6 @@
 package com.jadegenesis.mobile.ui
 
+import android.app.ActivityManager
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,7 @@ import com.jadegenesis.mobile.state.UserActivityTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -176,6 +178,23 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         log = { event, metadata -> networkLog.emit(event, metadata) }
     ).also { it.start() }
 
+    // 0.1.28 (#81): active check while Jade is on screen. Android sent no
+    // callback for the cut under the Tailscale VPN (real test of 0.1.26), so
+    // Jade reads the physical networks itself every ~25 s. Off screen, nothing
+    // runs (no battery cost); on return, the next tick sees the current state.
+    private val networkActiveCheck = viewModelScope.launch(Dispatchers.IO) {
+        while (isActive) {
+            delay(NETWORK_ACTIVE_CHECK_INTERVAL_MS)
+            if (isJadeOnScreen()) networkRestoreWatcher.pollNow()
+        }
+    }
+
+    private fun isJadeOnScreen(): Boolean = runCatching {
+        val info = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(info)
+        info.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    }.getOrDefault(false)
+
     private fun onPhysicalNetworkLost() {
         NodeManager.onPhysicalNetworkLost()
         // Called under the network monitor's lock: always dispatch (plain Main,
@@ -210,6 +229,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        networkActiveCheck.cancel()
         networkRestoreWatcher.stop()
         super.onCleared()
     }
@@ -775,6 +795,9 @@ private const val NETWORK_RESTORE_SECOND_PROBE_DELAY_MS = 12_000L
 
 // Diagnostic messages of the network watcher (0.1.26). Metadata holds only
 // counters, booleans and transport kinds: no address, network name or token.
+// Active check cadence while Jade is on screen (#81).
+private const val NETWORK_ACTIVE_CHECK_INTERVAL_MS = 25_000L
+
 private val NETWORK_LOG_MESSAGES = mapOf(
     "network_watch_registered" to "Surveillance du réseau physique (hors VPN) active.",
     "network_watch_failed" to "Surveillance du réseau impossible : revérification seulement à l'ouverture, sur Actualiser et avant chaque message.",
@@ -783,5 +806,7 @@ private val NETWORK_LOG_MESSAGES = mapOf(
     "network_restore_deferred" to "Retour du réseau trop rapproché : revérification reportée.",
     "network_restore_triggered" to "Retour du réseau après une perte : revérification des nœuds demandée.",
     "network_recheck_started" to "Revérification des nœuds après retour du réseau.",
-    "network_recheck_probe" to "Sonde après retour du réseau terminée."
+    "network_recheck_probe" to "Sonde après retour du réseau terminée.",
+    "network_callback_raw" to "Signal réseau brut reçu d'Android (diagnostic).",
+    "network_callback_raw_dropped" to "Signaux réseau bruts non journalisés (limite atteinte)."
 )

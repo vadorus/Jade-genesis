@@ -180,7 +180,7 @@ internal class PhysicalNetworkMonitor(
      * callback are never touched here.
      */
     fun reconcileAfterRegistration(presentNow: Collection<String>, nowMs: Long) {
-        update(nowMs, TRANSPORT_NONE) {
+        update(nowMs, TRANSPORT_NONE, SOURCE_RECONCILE) {
             val vanished = unconfirmed.filter { it !in presentNow }
             validated.removeAll(vanished.toSet())
             unconfirmed.clear()
@@ -189,7 +189,7 @@ internal class PhysicalNetworkMonitor(
 
     /** Capabilities of one physical network changed ([usable] = INTERNET + VALIDATED). */
     fun onNetworkChanged(id: String, usable: Boolean, transport: String, nowMs: Long) {
-        update(nowMs, transport) {
+        update(nowMs, transport, SOURCE_CALLBACK) {
             unconfirmed.remove(id)
             if (usable) validated.add(id) else validated.remove(id)
         }
@@ -197,16 +197,38 @@ internal class PhysicalNetworkMonitor(
 
     /** One physical network disappeared. */
     fun onNetworkLost(id: String, nowMs: Long) {
-        update(nowMs, TRANSPORT_NONE) {
+        update(nowMs, TRANSPORT_NONE, SOURCE_CALLBACK) {
             unconfirmed.remove(id)
             validated.remove(id)
+        }
+    }
+
+    /**
+     * 0.1.28 (#81): active check. [read] lists the validated physical networks
+     * right now (null = read failed: state kept). The list replaces the
+     * tracked set, so a cut is seen even when Android delivers no callback
+     * (real Pixel test of 0.1.26 under the Tailscale VPN: 2 physical networks
+     * seen at start, none of their losses ever reported).
+     *
+     * [read] runs under the monitor's lock: a callback cannot be applied
+     * between the read and its use, so a newer callback is never overwritten
+     * by an older list.
+     */
+    fun onSnapshot(nowMs: Long, read: () -> Collection<String>?) {
+        synchronized(this) {
+            val present = read() ?: return
+            update(nowMs, TRANSPORT_NONE, SOURCE_POLL) {
+                validated.clear()
+                validated.addAll(present)
+                unconfirmed.clear()
+            }
         }
     }
 
     val validatedCount: Int
         get() = synchronized(this) { validated.size }
 
-    private fun update(nowMs: Long, transport: String, change: () -> Unit) {
+    private fun update(nowMs: Long, transport: String, source: String, change: () -> Unit) {
         // State change AND its delivery (log, detector, UI) under one lock, so
         // a transition computed earlier can never be delivered after a newer
         // one (Codex re-review of #79: reconciliation on the registering
@@ -223,7 +245,8 @@ internal class PhysicalNetworkMonitor(
                     if (nowOnline) EVENT_PHYSICAL_BACK else EVENT_PHYSICAL_LOST,
                     mapOf(
                         "validated_networks" to validated.size,
-                        "last_change_transport" to transport
+                        "last_change_transport" to transport,
+                        "source" to source
                     )
                 )
             }
@@ -240,6 +263,43 @@ internal class PhysicalNetworkMonitor(
         const val EVENT_PHYSICAL_LOST = "network_physical_lost"
         const val EVENT_PHYSICAL_BACK = "network_physical_back"
         const val TRANSPORT_NONE = "none"
+        const val SOURCE_CALLBACK = "callback"
+        const val SOURCE_RECONCILE = "reconcile"
+        const val SOURCE_POLL = "poll"
+    }
+}
+
+/**
+ * Caps the raw callback log (0.1.28, #81): at most [maxPerWindow] entries per
+ * [windowMs]; the number dropped is reported once the next window opens.
+ * Pure and thread-safe, covered by JVM tests.
+ */
+internal class RawLogLimiter(
+    private val maxPerWindow: Int = 40,
+    private val windowMs: Long = 10 * 60_000L
+) {
+    data class Decision(val write: Boolean, val droppedBefore: Int)
+
+    private var windowStart = Long.MIN_VALUE
+    private var written = 0
+    private var dropped = 0
+
+    @Synchronized
+    fun check(nowMs: Long): Decision {
+        var reportDropped = 0
+        if (windowStart == Long.MIN_VALUE || nowMs - windowStart >= windowMs || nowMs < windowStart) {
+            reportDropped = dropped
+            windowStart = nowMs
+            written = 0
+            dropped = 0
+        }
+        return if (written < maxPerWindow) {
+            written += 1
+            Decision(true, reportDropped)
+        } else {
+            dropped += 1
+            Decision(false, reportDropped)
+        }
     }
 }
 

@@ -18,6 +18,13 @@ import android.os.SystemClock
  * on the Pixel, and never saw the cut. Every step is now written to the
  * diagnostic log through [log] (event codes and counters only).
  *
+ * 0.1.28 (#81): the 0.1.26 test showed 2 physical networks at start and no
+ * loss ever reported during the cut. [pollNow] (called by the app while Jade
+ * is on screen) reads the physical networks itself, so the cut and the
+ * return are seen without any callback. Every raw callback, for this request
+ * and for the default network, is also logged (capped) to find out what
+ * Android really sends under the VPN.
+ *
  * [onRestored] and [onPhysicalLost] may run on a ConnectivityManager thread or
  * on the main thread: the receiver must be thread-safe and hand the work over
  * to its own scope. Registration failures are logged and reported, never
@@ -59,9 +66,40 @@ class NetworkRestoreWatcher(
         log = log
     )
     private var registered = false
+    private var defaultLogRegistered = false
+    private val rawLimiter = RawLogLimiter()
+
+    private fun logRaw(scope: String, kind: String, network: Network, capabilities: NetworkCapabilities?, blocked: Boolean? = null) {
+        val decision = rawLimiter.check(SystemClock.elapsedRealtime())
+        if (decision.droppedBefore > 0) {
+            log(EVENT_RAW_DROPPED, mapOf("dropped" to decision.droppedBefore))
+        }
+        if (!decision.write) return
+        log(
+            EVENT_RAW,
+            mapOf(
+                "scope" to scope,
+                "kind" to kind,
+                "net" to network.toString(), // opaque netId, no address or name
+                "transport" to (capabilities?.let(::transportOf) ?: "unknown"),
+                "vpn" to capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+                "validated" to capabilities?.let(::isUsable),
+                "blocked" to blocked
+            )
+        )
+    }
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            logRaw(SCOPE_PHYSICAL, "available", network, null)
+        }
+
+        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+            logRaw(SCOPE_PHYSICAL, "blocked_status", network, null, blocked)
+        }
+
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            logRaw(SCOPE_PHYSICAL, "capabilities", network, capabilities)
             monitor.onNetworkChanged(
                 id = network.toString(),
                 usable = isUsable(capabilities),
@@ -71,9 +109,36 @@ class NetworkRestoreWatcher(
         }
 
         override fun onLost(network: Network) {
+            logRaw(SCOPE_PHYSICAL, "lost", network, null)
             monitor.onNetworkLost(network.toString(), SystemClock.elapsedRealtime())
         }
     }
+
+    // Diagnostic only: what Android reports for the default network (the VPN).
+    private val defaultLogCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = logRaw(SCOPE_DEFAULT, "available", network, null)
+        override fun onLost(network: Network) = logRaw(SCOPE_DEFAULT, "lost", network, null)
+        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) =
+            logRaw(SCOPE_DEFAULT, "blocked_status", network, null, blocked)
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
+            logRaw(SCOPE_DEFAULT, "capabilities", network, capabilities)
+    }
+
+    /**
+     * Active check (#81). Reads the validated physical networks now and feeds
+     * the monitor; a failed read changes nothing. Safe from any thread; the
+     * caller decides when (Jade on screen, every ~25 s).
+     */
+    fun pollNow() {
+        val manager = connectivity ?: return
+        if (!started) return
+        monitor.onSnapshot(SystemClock.elapsedRealtime()) {
+            runCatching { validatedPhysicalNetworks(manager) }.getOrNull()
+        }
+    }
+
+    @Volatile
+    private var started = false
 
     @Synchronized
     fun start() {
@@ -89,6 +154,7 @@ class NetworkRestoreWatcher(
         // that arrives would not trigger a re-check.
         val initial = runCatching { validatedPhysicalNetworks(manager) }.getOrDefault(emptyList())
         monitor.start(initial)
+        started = true
         val defaultCaps = runCatching {
             manager.getNetworkCapabilities(manager.activeNetwork)
         }.getOrNull()
@@ -118,11 +184,19 @@ class NetworkRestoreWatcher(
                 log(EVENT_FAILED, mapOf("error" to error.javaClass.simpleName))
                 onRegistrationFailed(error)
             }
+        // Diagnostic callback on the default network; its failure is harmless.
+        runCatching { manager.registerDefaultNetworkCallback(defaultLogCallback) }
+            .onSuccess { defaultLogRegistered = true }
     }
 
     @Synchronized
     fun stop() {
+        started = false
         detector.stop()
+        if (defaultLogRegistered) {
+            runCatching { connectivity?.unregisterNetworkCallback(defaultLogCallback) }
+            defaultLogRegistered = false
+        }
         if (!registered) return
         runCatching { connectivity?.unregisterNetworkCallback(callback) }
         registered = false
@@ -153,5 +227,9 @@ class NetworkRestoreWatcher(
         const val EVENT_FAILED = "network_watch_failed"
         const val EVENT_DEFERRED = "network_restore_deferred"
         const val EVENT_TRIGGERED = "network_restore_triggered"
+        const val EVENT_RAW = "network_callback_raw"
+        const val EVENT_RAW_DROPPED = "network_callback_raw_dropped"
+        const val SCOPE_PHYSICAL = "physical"
+        const val SCOPE_DEFAULT = "default"
     }
 }

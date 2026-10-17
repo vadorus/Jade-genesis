@@ -10,14 +10,17 @@ command, rewrite production code or reach into the Pixel.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from night_learning_lab import NightLearningLab
 from shared_genesis_state import CONFIG_DIR, SharedGenesisStateStore, _GLOBAL_STORE
+from shared_store_lock import atomic_write_text, shared_path_lock
 
 SCHEMA_VERSION = 1
 MAX_RUNS = 30
@@ -28,6 +31,12 @@ MIN_CYCLE_INTERVAL_MS = 20 * 60 * 60 * 1_000
 PIXEL_INACTIVE_AFTER_MS = 2 * 60 * 60 * 1_000
 CHECK_INTERVAL_SECONDS = 15 * 60
 JOURNAL_PATH = CONFIG_DIR / "night-cycle-supervisor.json"
+# Durable trace of every supervisor decision (#78), next to the journal.
+DECISIONS_FILENAME = "night-cycle-decisions.json"
+MAX_DECISIONS = 192  # 48 h at one decision per 15 min
+# Node config key enabling the night window, e.g. "00:30-06:30" (Europe/Paris).
+NIGHT_WINDOW_CONFIG_KEY = "night_cycle_window_paris"
+_WINDOW_PATTERN = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$")
 
 LogFunction = Callable[..., None]
 
@@ -93,6 +102,98 @@ def _last_shared_protected_completed_at(view: dict[str, Any]) -> int:
             _safe_int(report.get("completed_at"), 0),
         )
     return completed_at
+
+
+def parse_night_window(value: Any) -> tuple[int, int] | None:
+    """'HH:MM-HH:MM' (Europe/Paris) -> (start, end) in minutes; None if absent/invalid."""
+    if not isinstance(value, str):
+        return None
+    match = _WINDOW_PATTERN.match(value.strip())
+    if not match:
+        return None
+    start = int(match.group(1)) * 60 + int(match.group(2))
+    end = int(match.group(3)) * 60 + int(match.group(4))
+    return None if start == end else (start, end)
+
+
+def _last_sunday_0100_utc(year: int, month: int) -> datetime:
+    first_next = datetime(year + (month // 12), month % 12 + 1, 1, tzinfo=timezone.utc)
+    last_day = first_next - timedelta(days=1)
+    last_sunday = last_day - timedelta(days=(last_day.weekday() - 6) % 7)
+    return last_sunday.replace(hour=1, minute=0, second=0, microsecond=0)
+
+
+def paris_offset_ms(utc_ms: int) -> int:
+    """UTC offset of Europe/Paris (EU rule), without tz database (stdlib only, Windows too)."""
+    moment = datetime.fromtimestamp(utc_ms / 1_000, tz=timezone.utc)
+    summer_start = _last_sunday_0100_utc(moment.year, 3)
+    summer_end = _last_sunday_0100_utc(moment.year, 10)
+    hours = 2 if summer_start <= moment < summer_end else 1
+    return hours * 60 * 60 * 1_000
+
+
+def night_window_start_ms(now_ms: int, window: tuple[int, int]) -> int | None:
+    """UTC start of the night window containing now_ms, or None outside it.
+
+    A window may cross midnight (e.g. 23:00-05:00). Around a DST change the
+    start can be off by one hour, which never changes "same night or not".
+    """
+    start, end = window
+    offset = paris_offset_ms(now_ms)
+    local_ms = now_ms + offset
+    day_ms = 24 * 60 * 60 * 1_000
+    minute = (local_ms % day_ms) // 60_000
+    local_midnight = local_ms - (local_ms % day_ms)
+    if start < end:
+        if not start <= minute < end:
+            return None
+        start_local = local_midnight + start * 60_000
+    elif minute >= start:
+        start_local = local_midnight + start * 60_000
+    elif minute < end:
+        start_local = local_midnight - day_ms + start * 60_000
+    else:
+        return None
+    return start_local - offset
+
+
+class NightCycleDecisionLog:
+    """Bounded, durable list of supervisor decisions (status, reason, time).
+
+    Only codes and timestamps: no memory content, no token, no phone detail.
+    Lets a morning check read why each 15-minute decision was taken, instead
+    of inferring it from the in-memory last attempt (#78).
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.lock = shared_path_lock(self.path)
+
+    def load(self) -> list[dict[str, Any]]:
+        with self.lock:
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return []
+            if not isinstance(raw, dict) or raw.get("schema_version") != SCHEMA_VERSION:
+                return []
+            rows = raw.get("decisions", [])
+            return [row for row in rows if isinstance(row, dict)][-MAX_DECISIONS:] \
+                if isinstance(rows, list) else []
+
+    def record(self, at_ms: int, status: str, reason: str) -> None:
+        with self.lock:
+            rows = self.load()
+            rows.append({"at": int(at_ms), "status": str(status)[:20], "reason": str(reason)[:60]})
+            atomic_write_text(
+                self.path,
+                json.dumps(
+                    {"schema_version": SCHEMA_VERSION, "decisions": rows[-MAX_DECISIONS:]},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                mode=0o600,
+            )
 
 
 class NightCycleJournal:
@@ -167,6 +268,7 @@ class VpsNightCyclePolicy:
         last_protected_completed_at: int,
         now_ms: int,
         force: bool = False,
+        night_window: tuple[int, int] | None = None,
     ) -> tuple[bool, str]:
         if not str(view.get("identity_id", "")).strip():
             return False, "shared_state_identity_unbound"
@@ -183,9 +285,29 @@ class VpsNightCyclePolicy:
         if observed_at <= 0:
             return False, "phone_presence_invalid"
 
-        if not force and now_ms - observed_at < PIXEL_INACTIVE_AFTER_MS:
+        if force:
+            return True, "eligible"
+
+        if night_window is not None:
+            # #78: one cycle per night window, instead of 20 h counted from
+            # the last cycle (a daytime cycle used to block the next night).
+            window_start = night_window_start_ms(now_ms, night_window)
+            if window_start is None:
+                return False, "outside_night_window"
+            if last_protected_completed_at >= window_start:
+                return False, "already_ran_tonight"
+
+        # #78: a phone that publishes in the background (every 15 min, all
+        # night while charging) is present, not in use. An app that tracks
+        # real use says so; older apps keep the conservative presence rule.
+        if phone_payload.get("user_activity_tracked") is True:
+            last_use = _safe_int(phone_payload.get("last_user_activity_at"), 0)
+            if last_use > 0 and now_ms - last_use < PIXEL_INACTIVE_AFTER_MS:
+                return False, "pixel_in_use"
+        elif now_ms - observed_at < PIXEL_INACTIVE_AFTER_MS:
             return False, "pixel_active"
-        if not force and last_protected_completed_at > 0:
+
+        if night_window is None and last_protected_completed_at > 0:
             elapsed = now_ms - last_protected_completed_at
             if elapsed < MIN_CYCLE_INTERVAL_MS:
                 return False, "cadence_guard"
@@ -204,6 +326,12 @@ class VpsNightCycleSupervisor:
         self.config = dict(config)
         self.state_store = state_store
         self.journal = journal or NightCycleJournal()
+        self.decisions = NightCycleDecisionLog(
+            Path(self.journal.path).with_name(DECISIONS_FILENAME)
+        )
+        raw_window = self.config.get(NIGHT_WINDOW_CONFIG_KEY)
+        self.night_window = parse_night_window(raw_window)
+        self.night_window_invalid = raw_window is not None and self.night_window is None
         self.logger = logger
         self.learning_lab = learning_lab or NightLearningLab()
         self._run_lock = threading.Lock()
@@ -242,6 +370,14 @@ class VpsNightCycleSupervisor:
             "mode": "bounded_learning_lab",
             "pixel_inactive_after_ms": PIXEL_INACTIVE_AFTER_MS,
             "minimum_cycle_interval_ms": MIN_CYCLE_INTERVAL_MS,
+            "night_window_paris": (
+                "%02d:%02d-%02d:%02d" % (
+                    self.night_window[0] // 60, self.night_window[0] % 60,
+                    self.night_window[1] // 60, self.night_window[1] % 60,
+                ) if self.night_window else ""
+            ),
+            "night_window_invalid": self.night_window_invalid,
+            "recent_decisions": self.decisions.load()[-12:],
             "last_attempt_status": str(self._last_attempt.get("status", "")),
             "last_attempt_reason": str(self._last_attempt.get("reason", "")),
             "last_attempt_at": _safe_int(self._last_attempt.get("at"), 0),
@@ -282,10 +418,18 @@ class VpsNightCycleSupervisor:
                 last_protected_completed_at=last_protected,
                 now_ms=now,
                 force=force,
+                night_window=self.night_window,
             )
             if not allowed:
+                self._record_decision(now, "SKIPPED", reason)
                 return self._skipped(now, reason)
-            return self._execute(view, now)
+            report = self._execute(view, now)
+            self._record_decision(
+                _safe_int(report.get("completed_at"), now),
+                str(report.get("status", "")),
+                "forced" if force else "eligible",
+            )
+            return report
         finally:
             self._run_lock.release()
 
@@ -525,6 +669,14 @@ class VpsNightCycleSupervisor:
         )
         return report
 
+    def _record_decision(self, at_ms: int, status: str, reason: str) -> None:
+        # The trace must never stop the supervisor.
+        try:
+            self.decisions.record(at_ms, status, reason)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised
+            self._log("WARN", "vps_night_decision_not_recorded", "Décision non journalisée.",
+                      error=type(exc).__name__)
+
     def _skipped(self, now: int, reason: str) -> dict[str, Any]:
         result = {
             "schema_version": SCHEMA_VERSION,
@@ -560,6 +712,7 @@ class VpsNightCycleSupervisor:
                     "reason": type(exc).__name__,
                     "at": _now_ms(),
                 }
+                self._record_decision(self._last_attempt["at"], "FAILED", type(exc).__name__)
                 self._log(
                     "ERROR",
                     "vps_night_cycle_failed",

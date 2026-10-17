@@ -22,6 +22,7 @@ import com.jadegenesis.mobile.node.NetworkRestoreWatcher
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.node.CoalescingRunner
 import com.jadegenesis.mobile.node.OrderedEventWriter
+import com.jadegenesis.mobile.state.UserActivityTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -370,6 +371,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     fun send(text: String) {
         val input = text.trim()
         if (input.isBlank()) return
+        // #78: a long conversation keeps the "in use" signal fresh.
+        UserActivityTracker.markActive(getApplication<Application>())
 
         viewModelScope.launch {
             _state.value = _state.value.copy(

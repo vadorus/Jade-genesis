@@ -135,6 +135,8 @@ def _metrics(root_data: dict[str, Any], start: int,
         section: {name: None for name in keys}
         for section, keys in METRICS.items()
     }
+    output["cycles"]["skip_reasons"] = None
+    output["cycles"]["failed_phases"] = None
     goals = root_data["goals"]
     if goals is not None:
         records = goals["goals"]
@@ -235,9 +237,22 @@ def _metrics(root_data: dict[str, Any], start: int,
             )
             # SKIPPED is not saved by the current base night-cycle writer:
             # this count covers only explicit SKIPPED records if any.
-            output["cycles"]["skipped"] = sum(
-                row["status"] == "SKIPPED" for row in period
-            )
+            # Current supervisor returns SKIPPED but does not persist it.
+            # Absence of historical records is UNKNOWN, not proof of zero skips.
+            skipped = [row for row in period if row["status"] == "SKIPPED"]
+            output["cycles"]["skipped"] = len(skipped) if skipped else None
+            if skipped:
+                known_reasons = {
+                    "requires_vps", "already_running", "pixel_active",
+                    "cadence_guard", "shared_state_identity_unbound",
+                    "phone_presence_unknown", "phone_presence_invalid",
+                }
+                reasons: dict[str, int] = {}
+                for row in skipped:
+                    value = row.get("reason")
+                    safe_reason = value if isinstance(value, str) and value in known_reasons else "other"
+                    reasons[safe_reason] = reasons.get(safe_reason, 0) + 1
+                output["cycles"]["skip_reasons"] = dict(sorted(reasons.items()))
             failed: dict[str, int] = {}
             for run in period:
                 steps = run.get("steps", [])

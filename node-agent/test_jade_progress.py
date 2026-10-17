@@ -123,6 +123,7 @@ class ProgressReportTest(unittest.TestCase):
         self.assertEqual(current["cycles"]["succeeded"], 1)
         self.assertEqual(current["cycles"]["partial"], 1)
         self.assertEqual(current["cycles"]["skipped"], 1)
+        self.assertEqual(current["cycles"]["skip_reasons"], {"pixel_active": 1})
         self.assertEqual(current["cycles"]["interrupted_by_halt"], 1)
         self.assertEqual(current["cycles"]["failed_phases"], {"MEMORY_REVIEW": 1})
         self.assertEqual(current["security"]["halt_transitions"], 1)
@@ -135,6 +136,8 @@ class ProgressReportTest(unittest.TestCase):
         self.assertIsNone(current["skills"]["sealed_passed"])
         self.assertIsNone(current["strategies"]["candidates"])
         self.assertIsNone(current["cycles"]["launched"])
+        self.assertIsNone(current["cycles"]["skipped"])
+        self.assertIsNone(current["cycles"]["skip_reasons"])
         self.assertIsNone(current["security"]["halt_transitions"])
         self.assertIsNone(report["halt_state"])
         self.assertIsNone(report["delta"]["skills"]["teacher_calls"])
@@ -213,6 +216,7 @@ class ProgressReportTest(unittest.TestCase):
         report = generate_report(self.root, now_ms=NOW)
         self.assertEqual(report["current"]["metrics"]["cycles"]["failed_phases"], {})
         self.assertEqual(report["current"]["metrics"]["cycles"]["partial"], 1)
+        self.assertIsNone(report["current"]["metrics"]["cycles"]["skipped"])
 
     def test_invalid_days_fail_closed(self):
         with self.assertRaises(ValueError):

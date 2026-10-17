@@ -25,9 +25,9 @@ class NetworkRestoreWatcher(
 ) {
     private val connectivity =
         context.applicationContext.getSystemService(ConnectivityManager::class.java)
-    private val handler = Handler(Looper.getMainLooper())
-    private val retryDue = Runnable { detector.onRetryDue(SystemClock.elapsedRealtime()) }
-    private val detector = NetworkRestoreDetector(
+    private val handler: Handler = Handler(Looper.getMainLooper())
+    private val retryDue: Runnable = Runnable { detector.onRetryDue(SystemClock.elapsedRealtime()) }
+    private val detector: NetworkRestoreDetector = NetworkRestoreDetector(
         scheduler = object : NetworkRestoreDetector.RetryScheduler {
             override fun schedule(delayMs: Long) {
                 handler.postDelayed(retryDue, delayMs.coerceAtLeast(0L))

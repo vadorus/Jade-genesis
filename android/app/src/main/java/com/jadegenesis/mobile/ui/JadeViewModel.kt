@@ -177,7 +177,9 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun onPhysicalNetworkLost() {
         NodeManager.onPhysicalNetworkLost()
-        viewModelScope.launch {
+        // Called under the network monitor's lock: always dispatch (plain Main,
+        // not Main.immediate), never run the UI update inline.
+        viewModelScope.launch(Dispatchers.Main) {
             // Display only: no probe, nothing written to the node registry.
             runCatching { core.selfModel() }.onSuccess { self ->
                 _state.value = _state.value.copy(

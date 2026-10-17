@@ -488,4 +488,50 @@ class NetworkRestoreDetectorTest {
         assertEquals(listOf("after"), written.toList())
         writerScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
+
+    // --- Codex re-review of #79: reconciliation racing with a callback ---------
+
+    @Test
+    fun staleLossCanNeverBeDeliveredAfterANewerReturn() {
+        // Thread 1 (registration) drops the vanished A and is paused inside the
+        // delivery of its loss; thread 2 (Android callback) reports B validated
+        // meanwhile. B's return must reach the detector AFTER the loss, so the
+        // re-check is requested exactly once.
+        val fired = AtomicInteger()
+        val losses = AtomicInteger()
+        val inLossDelivery = java.util.concurrent.CountDownLatch(1)
+        val releaseLoss = java.util.concurrent.CountDownLatch(1)
+        val events = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val m = PhysicalNetworkMonitor(
+            detector = detector(FakeScheduler(), fired),
+            onPhysicalLost = { losses.incrementAndGet() },
+            log = { event, _ ->
+                events += event
+                if (event == PhysicalNetworkMonitor.EVENT_PHYSICAL_LOST) {
+                    inLossDelivery.countDown()
+                    releaseLoss.await()
+                }
+            }
+        )
+        m.start(listOf("A"))
+        val registration = Thread { m.reconcileAfterRegistration(emptyList(), 1_000L) }
+        registration.start()
+        assertTrue(inLossDelivery.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        val callback = Thread { m.onNetworkChanged("B", usable = true, transport = "wifi", nowMs = 1_050L) }
+        callback.start()
+        callback.join(200)
+        assertTrue(callback.isAlive)                     // waits for the loss delivery
+        assertEquals(0, fired.get())
+        releaseLoss.countDown()
+        registration.join(2_000)
+        callback.join(2_000)
+        assertFalse(registration.isAlive || callback.isAlive)
+        assertEquals(
+            listOf(PhysicalNetworkMonitor.EVENT_PHYSICAL_LOST, PhysicalNetworkMonitor.EVENT_PHYSICAL_BACK),
+            events.toList()
+        )
+        assertEquals(1, losses.get())
+        assertEquals(1, fired.get())                     // the return is not lost
+        assertEquals(1, m.validatedCount)
+    }
 }

@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
  *   interval and fires if the network is still validated then;
  * - a new loss or [stop] cancels the pending retry.
  *
- * [onRestored] and [onDeferred] are always called outside the internal lock.
+ * [onRestored] and [onDeferred] are always called outside the detector's own lock.
  */
 internal class NetworkRestoreDetector(
     private val scheduler: RetryScheduler,
@@ -145,7 +145,8 @@ internal class NetworkRestoreDetector(
  * registration: [reconcileAfterRegistration] drops such a network, so it can
  * never be counted forever.
  *
- * [onPhysicalLost] and [log] are called outside the internal lock.
+ * [onPhysicalLost], [log] and the detector are called under the monitor's lock,
+ * in transition order: they must not block or call back into the monitor.
  * Log metadata never contains addresses, network names or tokens.
  */
 internal class PhysicalNetworkMonitor(
@@ -206,31 +207,34 @@ internal class PhysicalNetworkMonitor(
         get() = synchronized(this) { validated.size }
 
     private fun update(nowMs: Long, transport: String, change: () -> Unit) {
-        val transition = synchronized(this) {
+        // State change AND its delivery (log, detector, UI) under one lock, so
+        // a transition computed earlier can never be delivered after a newer
+        // one (Codex re-review of #79: reconciliation on the registering
+        // thread racing with a callback). Lock order is always monitor ->
+        // detector; the detector never calls back into the monitor, and the
+        // receivers only post work (log queue, coroutine launch).
+        synchronized(this) {
             change()
             val nowOnline = validated.isNotEmpty()
             val changed = nowOnline != online
             online = nowOnline
-            Transition(nowOnline, changed, validated.size)
-        }
-        if (transition.changed) {
-            log(
-                if (transition.online) EVENT_PHYSICAL_BACK else EVENT_PHYSICAL_LOST,
-                mapOf(
-                    "validated_networks" to transition.count,
-                    "last_change_transport" to transport
+            if (changed) {
+                log(
+                    if (nowOnline) EVENT_PHYSICAL_BACK else EVENT_PHYSICAL_LOST,
+                    mapOf(
+                        "validated_networks" to validated.size,
+                        "last_change_transport" to transport
+                    )
                 )
-            )
-        }
-        if (transition.online) {
-            detector.onNetworkValidated(nowMs)
-        } else {
-            detector.onNetworkLost()
-            if (transition.changed) onPhysicalLost()
+            }
+            if (nowOnline) {
+                detector.onNetworkValidated(nowMs)
+            } else {
+                detector.onNetworkLost()
+                if (changed) onPhysicalLost()
+            }
         }
     }
-
-    private data class Transition(val online: Boolean, val changed: Boolean, val count: Int)
 
     companion object {
         const val EVENT_PHYSICAL_LOST = "network_physical_lost"

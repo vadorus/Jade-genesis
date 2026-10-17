@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jadegenesis.mobile.core.JadeCore
+import com.jadegenesis.mobile.diagnostics.DiagnosticLogger
 import com.jadegenesis.mobile.model.CognitiveTraceEvent
+import com.jadegenesis.mobile.model.DiagnosticLevel
 import com.jadegenesis.mobile.model.DiagnosticLogEntry
 import com.jadegenesis.mobile.model.DistributedTaskResult
 import com.jadegenesis.mobile.model.LearningCandidate
@@ -19,11 +21,14 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NetworkRestoreWatcher
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.node.CoalescingRunner
+import com.jadegenesis.mobile.node.OrderedEventWriter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 
 private data class RefreshBundle(
     val self: SelfModel,
@@ -149,22 +154,57 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     // Before, they stayed OFFLINE until the app was reopened (measured: 76 s+).
     // A reconnection signalled while a re-check is running is not dropped: the
     // runner does one more full re-check afterwards (Codex review of #74).
+    // 0.1.26 (#77): the watcher follows the physical networks, not the Tailscale
+    // VPN, marks the nodes "à vérifier" when every physical network is gone,
+    // and every step goes to the diagnostic log.
+    private val networkDiagnostics = DiagnosticLogger(application)
+    // One ordered writer, off the main thread (Codex review of #79, P2).
+    private val networkLog = OrderedEventWriter(viewModelScope + Dispatchers.IO) { event, metadata ->
+        networkDiagnostics.log(
+            DiagnosticLevel.INFO,
+            event,
+            NETWORK_LOG_MESSAGES[event] ?: event,
+            metadata
+        )
+    }
     private val networkRestoreRunner = CoalescingRunner(viewModelScope) { recheckAfterRestore() }
     private val networkRestoreWatcher = NetworkRestoreWatcher(
         context = application,
-        onRestored = { networkRestoreRunner.request() }
+        onRestored = { networkRestoreRunner.request() },
+        onPhysicalLost = { onPhysicalNetworkLost() },
+        log = { event, metadata -> networkLog.emit(event, metadata) }
     ).also { it.start() }
+
+    private fun onPhysicalNetworkLost() {
+        NodeManager.onPhysicalNetworkLost()
+        // Called under the network monitor's lock: always dispatch (plain Main,
+        // not Main.immediate), never run the UI update inline.
+        viewModelScope.launch(Dispatchers.Main) {
+            // Display only: no probe, nothing written to the node registry.
+            runCatching { core.selfModel() }.onSuccess { self ->
+                _state.value = _state.value.copy(
+                    selfModel = self,
+                    nodeMessage = "Réseau perdu : nœuds distants à vérifier."
+                )
+            }
+        }
+    }
 
     private suspend fun recheckAfterRestore() {
         NodeManager.onNetworkRestored()
+        // Written (with every earlier network event) before the probe logs
+        // node_probe_online, so the file reads in causal order.
+        networkLog.emitAndWait("network_recheck_started")
         // Let the phone's Tailscale tunnel come back before probing.
         delay(NETWORK_RESTORE_FIRST_PROBE_DELAY_MS)
-        val online = refreshNodesNow()
+        var online = refreshNodesNow()
+        networkLog.emitAndWait("network_recheck_probe", mapOf("attempt" to 1, "online_nodes" to online))
         if (online == 0) {
             // Tunnel slower than expected: one later attempt, never a loop.
             delay(NETWORK_RESTORE_SECOND_PROBE_DELAY_MS)
             NodeManager.onNetworkRestored()
-            refreshNodesNow()
+            online = refreshNodesNow()
+            networkLog.emitAndWait("network_recheck_probe", mapOf("attempt" to 2, "online_nodes" to online))
         }
     }
 
@@ -729,3 +769,16 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 // Delays used when a validated network comes back (see recheckAfterRestore).
 private const val NETWORK_RESTORE_FIRST_PROBE_DELAY_MS = 3_000L
 private const val NETWORK_RESTORE_SECOND_PROBE_DELAY_MS = 12_000L
+
+// Diagnostic messages of the network watcher (0.1.26). Metadata holds only
+// counters, booleans and transport kinds: no address, network name or token.
+private val NETWORK_LOG_MESSAGES = mapOf(
+    "network_watch_registered" to "Surveillance du réseau physique (hors VPN) active.",
+    "network_watch_failed" to "Surveillance du réseau impossible : revérification seulement à l'ouverture, sur Actualiser et avant chaque message.",
+    "network_physical_lost" to "Plus aucun réseau physique validé : nœuds distants à vérifier.",
+    "network_physical_back" to "Réseau physique validé de retour.",
+    "network_restore_deferred" to "Retour du réseau trop rapproché : revérification reportée.",
+    "network_restore_triggered" to "Retour du réseau après une perte : revérification des nœuds demandée.",
+    "network_recheck_started" to "Revérification des nœuds après retour du réseau.",
+    "network_recheck_probe" to "Sonde après retour du réseau terminée."
+)

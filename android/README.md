@@ -22,7 +22,8 @@ Current responsibilities include persistent identity, local structured memory, d
 
 - watches the physical networks only (`INTERNET` + `NOT_VPN`: Wi-Fi, mobile data, Ethernet). "Lost" means no validated physical network left; a Wi-Fi to mobile handover with an overlap is not a loss;
 - shows the remote nodes "à vérifier" (UNKNOWN) as soon as every physical network is gone, instead of their old ONLINE state and latencies. Nothing is written to the node registry; the next successful probe makes them ONLINE again;
-- writes each step to the diagnostic log (`network_watch_registered` with `default_is_vpn`, `network_physical_lost` / `network_physical_back`, `network_restore_deferred`, `network_restore_triggered`, `network_recheck_started`, `network_recheck_probe`). Metadata holds counters, booleans and transport kinds only.
+- writes each step to the diagnostic log (`network_watch_registered` with `default_is_vpn`, `network_physical_lost` / `network_physical_back`, `network_restore_deferred`, `network_restore_triggered`, `network_recheck_started`, `network_recheck_probe`). Metadata holds counters, booleans and transport kinds only. These events go through one ordered writer: each carries `seq` and `emitted_at_ms` captured at emission, and `network_recheck_started` / `network_recheck_probe` are written before the probe that follows them, so the chain reads in causal order;
+- treats the callbacks as the source of truth: a network seen in the start-up snapshot but gone before the callback was registered is dropped right after registration, instead of being counted forever.
 
 The VPN explanation remains a hypothesis until these logs are read on the Pixel. Re-checks on open, on "Actualiser" and before each message are unchanged.
 

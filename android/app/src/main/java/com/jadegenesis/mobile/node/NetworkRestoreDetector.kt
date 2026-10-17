@@ -1,6 +1,8 @@
 package com.jadegenesis.mobile.node
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
 /**
@@ -135,6 +137,14 @@ internal class NetworkRestoreDetector(
  * "Lost" = no validated physical network left. "Back" = at least one again.
  * A Wi-Fi -> mobile handover with an overlap is therefore not a loss.
  *
+ * The callbacks are the source of truth (Codex review of #79, P1). The
+ * snapshot read before registering only decides whether the app opened
+ * offline; its networks stay "unconfirmed" until a callback reports them.
+ * Android reports every network present when the callback is registered, but
+ * never the loss of one that vanished between the snapshot and the
+ * registration: [reconcileAfterRegistration] drops such a network, so it can
+ * never be counted forever.
+ *
  * [onPhysicalLost] and [log] are called outside the internal lock.
  * Log metadata never contains addresses, network names or tokens.
  */
@@ -144,28 +154,52 @@ internal class PhysicalNetworkMonitor(
     private val log: (event: String, metadata: Map<String, Any?>) -> Unit = { _, _ -> }
 ) {
     private val validated = HashSet<String>()
+    // Snapshot networks not yet reported by any callback.
+    private val unconfirmed = HashSet<String>()
     private var online = false
 
+    /** Before registering: [initialValidated] = snapshot of validated physical networks. */
     fun start(initialValidated: Collection<String>) {
         val onlineNow = synchronized(this) {
             validated.clear()
             validated.addAll(initialValidated)
+            unconfirmed.clear()
+            unconfirmed.addAll(initialValidated)
             online = validated.isNotEmpty()
             online
         }
         detector.onStart(onlineNow)
     }
 
+    /**
+     * Right after registering: [presentNow] = validated physical networks read
+     * AFTER the registration. A snapshot network absent from it and never
+     * reported by a callback vanished before the registration: it is dropped,
+     * which is a loss if it was the last one. Networks already reported by a
+     * callback are never touched here.
+     */
+    fun reconcileAfterRegistration(presentNow: Collection<String>, nowMs: Long) {
+        update(nowMs, TRANSPORT_NONE) {
+            val vanished = unconfirmed.filter { it !in presentNow }
+            validated.removeAll(vanished.toSet())
+            unconfirmed.clear()
+        }
+    }
+
     /** Capabilities of one physical network changed ([usable] = INTERNET + VALIDATED). */
     fun onNetworkChanged(id: String, usable: Boolean, transport: String, nowMs: Long) {
         update(nowMs, transport) {
+            unconfirmed.remove(id)
             if (usable) validated.add(id) else validated.remove(id)
         }
     }
 
     /** One physical network disappeared. */
     fun onNetworkLost(id: String, nowMs: Long) {
-        update(nowMs, TRANSPORT_NONE) { validated.remove(id) }
+        update(nowMs, TRANSPORT_NONE) {
+            unconfirmed.remove(id)
+            validated.remove(id)
+        }
     }
 
     val validatedCount: Int
@@ -202,6 +236,62 @@ internal class PhysicalNetworkMonitor(
         const val EVENT_PHYSICAL_LOST = "network_physical_lost"
         const val EVENT_PHYSICAL_BACK = "network_physical_back"
         const val TRANSPORT_NONE = "none"
+    }
+}
+
+/**
+ * Writes diagnostic events one at a time, in the order they were emitted
+ * (Codex review of #79, P2). Each event carries `seq` and `emitted_at_ms`,
+ * captured at emission under one lock, so the chain can be read in order even
+ * though the logger stamps `created_at` at write time. [emitAndWait] returns
+ * only once that event AND every earlier one are written: a step that logs
+ * with it is in the file before whatever the caller does next (for example a
+ * probe that logs `node_probe_online` through another logger).
+ *
+ * [scope] decides the thread of [write] (Dispatchers.IO in the app).
+ * A failed write is skipped, never retried, and never blocks the queue.
+ */
+internal class OrderedEventWriter(
+    scope: CoroutineScope,
+    private val clock: () -> Long = { System.currentTimeMillis() },
+    private val write: (event: String, metadata: Map<String, Any?>) -> Unit
+) {
+    private class Item(
+        val event: String,
+        val metadata: Map<String, Any?>,
+        val done: CompletableDeferred<Unit>?
+    )
+
+    private val lock = Any()
+    private var seq = 0L
+    private val queue = Channel<Item>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (item in queue) {
+                runCatching { write(item.event, item.metadata) }
+                item.done?.complete(Unit)
+            }
+        }
+    }
+
+    fun emit(event: String, metadata: Map<String, Any?> = emptyMap()) {
+        enqueue(event, metadata, null)
+    }
+
+    suspend fun emitAndWait(event: String, metadata: Map<String, Any?> = emptyMap()) {
+        val done = CompletableDeferred<Unit>()
+        enqueue(event, metadata, done)
+        done.await()
+    }
+
+    private fun enqueue(event: String, metadata: Map<String, Any?>, done: CompletableDeferred<Unit>?) {
+        synchronized(lock) {
+            seq += 1
+            val stamped = metadata + mapOf("seq" to seq, "emitted_at_ms" to clock())
+            // Never throws: the channel is unlimited. Closed (scope gone): give up quietly.
+            if (queue.trySend(Item(event, stamped, done)).isFailure) done?.complete(Unit)
+        }
     }
 }
 

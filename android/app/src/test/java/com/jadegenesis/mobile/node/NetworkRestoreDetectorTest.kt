@@ -1,6 +1,7 @@
 package com.jadegenesis.mobile.node
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -364,5 +365,127 @@ class NetworkRestoreDetectorTest {
         assertEquals(1, fired.get())
         d.onRetryDue(25_000L)
         assertEquals(2, fired.get())
+    }
+
+    // --- Codex review of #79, P1: network gone between snapshot and registration --
+
+    @Test
+    fun networkVanishedBeforeRegistrationIsNotCountedForever() {
+        // Codex reproduction: snapshot [A], A disappears before the callback is
+        // registered (no callback for A, ever), then B validated, B lost, C validated.
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.reconcileAfterRegistration(presentNow = emptyList(), nowMs = 1_000L)
+        assertEquals(0, m.validatedCount)
+        assertEquals(1, rec.losses)                      // nodes shown "à vérifier"
+        m.onNetworkChanged("B", usable = true, transport = "wifi", nowMs = 5_000L)
+        assertEquals(1, fired.get())                     // one re-check request
+        m.onNetworkLost("B", 30_000L)
+        assertEquals(2, rec.losses)
+        m.onNetworkChanged("C", usable = true, transport = "cellular", nowMs = 60_000L)
+        assertEquals(2, fired.get())
+        assertEquals(1, m.validatedCount)
+    }
+
+    @Test
+    fun callbackArrivingBeforeReconciliationIsKept() {
+        // The registration thread and the callback thread race: B is reported
+        // before the post-registration read, which does not list A any more.
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.onNetworkChanged("B", usable = true, transport = "wifi", nowMs = 1_000L)
+        m.reconcileAfterRegistration(presentNow = listOf("B"), nowMs = 1_100L)
+        assertEquals(1, m.validatedCount)
+        assertEquals(0, rec.losses)                      // B covered the whole time
+        m.onNetworkLost("B", 2_000L)
+        assertEquals(1, rec.losses)
+        m.onNetworkChanged("C", usable = true, transport = "wifi", nowMs = 20_000L)
+        assertEquals(1, fired.get())
+    }
+
+    @Test
+    fun snapshotNetworkConfirmedByACallbackIsNeverDroppedByReconciliation() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.onNetworkChanged("A", usable = true, transport = "wifi", nowMs = 1_000L)
+        m.reconcileAfterRegistration(presentNow = emptyList(), nowMs = 1_100L)
+        assertEquals(1, m.validatedCount)
+        assertEquals(0, rec.losses)
+        m.onNetworkLost("A", 2_000L)                     // its real loss still arrives
+        assertEquals(1, rec.losses)
+    }
+
+    @Test
+    fun snapshotNetworkStillPresentStaysCountedUntilItsOwnLoss() {
+        val fired = AtomicInteger()
+        val rec = Recorder()
+        val m = monitor(fired, rec)
+        m.start(listOf("A"))
+        m.reconcileAfterRegistration(presentNow = listOf("A"), nowMs = 1_000L)
+        assertEquals(1, m.validatedCount)
+        assertEquals(0, rec.losses)
+        assertEquals(0, fired.get())
+    }
+
+    // --- Codex review of #79, P2: causal order of the network log ---------------
+
+    @Test
+    fun logChainIsWrittenInEmissionOrderEvenWhenTheFirstWriteIsSlow() = runBlocking<Unit> {
+        val written = java.util.Collections.synchronizedList(mutableListOf<Pair<String, Long>>())
+        val firstWriteMayFinish = java.util.concurrent.CountDownLatch(1)
+        val writerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+        var clock = 0L
+        val log = OrderedEventWriter(writerScope, clock = { ++clock }) { event, metadata ->
+            if (event == "network_physical_back") firstWriteMayFinish.await()
+            written += event to (metadata["seq"] as Long)
+        }
+        // Emitted from the ConnectivityManager thread, in this order.
+        val callbackThread = Thread {
+            log.emit("network_physical_back", mapOf("validated_networks" to 1))
+            log.emit("network_restore_triggered")
+        }
+        callbackThread.start()
+        callbackThread.join()
+        // The re-check coroutine waits for its own entry, hence for the earlier ones.
+        val recheck = async(kotlinx.coroutines.Dispatchers.Default) {
+            log.emitAndWait("network_recheck_started")
+            written += "node_probe_online" to -1L          // logged by NodeManager's own logger
+            log.emitAndWait("network_recheck_probe", mapOf("attempt" to 1))
+        }
+        delay(100)
+        assertTrue(written.isEmpty())                     // first write still blocked
+        assertFalse(recheck.isCompleted)
+        firstWriteMayFinish.countDown()
+        withTimeout(2_000) { recheck.await() }
+        assertEquals(
+            listOf(
+                "network_physical_back", "network_restore_triggered", "network_recheck_started",
+                "node_probe_online", "network_recheck_probe"
+            ),
+            written.map { it.first }
+        )
+        val seqs = written.filter { it.second > 0 }.map { it.second }
+        assertEquals(listOf(1L, 2L, 3L, 4L), seqs)
+        writerScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+    }
+
+    @Test
+    fun failedWriteDoesNotBlockTheQueue() = runBlocking<Unit> {
+        val written = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val writerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+        val log = OrderedEventWriter(writerScope) { event, _ ->
+            if (event == "boom") error("disk full")
+            written += event
+        }
+        log.emit("boom")
+        withTimeout(2_000) { log.emitAndWait("after") }
+        assertEquals(listOf("after"), written.toList())
+        writerScope.coroutineContext[kotlinx.coroutines.Job]?.cancel()
     }
 }

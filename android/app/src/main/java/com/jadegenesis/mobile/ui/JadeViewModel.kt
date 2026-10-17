@@ -21,12 +21,14 @@ import com.jadegenesis.mobile.model.ToolCandidateSnapshot
 import com.jadegenesis.mobile.node.NetworkRestoreWatcher
 import com.jadegenesis.mobile.node.NodeManager
 import com.jadegenesis.mobile.node.CoalescingRunner
+import com.jadegenesis.mobile.node.OrderedEventWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.plus
 
 private data class RefreshBundle(
     val self: SelfModel,
@@ -156,25 +158,22 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
     // VPN, marks the nodes "à vérifier" when every physical network is gone,
     // and every step goes to the diagnostic log.
     private val networkDiagnostics = DiagnosticLogger(application)
+    // One ordered writer, off the main thread (Codex review of #79, P2).
+    private val networkLog = OrderedEventWriter(viewModelScope + Dispatchers.IO) { event, metadata ->
+        networkDiagnostics.log(
+            DiagnosticLevel.INFO,
+            event,
+            NETWORK_LOG_MESSAGES[event] ?: event,
+            metadata
+        )
+    }
     private val networkRestoreRunner = CoalescingRunner(viewModelScope) { recheckAfterRestore() }
     private val networkRestoreWatcher = NetworkRestoreWatcher(
         context = application,
         onRestored = { networkRestoreRunner.request() },
         onPhysicalLost = { onPhysicalNetworkLost() },
-        log = { event, metadata -> logNetwork(event, metadata) }
+        log = { event, metadata -> networkLog.emit(event, metadata) }
     ).also { it.start() }
-
-    private fun logNetwork(event: String, metadata: Map<String, Any?> = emptyMap()) {
-        // File I/O off the ConnectivityManager and main threads.
-        viewModelScope.launch(Dispatchers.IO) {
-            networkDiagnostics.log(
-                DiagnosticLevel.INFO,
-                event,
-                NETWORK_LOG_MESSAGES[event] ?: event,
-                metadata
-            )
-        }
-    }
 
     private fun onPhysicalNetworkLost() {
         NodeManager.onPhysicalNetworkLost()
@@ -191,17 +190,19 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun recheckAfterRestore() {
         NodeManager.onNetworkRestored()
-        logNetwork("network_recheck_started")
+        // Written (with every earlier network event) before the probe logs
+        // node_probe_online, so the file reads in causal order.
+        networkLog.emitAndWait("network_recheck_started")
         // Let the phone's Tailscale tunnel come back before probing.
         delay(NETWORK_RESTORE_FIRST_PROBE_DELAY_MS)
         var online = refreshNodesNow()
-        logNetwork("network_recheck_probe", mapOf("attempt" to 1, "online_nodes" to online))
+        networkLog.emitAndWait("network_recheck_probe", mapOf("attempt" to 1, "online_nodes" to online))
         if (online == 0) {
             // Tunnel slower than expected: one later attempt, never a loop.
             delay(NETWORK_RESTORE_SECOND_PROBE_DELAY_MS)
             NodeManager.onNetworkRestored()
             online = refreshNodesNow()
-            logNetwork("network_recheck_probe", mapOf("attempt" to 2, "online_nodes" to online))
+            networkLog.emitAndWait("network_recheck_probe", mapOf("attempt" to 2, "online_nodes" to online))
         }
     }
 

@@ -99,6 +99,11 @@ class NetworkRestoreWatcher(
         runCatching { manager.registerNetworkCallback(request, callback) }
             .onSuccess {
                 registered = true
+                // Drop a snapshot network that vanished before the registration
+                // (no callback will ever report its loss). Codex review of #79, P1.
+                val presentNow = runCatching { validatedPhysicalNetworks(manager) }
+                    .getOrDefault(emptyList())
+                monitor.reconcileAfterRegistration(presentNow, SystemClock.elapsedRealtime())
                 log(
                     EVENT_REGISTERED,
                     mapOf(

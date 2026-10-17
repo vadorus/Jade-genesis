@@ -61,8 +61,11 @@ restituer les résumés textuels. skipped ne compte que les éventuels enregistr
 SKIPPED visibles. IMPORTANT : le superviseur actuel retourne un état SKIPPED
 (motif pixel_active, cooldown, etc.) sans le conserver durablement ; le rapport
 ne peut donc pas prouver le nombre total de cycles sautés ni leurs motifs.
-La valeur zéro de skipped ne signifie pas « aucun saut ». Le suivi persistant
-des sauts exige une autre issue et des modifications hors des 3 fichiers réservés.
+L'absence d'enregistrement SKIPPED donne donc skipped=null, et non un faux zéro.
+Quand des enregistrements SKIPPED existent, skip_reasons compte uniquement les
+motifs du vocabulaire connu (motif inconnu => other, pour éviter toute fuite).
+Ce nombre est une observation partielle, pas une exhaustivité garantie. Le suivi
+persistant des sauts exige une autre issue et des modifications hors des 3 fichiers réservés.
 interrupted_by_halt est le nombre d'événements halt_interrupted de la boucle
 adaptative, sans preuve d'unicité de cycle (pas de run_id dans ces événements).
 

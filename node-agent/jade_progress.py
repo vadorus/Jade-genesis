@@ -71,7 +71,7 @@ def _read_json(root: Path, key: str, field: str | None,
     if not isinstance(raw, dict) or raw.get("schema_version") != 1:
         warnings.add("invalid_schema:" + name)
         return None
-    if field is not None and not isinstance(raw.get(field), (dict, list)):
+    if field is not None and not isinstance(raw.get(field), dict if key in {"goals", "ledger"} else list):
         warnings.add("invalid_shape:" + name)
         return None
     return raw
@@ -248,7 +248,7 @@ def _metrics(root_data: dict[str, Any], start: int,
                     if not isinstance(step, dict) or step.get("success") is not False:
                         continue
                     phase = step.get("phase")
-                    if phase in PHASES:
+                    if isinstance(phase, str) and phase in PHASES:
                         failed[phase] = failed.get(phase, 0) + 1
             output["cycles"]["failed_phases"] = dict(sorted(failed.items()))
             warnings.add("cycle_skips_not_durably_recorded")

@@ -4,10 +4,6 @@ import com.jadegenesis.mobile.model.NodeStatus
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/**
- * Pure decisions used by [NodeManager.refreshRemoteNodes], kept free of Android
- * and network code so they can be covered by JVM tests.
- */
 /** A process-shared single-flight gate without Android or networking dependencies. */
 internal class NodeRefreshCoordinator {
     private val refreshMutex = Mutex()
@@ -28,6 +24,10 @@ internal class NodeRefreshCoordinator {
     }
 }
 
+/**
+ * Pure decisions used by [NodeManager.refreshRemoteNodes], kept free of Android
+ * and network code so they can be covered by JVM tests.
+ */
 internal object NodeRefreshPolicy {
 
     /**
@@ -46,16 +46,24 @@ internal object NodeRefreshPolicy {
             .toSet()
     }
 
+    /** When a patient retry started, and in which network generation. */
+    data class PatientRetryMark(val atMs: Long, val generation: Long)
+
     /**
-     * Applies probe results to the registry as it is now, not as it was when the
-     * probe started.
-     *
-     * - A node deleted while the probe was running is not added back.
-     * - A node whose stored record changed while the probe was running
-     *   (re-pairing, token or route edit, another probe) keeps the newer stored
-     *   record; the next refresh will probe it again.
-     * - Nodes added while the probe was running are kept unchanged.
+     * Patient retry decision across network reconnections: a mark left by a
+     * refresh from an earlier network generation never blocks the current one,
+     * even when it was written after the reconnection was signalled.
      */
+    fun shouldRunPatientRetry(
+        nowMs: Long,
+        previous: PatientRetryMark?,
+        generation: Long,
+        cooldownMs: Long
+    ): Boolean {
+        if (previous == null || previous.generation < generation) return true
+        return shouldRunPatientRetry(nowMs, previous.atMs, cooldownMs)
+    }
+
     /** First patient probe always allowed; later attempts use a monotonic 60 s window. */
     fun shouldRunPatientRetry(
         nowMs: Long,
@@ -67,6 +75,16 @@ internal object NodeRefreshPolicy {
             nowMs - previousAttemptMs >= cooldownMs
     }
 
+    /**
+     * Applies probe results to the registry as it is now, not as it was when the
+     * probe started.
+     *
+     * - A node deleted while the probe was running is not added back.
+     * - A node whose stored record changed while the probe was running
+     *   (re-pairing, token or route edit, another probe) keeps the newer stored
+     *   record; the next refresh will probe it again.
+     * - Nodes added while the probe was running are kept unchanged.
+     */
     fun <T> mergeProbeResults(
         snapshot: List<T>,
         latest: List<T>,

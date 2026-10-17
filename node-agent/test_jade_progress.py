@@ -190,6 +190,30 @@ class ProgressReportTest(unittest.TestCase):
         self.assertIsNone(obj["halt_state"])
         self.assertEqual(result.stderr, "")
 
+    def test_nested_store_shapes_fail_closed(self):
+        self.write("workshop/skill-learning-goals.json", {
+            "schema_version": 1, "goals": []
+        })
+        self.write("archive/verifiable-task-ledger.json", {
+            "schema_version": 1, "datasets": []
+        })
+        report = generate_report(self.root, now_ms=NOW)
+        self.assertIsNone(report["current"]["metrics"]["skills"]["goals_opened"])
+        self.assertIsNone(report["current"]["metrics"]["skills"]["sealed_passed"])
+        self.assertIn("invalid_shape:workshop/skill-learning-goals.json", report["warnings"])
+        self.assertIn("invalid_shape:archive/verifiable-task-ledger.json", report["warnings"])
+
+    def test_malformed_phase_is_ignored_without_crashing(self):
+        self.write("night-cycle-supervisor.json", {
+            "schema_version": 1, "runs": [
+                {"status": "PARTIAL", "started_at": THIS + 100,
+                 "steps": [{"phase": ["unhashable"], "success": False}]}
+            ]
+        })
+        report = generate_report(self.root, now_ms=NOW)
+        self.assertEqual(report["current"]["metrics"]["cycles"]["failed_phases"], {})
+        self.assertEqual(report["current"]["metrics"]["cycles"]["partial"], 1)
+
     def test_invalid_days_fail_closed(self):
         with self.assertRaises(ValueError):
             generate_report(self.root, days=0, now_ms=NOW)

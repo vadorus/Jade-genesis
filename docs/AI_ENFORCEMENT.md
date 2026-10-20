@@ -95,12 +95,17 @@ le contrôle hors du pilote et conserver la preuve datée dans la passation.
 - `Auteur-IA`, `Relecteur-IA`, réservation et `Tests` sont des déclarations. Le
   contrôle ne prouve ni l'identité d'une IA, ni l'exécution de tests, ni une revue.
 - L'inventaire n'est pas une exclusion mutuelle. Une modification d'une autre PR
-  ou d'une issue après le contrôle peut rendre un succès ancien obsolète. Le
-  workflow réagit aux événements de la PR courante, **pas** aux modifications
-  de toutes les issues réservées. Ce contrôle est une détection ponctuelle,
-  non un verrou atomique ni une garantie contre les écritures simultanées.
-  Réexécuter le précontrôle et vérifier les conflits avant reprise et fusion ;
-  une réussite ancienne peut être périmée.
+  ou d'une issue après le contrôle peut rendre un succès ancien obsolète.
+  Le job `invalidate-stale-gates` (événements GitHub `issues`) marque en échec
+  les anciens `multi-agent-gate` verts des PR ouvertes lorsqu'une issue de
+  réservation est créée, éditée, fermée, supprimée ou transférée. Il n'exécute
+  aucun code de PR. Pour revoir un succès, rééditer la description de la PR
+  (déclencheur `pull_request_target: edited`) ou pousser une nouvelle tête.
+  **Ce mécanisme ne fonctionne qu'après intégration du workflow de confiance
+  dans la branche GitHub par défaut.** L'arrivée et la publication des événements
+  restent asynchrones : ce n'est ni un verrou atomique ni une garantie contre
+  toutes les courses. Réexécuter le précontrôle et vérifier les conflits avant
+  reprise et fusion ; une réussite ancienne peut être périmée.
 - Toute personne autorisée à pousser une branche peut créer un autre workflow
   publiant un faux `multi-agent-gate` depuis l’app GitHub Actions : épingler cette
   app ne distingue pas les workflows. Les administrateurs peuvent aussi modifier

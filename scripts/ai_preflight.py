@@ -17,6 +17,7 @@ import sys
 PRODUCTS = {'vadorus/addonhardwaregame2d': 'v013/demo-octobre',
             'vadorus/tech-empire-roblox': 'main', 'vadorus/Jade-genesis': 'main'}
 AGENTS = ('Claude', 'Codex', 'Antigravity', 'Humain')
+ACTIVE_RESERVATIONS = ('Réservée', 'En cours', 'En revue')
 
 def command(argv):
     result = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
@@ -51,6 +52,38 @@ def parse_zones(value):
 
 def within(path, zones):
     return any(path.startswith(zone) if zone.endswith('/') else path == zone for zone in zones)
+
+def zones_overlap(first, second):
+    """Exact files and nested directory scopes intersect only on path boundaries."""
+    for left in first:
+        for right in second:
+            if left.endswith('/') and right.endswith('/'):
+                if left.startswith(right) or right.startswith(left):
+                    return True
+            elif left.endswith('/'):
+                if right.startswith(left):
+                    return True
+            elif right.endswith('/'):
+                if left.startswith(right):
+                    return True
+            elif left == right:
+                return True
+    return False
+
+def conflicting_reservations(task_number, task_zones, issues):
+    """Fail closed for overlapping or malformed active reservations."""
+    errors = []
+    for other in issues:
+        if (other.get('number') == task_number or other.get('state') != 'open' or
+                'pull_request' in other or
+                field(other.get('body'), 'Réservation-état') not in ACTIVE_RESERVATIONS):
+            continue
+        zones = parse_zones(field(other.get('body'), 'Zones'))
+        if not zones:
+            errors.append('Réservation active invalide dans issue #' + str(other['number']))
+        elif zones_overlap(task_zones, zones):
+            errors.append('Conflit de réservation avec issue #' + str(other['number']))
+    return errors
 
 def inspect(args):
     if PRODUCTS.get(args.repo) != args.base:
@@ -97,11 +130,13 @@ def inspect(args):
             errors.append('Auteur différent de la réservation de l’issue.')
         if field(issue.get('body'), 'Relecteur-IA') != args.reviewer:
             errors.append('Relecteur différent de la réservation de l’issue.')
-        if field(issue.get('body'), 'Réservation-état') not in ('Réservée', 'En cours', 'En revue'):
+        if field(issue.get('body'), 'Réservation-état') not in ACTIVE_RESERVATIONS:
             errors.append('Réservation inactive ou absente.')
         zones = parse_zones(field(issue.get('body'), 'Zones'))
         if not zones or any(not within(p, zones) for p in args.paths):
             errors.append('Fichiers prévus hors des zones réservées.')
+        if zones:
+            errors.extend(conflicting_reservations(args.task, zones, issues))
     if (args.writer or args.reviewer or args.paths) and not args.task:
         errors.append('Sans issue : inventaire seulement, pas de validation de réservation.')
     for n, item in inventories.items():
@@ -117,6 +152,12 @@ def inspect(args):
     signature = lambda rows: sorted((p['number'], p['head']['sha'], p['base']['ref'], p.get('updated_at')) for p in rows)
     if signature(later_prs) != signature(prs):
         errors.append('Inventaire des PR modifié pendant le contrôle : relancer.')
+    later_issues = [x for x in api(f'repos/{args.repo}/issues?state=open&per_page=100', True)
+                    if 'pull_request' not in x]
+    issue_signature = lambda rows: sorted((x['number'], x['state'], x.get('updated_at'),
+                                           x.get('body')) for x in rows)
+    if issue_signature(later_issues) != issue_signature(issues):
+        errors.append('Inventaire des réservations modifié pendant le contrôle : relancer.')
     later_base = api(f'repos/{args.repo}/branches/{args.base.replace("/", "%2F")}')
     if later_base['commit']['sha'] != base['commit']['sha']:
         errors.append('Branche produit modifiée pendant le contrôle : relancer.')

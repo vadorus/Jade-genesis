@@ -1,11 +1,14 @@
 name: Multi-agent coordination gate
 
 on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches: [main]
 
-# Never checkout, build, execute or interpolate code/text supplied by the PR.
+# Only the pull_request job checks out untrusted code, with a read-only token.
+# The privileged pull_request_target job never executes or checks out PR code.
 # checks:write is limited to reporting the result on the current PR HEAD.
 permissions:
   contents: read
@@ -14,11 +17,26 @@ permissions:
   checks: write
 
 concurrency:
-  group: coordination-${{ github.event.pull_request.number }}
+  group: coordination-${{ github.event_name }}-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
+  preflight-unit-tests:
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR merge commit (read-only job)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Execute Python and JavaScript policy tests
+        run: python3 -m unittest discover -s tests -p 'test_ai_preflight.py' -v
+
   coordination-policy-runner:
+    if: github.event_name == 'pull_request_target'
     name: coordination-policy-runner
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -93,16 +111,19 @@ jobs:
                       x.replace(/\/$/, '').split('/').some(p => !p))) return null;
                   return result;
                 }
+                function zoneKey(value) {
+                  // A bare path can be a file or directory; compare conservatively.
+                  return value.replace(/\/$/, '').toLowerCase();
+                }
+                function containsZone(parent, child) {
+                  const left = zoneKey(parent), right = zoneKey(child);
+                  return right === left || right.startsWith(left + '/');
+                }
                 function within(path, scope) {
-                  return scope.some(zone => zone.endsWith('/') ? path.startsWith(zone) : path === zone);
+                  return scope.some(zone => containsZone(zone, path));
                 }
                 function zonesOverlap(first, second) {
-                  return first.some(a => second.some(b => {
-                    if (a.endsWith('/') && b.endsWith('/')) return a.startsWith(b) || b.startsWith(a);
-                    if (a.endsWith('/')) return b.startsWith(a);
-                    if (b.endsWith('/')) return a.startsWith(b);
-                    return a === b;
-                  }));
+                  return first.some(a => second.some(b => containsZone(a, b) || containsZone(b, a)));
                 }
                 function issueSignature(items) {
                   return JSON.stringify(items.map(x => [x.number, x.state, x.updated_at, x.body]).sort((a, b) => a[0] - b[0]));

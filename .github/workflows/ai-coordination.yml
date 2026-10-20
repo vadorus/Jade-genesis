@@ -3,6 +3,8 @@ name: Multi-agent coordination gate
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
+  issues:
+    types: [opened, edited, deleted, transferred, closed, reopened]
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches: [main]
@@ -17,7 +19,7 @@ permissions:
   checks: write
 
 concurrency:
-  group: coordination-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  group: coordination-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
@@ -231,4 +233,59 @@ jobs:
               // successful after reporting it; infrastructure failures remain visible.
               if (check) core.error('Coordination bloquée : ' + error.message);
               else core.setFailed('Contrôle non publié : ' + error.message);
+            }
+
+  invalidate-stale-gates:
+    if: github.event_name == 'issues'
+    name: invalidate-stale-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: write
+    steps:
+      - name: Invalidate earlier green reservation checks after issue changes
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            function reservationChange(payload) {
+              const marker = /^Réservation-état\s*:/m;
+              return ['deleted', 'transferred'].includes(payload.action) ||
+                marker.test(payload.issue?.body || '') ||
+                marker.test(payload.changes?.body?.from || '');
+            }
+            if (reservationChange(context.payload)) {
+              const { owner, repo } = context.repo;
+              const issueNumber = context.payload.issue?.number || '?';
+              const pullRequests = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
+              });
+              let invalidated = 0;
+              for (const pr of pullRequests) {
+                const runs = await github.paginate(github.rest.checks.listForRef, {
+                  owner, repo, ref: pr.head.sha, check_name: 'multi-agent-gate',
+                  filter: 'all', per_page: 100
+                });
+                for (const check of runs) {
+                  // Only invalidate our own GitHub Actions policy check.
+                  if (check.app?.id !== 15368 ||
+                      (check.status === 'completed' && check.conclusion !== 'success')) continue;
+                  await github.rest.checks.update({
+                    owner, repo, check_run_id: check.id,
+                    status: 'completed', conclusion: 'failure',
+                    output: {
+                      title: 'Réservation modifiée : contrôle à refaire',
+                      summary: 'Issue #' + issueNumber +
+                        ' modifiée depuis une validation. Relancer le contrôle de la PR avant fusion.'
+                    }
+                  });
+                  invalidated++;
+                }
+              }
+              core.info('Validations précédentes invalidées : ' + invalidated);
+            } else {
+              core.info('Issue non liée à une réservation active ou précédente.');
             }

@@ -93,17 +93,31 @@ class ReservationOverlapTests(unittest.TestCase):
         self.assertIn("issue_signature(later_issues) != issue_signature(issues)", source)
 
     @staticmethod
-    def workflow_script():
+    def workflow_scripts():
         lines = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8").splitlines()
-        position = lines.index("          script: |")
-        return "\n".join(line[12:] for line in lines[position + 1:] if line.startswith("            "))
+        positions = [i for i, line in enumerate(lines) if line == "          script: |"]
+        sources = []
+        for position in positions:
+            block = []
+            for line in lines[position + 1:]:
+                if line.strip() and not line.startswith("            "):
+                    break
+                block.append(line[12:] if line.startswith("            ") else "")
+            sources.append("\n".join(block))
+        return sources
+
+    @staticmethod
+    def workflow_script():
+        return ReservationOverlapTests.workflow_scripts()[0]
 
     @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
     def test_workflow_script_syntax(self):
-        result = subprocess.run(["node", "--check", "--input-type=module"],
-                                input=self.workflow_script(), text=True,
-                                capture_output=True, timeout=15, check=False)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for source in self.workflow_scripts():
+            with self.subTest(source=source[:75]):
+                result = subprocess.run(["node", "--check", "--input-type=module"],
+                                        input=source, text=True,
+                                        capture_output=True, timeout=15, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
     def test_workflow_js_zone_logic(self):
@@ -125,6 +139,50 @@ assert.equal(within('scripts-old/file.gd', ['scripts']), false);
         result = subprocess.run(["node", "-"], input=functions + "\n" + assertions,
                                 text=True, capture_output=True, timeout=15, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_issue_event_invalidation_classifier(self):
+        script = self.workflow_scripts()[1]
+        self.assertIn("function reservationChange(payload)", script)
+        functions = script[:script.index("if (reservationChange(context.payload)) {")]
+        assertions = """
+const assert = require('node:assert/strict');
+assert.equal(reservationChange({action:'edited', issue:{body:'Réservation-état: En cours'}}), true);
+assert.equal(reservationChange({action:'edited', issue:{body:'Suivi simple'},
+  changes:{body:{from:'Réservation-état: Réservée'}}}), true);
+assert.equal(reservationChange({action:'closed', issue:{body:'Réservation-état: En cours'}}), true);
+assert.equal(reservationChange({action:'deleted', issue:{}}), true);
+assert.equal(reservationChange({action:'transferred', issue:{}}), true);
+assert.equal(reservationChange({action:'edited', issue:{body:'Simple issue'}}), false);
+assert.equal(reservationChange({action:'edited', issue:{body:'Note: Réservation-état: En cours'}}), false);
+"""
+        result = subprocess.run(["node", "-"], input=functions + "\n" + assertions,
+                                text=True, capture_output=True, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_issue_event_invalidation_is_separate_and_privileged(self):
+        source = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8")
+        self.assertIn("types: [opened, edited, deleted, transferred, closed, reopened]", source)
+        self.assertIn("if: github.event_name == 'issues'", source)
+        self.assertIn("if: github.event_name == 'pull_request_target'", source)
+        self.assertIn("check.app?.id !== 15368", source)
+        self.assertIn("conclusion: 'failure'", source)
+        self.assertEqual(len(self.workflow_scripts()), 2)
+
+    def test_simulated_concurrent_reservations(self):
+        cases = [
+            (["scripts/"], "scripts/worker.py", True),
+            (["scripts"], "scripts/worker.py", True),
+            (["Scripts"], "scripts/worker.py", True),
+            (["scripts/ai/"], "scripts/ai/other.py", True),
+            (["scripts/"], "scripts-other/file.py", False),
+            (["scripts/a.py"], "scripts/a.py.bak", False),
+        ]
+        for scope, filename, blocked in cases:
+            with self.subTest(scope=scope, filename=filename):
+                errors = preflight.conflicting_reservations(
+                    1, [filename], [issue(2, zones=",".join(scope))])
+                self.assertEqual(bool(errors), blocked)
 
     def test_workflow_rechecks_reservation_snapshot(self):
         source = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8")

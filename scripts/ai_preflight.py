@@ -50,25 +50,22 @@ def parse_zones(value):
             return None
     return zones
 
+def _zone_key(value):
+    """Normalize relative paths for conservative cross-platform comparisons."""
+    return value.rstrip('/').casefold()
+
+def _contains_zone(parent, child):
+    """A bare path may be a file or folder; match at '/' boundaries only."""
+    parent_key, child_key = _zone_key(parent), _zone_key(child)
+    return child_key == parent_key or child_key.startswith(parent_key + '/')
+
 def within(path, zones):
-    return any(path.startswith(zone) if zone.endswith('/') else path == zone for zone in zones)
+    return any(_contains_zone(zone, path) for zone in zones)
 
 def zones_overlap(first, second):
-    """Exact files and nested directory scopes intersect only on path boundaries."""
-    for left in first:
-        for right in second:
-            if left.endswith('/') and right.endswith('/'):
-                if left.startswith(right) or right.startswith(left):
-                    return True
-            elif left.endswith('/'):
-                if right.startswith(left):
-                    return True
-            elif right.endswith('/'):
-                if left.startswith(right):
-                    return True
-            elif left == right:
-                return True
-    return False
+    """Treat ambiguous bare directories as reserved, including descendants."""
+    return any(_contains_zone(left, right) or _contains_zone(right, left)
+               for left in first for right in second)
 
 def conflicting_reservations(task_number, task_zones, issues):
     """Fail closed for overlapping or malformed active reservations."""

@@ -96,6 +96,17 @@ jobs:
                 function within(path, scope) {
                   return scope.some(zone => zone.endsWith('/') ? path.startsWith(zone) : path === zone);
                 }
+                function zonesOverlap(first, second) {
+                  return first.some(a => second.some(b => {
+                    if (a.endsWith('/') && b.endsWith('/')) return a.startsWith(b) || b.startsWith(a);
+                    if (a.endsWith('/')) return b.startsWith(a);
+                    if (b.endsWith('/')) return a.startsWith(b);
+                    return a === b;
+                  }));
+                }
+                function issueSignature(items) {
+                  return JSON.stringify(items.map(x => [x.number, x.state, x.updated_at, x.body]).sort((a, b) => a[0] - b[0]));
+                }
                 async function filesOf(pull) {
                   const files = await github.paginate(github.rest.pulls.listFiles, {
                     owner, repo, pull_number: pull.number, per_page: 100
@@ -113,6 +124,7 @@ jobs:
                 const writer = field(pr.body, 'Auteur-IA');
                 const reviewer = field(pr.body, 'Relecteur-IA');
                 const tests = field(pr.body, 'Tests');
+                let reservationsBefore = null;
                 if (!agent(writer)) errors.push('Auteur-IA unique et valide obligatoire.');
                 if (!agent(reviewer)) errors.push('Relecteur-IA unique et valide obligatoire.');
                 if (writer === reviewer) errors.push('Auteur et relecteur doivent être distincts.');
@@ -137,6 +149,24 @@ jobs:
                   const scope = zones(field(issue.body, 'Zones'));
                   if (!scope) errors.push('Zones explicites et relatives obligatoires dans l’issue.');
                   else for (const path of paths) if (!within(path, scope)) errors.push('Hors réservation : ' + path);
+                  // An active issue reserves its whole declared scope, even without a PR.
+                  // Tracking-only issues have no active reservation state.
+                  reservationsBefore = (await github.paginate(github.rest.issues.listForRepo, {
+                    owner, repo, state: 'open', per_page: 100
+                  })).filter(x => !x.pull_request);
+                  const listed = reservationsBefore.find(x => x.number === issue.number);
+                  if (!listed || listed.body !== issue.body || listed.updated_at !== issue.updated_at) {
+                    errors.push('Issue de la PR modifiée pendant le contrôle : relancer.');
+                  }
+                  for (const other of reservationsBefore) {
+                    if (other.number === issue.number ||
+                        !['Réservée', 'En cours', 'En revue'].includes(field(other.body, 'Réservation-état'))) continue;
+                    const otherZones = zones(field(other.body, 'Zones'));
+                    if (!otherZones) errors.push('Réservation active invalide : issue #' + other.number);
+                    else if (scope && zonesOverlap(scope, otherZones)) {
+                      errors.push('Conflit de réservation : issue #' + other.number);
+                    }
+                  }
                 }
                 const others = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
                 for (const summary of others) {
@@ -154,6 +184,14 @@ jobs:
                 const latest = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
                 if (latest.head.sha !== pr.head.sha || latest.base.sha !== pr.base.sha || latest.body !== pr.body) {
                   errors.push('PR modifiée pendant le contrôle : relancer sur les données actuelles.');
+                }
+                if (reservationsBefore) {
+                  const reservationsAfter = (await github.paginate(github.rest.issues.listForRepo, {
+                    owner, repo, state: 'open', per_page: 100
+                  })).filter(x => !x.pull_request);
+                  if (issueSignature(reservationsBefore) !== issueSignature(reservationsAfter)) {
+                    errors.push('Réservations modifiées pendant le contrôle : relancer.');
+                  }
                 }
                 for (const error of errors) core.error(error);
                 if (errors.length) throw new Error('Coordination incomplète ou conflit : arbitrage requis.');

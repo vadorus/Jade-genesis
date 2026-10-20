@@ -22,6 +22,11 @@ permission de commit, push ou intervention sensible.
 - L'exception `Tâche: COORDINATION` est réservée au numéro de PR initial et à
   un sous-ensemble de la liste fermée de fichiers autorisés. Elle exige aussi auteur, relecteur et tests. Après fusion, cette exception ne peut plus servir car la PR initiale ne peut pas être rouverte.
 
+Le job `preflight-unit-tests` sur `pull_request` exécute les tests Python et la
+logique JavaScript avec un jeton GitHub limité en lecture. Le job de contrôle
+`coordination-policy-runner` sur `pull_request_target` n'exécute aucun code de PR.
+Les tests CI prouvent uniquement les cas couverts, pas l'absence de concurrence.
+
 Le workflow `pull_request_target` exécute seulement sa version déjà intégrée
 dans la branche par défaut (`main`), selon la documentation GitHub actuelle.
 Pour Godot, la branche produit `v013/demo-octobre` reste distincte de `master` :
@@ -42,8 +47,12 @@ Réservation-état: Réservée
 Zones: scripts/Example.gd, tests/example_test.gd
 ```
 
-`Zones` accepte des fichiers exacts ou un répertoire avec `/` final ; ni glob,
-ni chemin absolu, ni `..`. Vérifier cette réservation juste avant chaque reprise.
+`Zones` accepte des chemins relatifs (fichiers et dossiers) ; écrire de préférence
+les dossiers avec `/` final. Pour éviter les fausses autorisations, un chemin sans
+`/` final réserve aussi ses descendants : `scripts` couvre `scripts/a.py`.
+La comparaison ignore la casse (`Scripts` et `scripts` se chevauchent) et respecte
+les limites de dossiers (`scripts` ne couvre pas `scripts-old`). Aucun glob,
+chemin absolu ni `..`. Vérifier les réservations avant chaque reprise.
 Une réservation textuelle ne prouve pas une autorisation humaine et ne constitue
 pas un verrou atomique. Ne créer/modifier aucune issue sans autorisation adaptée.
 

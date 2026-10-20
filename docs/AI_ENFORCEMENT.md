@@ -10,6 +10,13 @@ permission de commit, push ou intervention sensible.
 - Issue ouverte avec réservation cohérente et fichiers compris dans ses zones.
 - Inventaire paginé de toutes les PR ouvertes, brouillons et bases différentes
   inclus ; mêmes tâches, mêmes fichiers et anciennes destinations de renommage.
+- Inventaire des issues ouvertes avec réservation active (`Réservée`, `En cours`,
+  `En revue`) : refus si leurs zones se chevauchent, qu'il s'agisse de fichiers
+  exacts, de répertoires ou de répertoires imbriqués. Une réservation active
+  mal formée bloque aussi le contrôle. Les tickets purement informatifs, sans
+  réservation active, ne bloquent pas.
+- Nouvelle lecture des issues avant de terminer : toute modification de
+  l'inventaire pendant la vérification provoque un échec conservateur.
 - Aucun succès si une liste de fichiers est tronquée, une requête échoue ou la
   PR change pendant le contrôle. Les anciennes PR n'ont plus de dispense.
 - L'exception `Tâche: COORDINATION` est réservée au numéro de PR initial et à
@@ -80,8 +87,11 @@ le contrôle hors du pilote et conserver la preuve datée dans la passation.
   contrôle ne prouve ni l'identité d'une IA, ni l'exécution de tests, ni une revue.
 - L'inventaire n'est pas une exclusion mutuelle. Une modification d'une autre PR
   ou d'une issue après le contrôle peut rendre un succès ancien obsolète. Le
-  workflow réagit aux événements de la PR courante, pas à toutes les réservations.
-  Rafraîchir l'inventaire et les contrôles avant fusion humaine.
+  workflow réagit aux événements de la PR courante, **pas** aux modifications
+  de toutes les issues réservées. Ce contrôle est une détection ponctuelle,
+  non un verrou atomique ni une garantie contre les écritures simultanées.
+  Réexécuter le précontrôle et vérifier les conflits avant reprise et fusion ;
+  une réussite ancienne peut être périmée.
 - Toute personne autorisée à pousser une branche peut créer un autre workflow
   publiant un faux `multi-agent-gate` depuis l’app GitHub Actions : épingler cette
   app ne distingue pas les workflows. Les administrateurs peuvent aussi modifier

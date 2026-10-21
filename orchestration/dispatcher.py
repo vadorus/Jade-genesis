@@ -352,9 +352,30 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--github", action="store_true", help="Read GitHub issues and PR files (no writes)")
+    parser.add_argument("--prepare-approval", type=int, metavar="ISSUE_NUMBER",
+                        help="Read an issue and print a body-bound /autoriser command; no write")
     options = parser.parse_args(argv)
     try:
         state = json.loads(options.state.read_text(encoding="utf-8"))
+        if options.prepare_approval:
+            token = os.getenv("GITHUB_TOKEN")
+            if not token:
+                raise PlanningError("GITHUB_TOKEN required")
+            matches = [task for task in state["tasks"]
+                       if task.get("id") == "#" + str(options.prepare_approval)]
+            if len(matches) != 1:
+                raise PlanningError("Task issue not present exactly once in registry")
+            repo = matches[0]["repo"]
+            issues = api_pages(repo, "issues?state=open", token)
+            issue = next((x for x in issues if x.get("number") == options.prepare_approval
+                          and "pull_request" not in x), None)
+            if not issue or (issue.get("user") or {}).get("login") != "vadorus":
+                raise PlanningError("No open owner-authored issue with this number")
+            reservation = issue_fields(issue.get("body") or "")
+            if not reservation:
+                raise PlanningError("No active reservation on issue")
+            print("/autoriser\nsha256:" + approval_fingerprint(issue["body"], reservation[1]))
+            return 0
         external = None
         if options.github:
             external = github_claims(sorted({x["repo"] for x in state["tasks"]}),

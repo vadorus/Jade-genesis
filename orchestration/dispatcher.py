@@ -119,10 +119,10 @@ def verified_approval(issue: dict, zones: list[str], comments: list[dict]) -> bo
                 comment.get("performed_via_github_app") is not None):
             continue
         body = comment.get("body") or ""
-        short = re.fullmatch(r"/autoriser ([0-9a-f]{12})", body)
-        full = re.fullmatch(r"/autoriser\r?\nsha256:([0-9a-f]{64})\s*", body)
-        if ((short and short.group(1) == expected[:12]) or
-                (full and full.group(1) == expected)):
+        short = re.fullmatch(r"/autoriser ([0-9a-fA-F]{12})[ \t]*", body)
+        full = re.fullmatch(r"/autoriser\r?\nsha256:([0-9a-fA-F]{64})\s*", body)
+        if ((short and short.group(1).lower() == expected[:12]) or
+                (full and full.group(1).lower() == expected)):
             return True
     return False
 

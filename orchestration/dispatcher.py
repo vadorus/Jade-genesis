@@ -106,15 +106,23 @@ def approval_fingerprint(body: str, zones: list[str]) -> str:
 
 
 def verified_approval(issue: dict, zones: list[str], comments: list[dict]) -> bool:
-    """Plain /autoriser cannot bind historic issue contents: require a hash on line 2."""
+    """Accept only direct owner comments bound to the current issue body and zones.
+
+    The 12-hex phone form binds 48 bits of the SHA-256 digest. The legacy
+    two-line full SHA-256 form remains supported for existing owner approvals.
+    Comments posted through GitHub Apps are never accepted, even as OWNER.
+    """
     expected = approval_fingerprint(issue.get("body") or "", zones)
     for comment in comments:
         if ((comment.get("user") or {}).get("login") != "vadorus" or
-                comment.get("author_association") != "OWNER"):
+                comment.get("author_association") != "OWNER" or
+                comment.get("performed_via_github_app") is not None):
             continue
-        match = re.fullmatch(r"/autoriser\r?\nsha256:([0-9a-f]{64})\s*",
-                             comment.get("body") or "")
-        if match and match.group(1) == expected:
+        body = comment.get("body") or ""
+        short = re.fullmatch(r"/autoriser ([0-9a-f]{12})", body)
+        full = re.fullmatch(r"/autoriser\r?\nsha256:([0-9a-f]{64})\s*", body)
+        if ((short and short.group(1) == expected[:12]) or
+                (full and full.group(1) == expected)):
             return True
     return False
 
@@ -225,17 +233,33 @@ def github_claims(repositories: list[str], trusted_users: list[str], token: str 
 
 
 def safe_fallback_review(task: dict) -> bool:
-    """Second reviewer only for narrow documentation/testing, never authorization code."""
+    """Allow Gemini review only for explicitly whitelisted, narrow file zones.
+
+    Never allow a broad docs/ or tests/ reservation that could cover restricted
+    policy files. All zones must be inside docs/ or tests/ and respect exclusions.
+    """
     if task["kind"] not in ("documentation", "testing"):
         return False
-    for value in task["zones"]:
-        zone = zone_key(value)
-        parts = zone.split("/")
-        if (zone == ".github" or zone.startswith(".github/") or
-                zone == "scripts/ai_preflight.py" or
-                zone in ("scripts", "orchestration", "orchestration/dispatcher.py") or
-                any("auth" in part or "permission" in part or "security" in part
-                    for part in parts)):
+    zones = task.get("zones")
+    if not isinstance(zones, list) or not zones:
+        return False
+    for value in zones:
+        try:
+            zone = zone_key(value)
+        except PlanningError:
+            return False
+        if zone.startswith("docs/"):
+            # AI coordination policy documents are sensitive at any depth.
+            if re.fullmatch(r"ai_.*\.md", zone.rsplit("/", 1)[-1]):
+                return False
+        elif zone.startswith("tests/"):
+            if zone == "tests/test_ai_preflight.py":
+                return False
+        else:
+            return False
+        # Reject a bare parent scope, even with a trailing slash: it would
+        # include the excluded files. Any orchestration/ zone is also rejected.
+        if zone in ("docs", "tests", "orchestration"):
             return False
     return True
 
@@ -374,7 +398,7 @@ def main(argv=None) -> int:
             reservation = issue_fields(issue.get("body") or "")
             if not reservation:
                 raise PlanningError("No active reservation on issue")
-            print("/autoriser\nsha256:" + approval_fingerprint(issue["body"], reservation[1]))
+            print("/autoriser " + approval_fingerprint(issue["body"], reservation[1])[:12])
             return 0
         external = None
         if options.github:

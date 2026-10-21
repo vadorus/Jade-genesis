@@ -233,7 +233,7 @@ assert.equal(reservationChange({action:'edited', issue:{user:{login:'stranger'},
         source = script[script.index("function field(body, name) {"):
                         script.index("function issueSignature(items) {")]
         node = """
-const values = JSON.parse(process.argv[1]);
+const values = JSON.parse(process.argv[2]);
 const results = values.map(body => {
   try {
     const item = reservationState({number:7, body});

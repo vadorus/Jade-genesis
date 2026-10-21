@@ -217,7 +217,7 @@ assert.equal(reservationChange({action:'edited', issue:{user:{login:'stranger'},
     @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
     def test_shared_reservation_cases_python_and_javascript(self):
         import json
-        cases = [(body.replace("\\\\n", "\\n"), expected) for body, expected in self.shared_cases()]
+        cases = [(body.replace("\\n", "\n"), expected) for body, expected in self.shared_cases()]
         observed_python = []
         for body, expected in cases:
             candidate = {"number": 7, "body": body}
@@ -246,7 +246,7 @@ const results = values.map(body => {
 console.log(JSON.stringify(results));
 """
         completed = subprocess.run(["node", "-", json.dumps([body for body, _ in cases], ensure_ascii=False)],
-                                   input=source + "\\n" + node, text=True, capture_output=True, timeout=20)
+                                   input=source + "\n" + node, text=True, capture_output=True, timeout=20)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout), observed_python)
 
@@ -258,7 +258,7 @@ console.log(JSON.stringify(results));
         cases = ["STRASSE", "Straße", "DОCS/État.md", "DОCS/e\\u0301tat.md", "ﬃ", "FFI", "ς", "σ"]
         import json
         assertions = "console.log(JSON.stringify(" + json.dumps(cases, ensure_ascii=False) + ".map(fold)));"
-        completed = subprocess.run(["node", "-"], input=source + "\\n" + assertions,
+        completed = subprocess.run(["node", "-"], input=source + "\n" + assertions,
                                    text=True, capture_output=True, timeout=15)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout),

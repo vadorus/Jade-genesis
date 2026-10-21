@@ -295,6 +295,17 @@ class RegistryTests(unittest.TestCase):
                     self.registry.status()
         self.fake.extra_tree_nodes = []
 
+    def test_recursive_tree_rejects_git_submodules_or_other_object_types(self):
+        for path in ("registry/modules", "outside"):
+            with self.subTest(path=path):
+                self.fake.extra_tree_nodes = [
+                    {"path": path, "type": "commit", "mode": "160000",
+                     "sha": "e" * 40}
+                ]
+                with self.assertRaises(registry.RegistryError):
+                    self.registry.status()
+        self.fake.extra_tree_nodes = []
+
     def test_stale_heartbeat_is_offline_and_blocks_claim(self):
         current = self.fake.current()
         a = current[registry.agent_path("Codex")]

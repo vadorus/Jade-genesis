@@ -319,12 +319,15 @@ class Registry:
             raise RegistryError("Chevauchement GitHub : " + ", ".join(conflicts))
         return issue
 
-    def claim(self, repo, number, agent):
+    def claim(self, repo, number, agent, branch_name=None):
         repo_key(repo)
         if agent not in AGENTS:
             raise RegistryError("Agent inconnu.")
         path = task_path(repo, number)
         ident = task_key(repo, number)
+        if branch_name is not None and (not re.fullmatch(r"[a-z0-9][a-z0-9._/-]{2,120}", branch_name)
+                                         or ".." in branch_name or branch_name.startswith("/")):
+            raise RegistryError("Nom de branche de travail invalide.")
         def mutate(data, now):
             existing = data.get(path)
             if existing and existing.get("state") not in ("queued", "interrupted"):
@@ -359,7 +362,8 @@ class Registry:
             value = {
                 "schema": 1, "repo": repo, "issue": number, "zones": zones,
                 "state": "claimed", "writer": agent, "reviewer": reviewer,
-                "branch": current.get("branch"), "base_sha": current.get("base_sha"),
+                "branch": current.get("branch") or branch_name,
+                "base_sha": current.get("base_sha"),
                 "head_sha": current.get("head_sha"),
                 "lease_until": timestamp(now + timedelta(hours=LEASE_HOURS)),
                 "attempt": current.get("attempt", 0) + 1,
@@ -381,6 +385,9 @@ class Registry:
                 raise RegistryError("Seul l'auteur réservé peut modifier la tâche.")
             if previous["state"] not in ACTIVE_STATES:
                 raise RegistryError("Tâche non active.")
+            if (not previous.get("lease_until") or
+                    parse_time(previous["lease_until"]) <= now):
+                raise RegistryError("Bail expiré : utiliser recover avant toute nouvelle réservation.")
             if action == "renew":
                 state = previous["state"]
             elif action == "release":
@@ -425,6 +432,8 @@ class Registry:
                 ep, ev = self._event("recover", ident, "recover", now)
                 changed[ep] = ev
                 recovered.append(ident)
+                # One expired task is one transition and therefore one Git commit.
+                break
             return changed, recovered
         return self.transact("recover", "Codex", mutate)
 
@@ -449,6 +458,7 @@ def main(argv=None):
     p = sub.add_parser("claim")
     p.add_argument("task")
     p.add_argument("agent", choices=sorted(AGENTS))
+    p.add_argument("--branch", help="Branche de travail à conserver lors des reprises")
     for name in ("renew", "release", "handoff"):
         p = sub.add_parser(name)
         p.add_argument("task")
@@ -477,7 +487,7 @@ def main(argv=None):
         else:
             repo, issue = parse_task(options.task, options.repo)
             if options.command == "claim":
-                result = reg.claim(repo, issue, options.agent)
+                result = reg.claim(repo, issue, options.agent, options.branch)
             else:
                 result = reg.task_change(options.command, repo, issue, options.agent,
                                          getattr(options, "head_sha", None))

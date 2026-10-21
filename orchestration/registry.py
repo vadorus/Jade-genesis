@@ -171,12 +171,23 @@ class Registry:
         entries, data = {}, {}
         for entry in tree["tree"]:
             path = entry["path"]
+            if entry["type"] == "tree":
+                # The real GitHub recursive tree API includes directory nodes.
+                # Only the expected registry directories are admissible.
+                valid_dir = (path in ("registry", "registry/tasks", "registry/agents",
+                                      "registry/history") or
+                             (path.startswith("registry/history/") and
+                              len(path.split("/")) == 3 and
+                              re.fullmatch(r"[A-Za-z0-9_.-]+", path.split("/")[2]) and
+                              path.split("/")[2] not in (".", "..")))
+                if not valid_dir:
+                    raise RegistryError("Répertoire non autorisé dans la branche état : " + path)
+                continue
             if not path.startswith(STATE_PREFIX):
                 raise RegistryError("Branche état contaminée par un fichier hors registry/.")
-            if entry["type"] != "blob":
+            if entry["type"] != "blob" or entry.get("mode", "100644") != "100644":
                 raise RegistryError("Objet non régulier dans le registre.")
-            # The single README is the explicitly authorized orphan-root seed,
-            # not mutable registry state. Nothing else outside the JSON layout passes.
+            # The single README is the explicitly authorized orphan-root seed.
             if path == "registry/README.md":
                 continue
             validate_path(path)

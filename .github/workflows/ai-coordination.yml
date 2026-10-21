@@ -56,33 +56,16 @@ jobs:
               if (snapshot.state !== 'open') throw new Error('PR fermée.');
               const expectedHead = snapshot.head.sha;
               const expectedBase = snapshot.base.sha;
-              // Reuse one result per PR and HEAD. Duplicate failed checks in the same
-              // GitHub check suite can keep a corrected PR blocked on the same SHA.
-              const externalId = 'coordination-pr-' + number + '-head-' + expectedHead;
-              const prior = (await github.paginate(github.rest.checks.listForRef, {
-                owner, repo, ref: expectedHead, check_name: 'multi-agent-gate', filter: 'all', per_page: 100
-              })).filter(run => run.app.id === 15368);
-              if (prior.length > 1 || prior.some(run => run.external_id !== externalId)) {
-                // A check belongs to a commit, not to a PR. Never leave a foreign
-                // or inherited success usable by another PR sharing this commit.
-                for (const run of prior) await github.rest.checks.update({
-                  owner, repo, check_run_id: run.id, status: 'completed', conclusion: 'failure',
-                  output: { title: 'Coordination bloquée', summary: 'SHA partagé ou contrôles hérités : arbitrage requis et nouvelle tête distincte.' }
-                });
-                throw new Error('SHA partagé ou contrôles hérités : nouvelle tête distincte requise.');
-              }
-              if (prior.length === 1) {
-                check = prior[0];
-                await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                  status: 'in_progress', output: { title: 'Coordination en cours', summary: 'Nouvelle vérification des données actuelles.' }
-                });
-              } else {
-                check = (await github.rest.checks.create({
-                  owner, repo, name: 'multi-agent-gate', head_sha: expectedHead, status: 'in_progress',
-                  external_id: externalId,
-                  details_url: 'https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId
-                })).data;
-              }
+              // C3: every workflow execution gets its own check run. Never mutate a prior
+              // execution's result, even if this PR still has the same HEAD.
+              const externalId = 'coordination-pr-' + number + '-head-' + expectedHead +
+                '-run-' + context.runId + '-attempt-' + (process.env.GITHUB_RUN_ATTEMPT || '1');
+              check = (await github.rest.checks.create({
+                owner, repo, name: 'multi-agent-gate', head_sha: expectedHead,
+                status: 'in_progress', external_id: externalId,
+                details_url: 'https://github.com/' + owner + '/' + repo +
+                  '/actions/runs/' + context.runId
+              })).data;
               await (async () => {
                 // Executed only as trusted inline code from the default branch. No PR checkout.
                 const { owner, repo } = context.repo;
@@ -306,21 +289,25 @@ jobs:
                   owner, repo, ref: pr.head.sha, check_name: 'multi-agent-gate',
                   filter: 'all', per_page: 100
                 });
-                for (const check of runs) {
-                  // Only invalidate our own GitHub Actions policy check.
-                  if (check.app?.id !== 15368 ||
-                      (check.status === 'completed' && check.conclusion !== 'success')) continue;
-                  await github.rest.checks.update({
-                    owner, repo, check_run_id: check.id,
-                    status: 'completed', conclusion: 'failure',
-                    output: {
-                      title: 'Réservation modifiée : contrôle à refaire',
-                      summary: 'Issue #' + issueNumber +
-                        ' modifiée depuis une validation. Relancer le contrôle de la PR avant fusion.'
-                    }
-                  });
-                  invalidated++;
-                }
+                // Ignore foreign apps or another PR reusing the same commit SHA.
+                // Select just the newest check for this PR; older runs remain immutable.
+                const externalPrefix = 'coordination-pr-' + pr.number + '-head-' + pr.head.sha;
+                const candidates = runs.filter(run => run.app?.id === 15368 &&
+                  (run.external_id === externalPrefix ||
+                   run.external_id?.startsWith(externalPrefix + '-run-')));
+                const latest = candidates.sort((a, b) => b.id - a.id)[0];
+                if (!latest ||
+                    (latest.status === 'completed' && latest.conclusion !== 'success')) continue;
+                await github.rest.checks.update({
+                  owner, repo, check_run_id: latest.id,
+                  status: 'completed', conclusion: 'failure',
+                  output: {
+                    title: 'Réservation modifiée : contrôle à refaire',
+                    summary: 'Issue #' + issueNumber +
+                      ' modifiée depuis une validation. Relancer le contrôle de la PR avant fusion.'
+                  }
+                });
+                invalidated++;
               }
               core.info('Validations précédentes invalidées : ' + invalidated);
             } else {

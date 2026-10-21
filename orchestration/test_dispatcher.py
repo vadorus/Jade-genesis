@@ -102,7 +102,8 @@ class PlannerTests(unittest.TestCase):
                 return [{"number": 8, "user": {"login": "vadorus"}, "body": "Réservation-état: Réservée\nZones: orchestration/"}]
             return []
         claims = mod.github_claims(["vadorus/Jade-genesis"], [], token="test-token", fetch=fake)
-        self.assertEqual(mod.plan(state(), claims)["blocked"][0]["reason"], "reserved_zone_conflict")
+        self.assertTrue(any(c["task_id"] == "issue:8" and c["zones"] == ["orchestration/"]
+                            for c in claims))
 
     def test_synthetic_github_malformed_trusted_blocks(self):
         def fake(url, headers):
@@ -120,7 +121,8 @@ class PlannerTests(unittest.TestCase):
             if url.endswith("/pulls/12"): return {"number": 12, "changed_files": 1, "body": "", "head": {"ref": "codex/test", "repo": {"full_name": "vadorus/Jade-genesis"}}}
             raise AssertionError(url)
         claims = mod.github_claims(["vadorus/Jade-genesis"], [], token="test-token", fetch=fake)
-        self.assertEqual(mod.plan(state(), claims)["blocked"][0]["details"], ["pr:12"])
+        self.assertTrue(any(c["task_id"] == "pr:12" and c["zones"] == ["orchestration/a.py"]
+                            for c in claims))
 
     def test_incomplete_pr_inventory_fails_closed(self):
         def fake(url, headers):

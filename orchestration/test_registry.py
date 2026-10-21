@@ -35,6 +35,7 @@ class FakeGit:
         self.list_issues = True
         self.patch_barrier = None
         self.advance_once = False
+        self.extra_tree_nodes = []
         self._initial_agent("Codex", status="available", quota=5)
 
     def _sha(self, prefix):
@@ -94,9 +95,19 @@ class FakeGit:
                              if isinstance(commit["tree"], dict) else commit["tree"]}}
         if method == "GET" and path.startswith(base + "git/trees/"):
             sha = path.split("/")[-1].split("?")[0]
-            return {"truncated": False, "tree": [
-                {"path": p, "type": "blob", "sha": s} for p, s in self.trees[sha].items()
-            ]}
+            files = self.trees[sha]
+            directories = set()
+            for file_path in files:
+                parts = file_path.split("/")
+                directories.update("/".join(parts[:i]) for i in range(1, len(parts)))
+            # Match GitHub's recursive trees: intermediate directories are also
+            # returned as type=tree entries, including the top-level registry.
+            result = [{"path": p, "type": "tree", "mode": "040000",
+                       "sha": "d" * 40} for p in sorted(directories)]
+            result += [{"path": p, "type": "blob", "mode": "100644", "sha": blob_sha}
+                       for p, blob_sha in files.items()]
+            result += self.extra_tree_nodes
+            return {"truncated": False, "tree": result}
         if method == "GET" and path.startswith(base + "git/blobs/"):
             content = self.blobs[path.rsplit("/", 1)[-1]]
             return {"encoding": "base64", "content": base64.b64encode(content.encode()).decode()}
@@ -263,6 +274,26 @@ class RegistryTests(unittest.TestCase):
         init["registry/undeclared.md"] = self.fake._blob({"other": "unexpected"})
         with self.assertRaisesRegex(registry.RegistryError, "Chemin de registre"):
             self.registry.status()
+
+    def test_recursive_tree_contains_directory_nodes_like_real_github(self):
+        tree = self.fake.request("GET", "repos/" + registry.STATE_REPO +
+                                 "/git/trees/t0?recursive=1", None)
+        self.assertTrue(any(x["path"] == "registry" and x["type"] == "tree"
+                            for x in tree["tree"]))
+        self.assertTrue(any(x["path"] == "registry/agents" and x["type"] == "tree"
+                            for x in tree["tree"]))
+        self.assertEqual(len(self.registry.status()["agents"]), 1)
+
+    def test_recursive_tree_rejects_outside_or_unknown_directories(self):
+        for name in ("private", "registry/secrets", "registry/tasks/nested"):
+            with self.subTest(path=name):
+                self.fake.extra_tree_nodes = [
+                    {"path": name, "type": "tree", "mode": "040000",
+                     "sha": "d" * 40}
+                ]
+                with self.assertRaises(registry.RegistryError):
+                    self.registry.status()
+        self.fake.extra_tree_nodes = []
 
     def test_stale_heartbeat_is_offline_and_blocks_claim(self):
         current = self.fake.current()

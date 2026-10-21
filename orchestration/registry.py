@@ -29,6 +29,7 @@ TASK_STATES = frozenset({
     "queued", "claimed", "in_progress", "review", "interrupted", "done", "cancelled"
 })
 ACTIVE_STATES = frozenset({"claimed", "in_progress", "review"})
+LEASE_STATES = frozenset({"claimed", "in_progress"})
 AGENTS = frozenset({"Codex", "Claude", "Antigravity", "Gemini"})
 LEASE_HOURS = 2
 HEARTBEAT_HOURS = 6
@@ -174,6 +175,10 @@ class Registry:
                 raise RegistryError("Branche état contaminée par un fichier hors registry/.")
             if entry["type"] != "blob":
                 raise RegistryError("Objet non régulier dans le registre.")
+            # The single README is the explicitly authorized orphan-root seed,
+            # not mutable registry state. Nothing else outside the JSON layout passes.
+            if path == "registry/README.md":
+                continue
             validate_path(path)
             entries[path] = entry["sha"]
             blob = self.api.call("GET", base + "git/blobs/" + entry["sha"])
@@ -385,9 +390,12 @@ class Registry:
                 raise RegistryError("Seul l'auteur réservé peut modifier la tâche.")
             if previous["state"] not in ACTIVE_STATES:
                 raise RegistryError("Tâche non active.")
-            if (not previous.get("lease_until") or
+            if previous["state"] in LEASE_STATES and (
+                    not previous.get("lease_until") or
                     parse_time(previous["lease_until"]) <= now):
                 raise RegistryError("Bail expiré : utiliser recover avant toute nouvelle réservation.")
+            if previous["state"] == "review" and action != "release":
+                raise RegistryError("Tâche en revue : pas de renouvellement ni seconde passation.")
             if action == "renew":
                 state = previous["state"]
             elif action == "release":
@@ -399,7 +407,7 @@ class Registry:
             updated = dict(previous, state=state, updated_at=timestamp(now),
                            updated_by=agent)
             updated["lease_until"] = (timestamp(now + timedelta(hours=LEASE_HOURS))
-                                       if state in ACTIVE_STATES else None)
+                                       if state in LEASE_STATES else None)
             if action == "handoff":
                 updated["head_sha"] = head_sha
             changes = {path: updated}
@@ -417,7 +425,7 @@ class Registry:
             changed = {}
             recovered = []
             for path, original in sorted(data.items()):
-                if not path.startswith("registry/tasks/") or original.get("state") not in ACTIVE_STATES:
+                if not path.startswith("registry/tasks/") or original.get("state") not in LEASE_STATES:
                     continue
                 lease = original.get("lease_until")
                 if not lease or parse_time(lease) >= now:

@@ -1,0 +1,21 @@
+name: Multi-agent coordination tests
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight-unit-tests:
+    name: preflight-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR merge commit (read-only job)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Execute Python and JavaScript policy tests
+        run: python3 -m unittest discover -s tests -p 'test_ai_preflight.py' -v

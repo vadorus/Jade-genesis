@@ -9,6 +9,10 @@ GitHub sert de mémoire de travail commune, **pas** de canal de communication te
 1. Identifier le **bon dépôt et sa branche produit** (voir `AI_START_HERE.md`). Lire `AGENTS.md` et les documents de reprise lorsqu'ils existent.
 2. Consulter les issues **et toutes les PR ouvertes, y compris en brouillon**, ainsi que le dernier historique de commits sur la branche produit.
 3. Vérifier si le problème est déjà traité, déjà fusionné, ou réservé à un autre agent. Une PR existante fait office de réservation, même si aucune issue distincte n'a été créée.
+   Une issue ouverte dont `Réservation-état` vaut `Réservée`, `En cours` ou `En revue`
+   réserve aussi ses `Zones`, même sans PR. Deux dossiers imbriqués ou un fichier
+   placé dans un dossier réservé sont en conflit. Les tickets de suivi sans cet
+   état ne réservent rien. Bloquer et demander un arbitrage avant toute écriture.
 4. Identifier le ticket / PR de référence, l'agent auteur unique, l'agent relecteur, la zone de fichiers, la base, les tests et les interdictions.
 5. Sans attribution explicite : **lecture seule**. Proposer une tâche sans créer de branche ni modifier le code.
 6. Toujours travailler dans un **worktree/dossier isolé**. Ne jamais partager le même dossier Git avec un autre agent écrivain ; ne jamais écraser des modifications locales.

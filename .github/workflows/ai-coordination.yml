@@ -1,68 +1,42 @@
 name: Multi-agent coordination gate
 
 on:
+  issues:
+    types: [opened, edited, deleted, transferred, closed, reopened]
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches: [main]
 
-# Never checkout, build, execute or interpolate code/text supplied by the PR.
-# checks:write is limited to reporting the result on the current PR HEAD.
+# Trusted pull_request_target policy executes only inline workflow code from default branch.
+# Untrusted code and unit tests run separately with a read-only token.
 permissions:
   contents: read
   issues: read
   pull-requests: read
-  checks: write
 
 concurrency:
-  group: coordination-${{ github.event.pull_request.number }}
+  group: coordination-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
-  coordination-policy-runner:
-    name: coordination-policy-runner
+  multi-agent-gate:
+    if: github.event_name == 'pull_request_target'
+    name: multi-agent-gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Validate metadata and report on PR HEAD
+      - name: Validate PR metadata and reservations
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7, verified via GitHub tag
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const number = context.payload.pull_request.number;
-            let check;
             try {
             const snapshot = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
               if (snapshot.state !== 'open') throw new Error('PR fermée.');
               const expectedHead = snapshot.head.sha;
               const expectedBase = snapshot.base.sha;
-              // Reuse one result per PR and HEAD. Duplicate failed checks in the same
-              // GitHub check suite can keep a corrected PR blocked on the same SHA.
-              const externalId = 'coordination-pr-' + number + '-head-' + expectedHead;
-              const prior = (await github.paginate(github.rest.checks.listForRef, {
-                owner, repo, ref: expectedHead, check_name: 'multi-agent-gate', filter: 'all', per_page: 100
-              })).filter(run => run.app.id === 15368);
-              if (prior.length > 1 || prior.some(run => run.external_id !== externalId)) {
-                // A check belongs to a commit, not to a PR. Never leave a foreign
-                // or inherited success usable by another PR sharing this commit.
-                for (const run of prior) await github.rest.checks.update({
-                  owner, repo, check_run_id: run.id, status: 'completed', conclusion: 'failure',
-                  output: { title: 'Coordination bloquée', summary: 'SHA partagé ou contrôles hérités : arbitrage requis et nouvelle tête distincte.' }
-                });
-                throw new Error('SHA partagé ou contrôles hérités : nouvelle tête distincte requise.');
-              }
-              if (prior.length === 1) {
-                check = prior[0];
-                await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                  status: 'in_progress', output: { title: 'Coordination en cours', summary: 'Nouvelle vérification des données actuelles.' }
-                });
-              } else {
-                check = (await github.rest.checks.create({
-                  owner, repo, name: 'multi-agent-gate', head_sha: expectedHead, status: 'in_progress',
-                  external_id: externalId,
-                  details_url: 'https://github.com/' + owner + '/' + repo + '/actions/runs/' + context.runId
-                })).data;
-              }
               await (async () => {
                 // Executed only as trusted inline code from the default branch. No PR checkout.
                 const { owner, repo } = context.repo;
@@ -85,16 +59,57 @@ jobs:
                   return lines[0].slice(name.length + 1).trim() || null;
                 }
                 function agent(value) { return /^(Claude|Codex|Antigravity|Humain)$/.test(value || ''); }
+                // Unicode full casefold exceptions to JS lowercasing (Python casefold parity).
+                const FOLD_EXCEPTIONS = {"µ":"μ","ß":"ss","ŉ":"ʼn","ſ":"s","ǰ":"ǰ","ͅ":"ι","ΐ":"ΐ","ΰ":"ΰ","ς":"σ","ϐ":"β","ϑ":"θ","ϕ":"φ","ϖ":"π","ϰ":"κ","ϱ":"ρ","ϵ":"ε","և":"եւ","Ꭰ":"Ꭰ","Ꭱ":"Ꭱ","Ꭲ":"Ꭲ","Ꭳ":"Ꭳ","Ꭴ":"Ꭴ","Ꭵ":"Ꭵ","Ꭶ":"Ꭶ","Ꭷ":"Ꭷ","Ꭸ":"Ꭸ","Ꭹ":"Ꭹ","Ꭺ":"Ꭺ","Ꭻ":"Ꭻ","Ꭼ":"Ꭼ","Ꭽ":"Ꭽ","Ꭾ":"Ꭾ","Ꭿ":"Ꭿ","Ꮀ":"Ꮀ","Ꮁ":"Ꮁ","Ꮂ":"Ꮂ","Ꮃ":"Ꮃ","Ꮄ":"Ꮄ","Ꮅ":"Ꮅ","Ꮆ":"Ꮆ","Ꮇ":"Ꮇ","Ꮈ":"Ꮈ","Ꮉ":"Ꮉ","Ꮊ":"Ꮊ","Ꮋ":"Ꮋ","Ꮌ":"Ꮌ","Ꮍ":"Ꮍ","Ꮎ":"Ꮎ","Ꮏ":"Ꮏ","Ꮐ":"Ꮐ","Ꮑ":"Ꮑ","Ꮒ":"Ꮒ","Ꮓ":"Ꮓ","Ꮔ":"Ꮔ","Ꮕ":"Ꮕ","Ꮖ":"Ꮖ","Ꮗ":"Ꮗ","Ꮘ":"Ꮘ","Ꮙ":"Ꮙ","Ꮚ":"Ꮚ","Ꮛ":"Ꮛ","Ꮜ":"Ꮜ","Ꮝ":"Ꮝ","Ꮞ":"Ꮞ","Ꮟ":"Ꮟ","Ꮠ":"Ꮠ","Ꮡ":"Ꮡ","Ꮢ":"Ꮢ","Ꮣ":"Ꮣ","Ꮤ":"Ꮤ","Ꮥ":"Ꮥ","Ꮦ":"Ꮦ","Ꮧ":"Ꮧ","Ꮨ":"Ꮨ","Ꮩ":"Ꮩ","Ꮪ":"Ꮪ","Ꮫ":"Ꮫ","Ꮬ":"Ꮬ","Ꮭ":"Ꮭ","Ꮮ":"Ꮮ","Ꮯ":"Ꮯ","Ꮰ":"Ꮰ","Ꮱ":"Ꮱ","Ꮲ":"Ꮲ","Ꮳ":"Ꮳ","Ꮴ":"Ꮴ","Ꮵ":"Ꮵ","Ꮶ":"Ꮶ","Ꮷ":"Ꮷ","Ꮸ":"Ꮸ","Ꮹ":"Ꮹ","Ꮺ":"Ꮺ","Ꮻ":"Ꮻ","Ꮼ":"Ꮼ","Ꮽ":"Ꮽ","Ꮾ":"Ꮾ","Ꮿ":"Ꮿ","Ᏸ":"Ᏸ","Ᏹ":"Ᏹ","Ᏺ":"Ᏺ","Ᏻ":"Ᏻ","Ᏼ":"Ᏼ","Ᏽ":"Ᏽ","ᏸ":"Ᏸ","ᏹ":"Ᏹ","ᏺ":"Ᏺ","ᏻ":"Ᏻ","ᏼ":"Ᏼ","ᏽ":"Ᏽ","ᲀ":"в","ᲁ":"д","ᲂ":"о","ᲃ":"с","ᲄ":"т","ᲅ":"т","ᲆ":"ъ","ᲇ":"ѣ","ᲈ":"ꙋ","ẖ":"ẖ","ẗ":"ẗ","ẘ":"ẘ","ẙ":"ẙ","ẚ":"aʾ","ẛ":"ṡ","ẞ":"ss","ὐ":"ὐ","ὒ":"ὒ","ὔ":"ὔ","ὖ":"ὖ","ᾀ":"ἀι","ᾁ":"ἁι","ᾂ":"ἂι","ᾃ":"ἃι","ᾄ":"ἄι","ᾅ":"ἅι","ᾆ":"ἆι","ᾇ":"ἇι","ᾈ":"ἀι","ᾉ":"ἁι","ᾊ":"ἂι","ᾋ":"ἃι","ᾌ":"ἄι","ᾍ":"ἅι","ᾎ":"ἆι","ᾏ":"ἇι","ᾐ":"ἠι","ᾑ":"ἡι","ᾒ":"ἢι","ᾓ":"ἣι","ᾔ":"ἤι","ᾕ":"ἥι","ᾖ":"ἦι","ᾗ":"ἧι","ᾘ":"ἠι","ᾙ":"ἡι","ᾚ":"ἢι","ᾛ":"ἣι","ᾜ":"ἤι","ᾝ":"ἥι","ᾞ":"ἦι","ᾟ":"ἧι","ᾠ":"ὠι","ᾡ":"ὡι","ᾢ":"ὢι","ᾣ":"ὣι","ᾤ":"ὤι","ᾥ":"ὥι","ᾦ":"ὦι","ᾧ":"ὧι","ᾨ":"ὠι","ᾩ":"ὡι","ᾪ":"ὢι","ᾫ":"ὣι","ᾬ":"ὤι","ᾭ":"ὥι","ᾮ":"ὦι","ᾯ":"ὧι","ᾲ":"ὰι","ᾳ":"αι","ᾴ":"άι","ᾶ":"ᾶ","ᾷ":"ᾶι","ᾼ":"αι","ι":"ι","ῂ":"ὴι","ῃ":"ηι","ῄ":"ήι","ῆ":"ῆ","ῇ":"ῆι","ῌ":"ηι","ῒ":"ῒ","ΐ":"ΐ","ῖ":"ῖ","ῗ":"ῗ","ῢ":"ῢ","ΰ":"ΰ","ῤ":"ῤ","ῦ":"ῦ","ῧ":"ῧ","ῲ":"ὼι","ῳ":"ωι","ῴ":"ώι","ῶ":"ῶ","ῷ":"ῶι","ῼ":"ωι","ꭰ":"Ꭰ","ꭱ":"Ꭱ","ꭲ":"Ꭲ","ꭳ":"Ꭳ","ꭴ":"Ꭴ","ꭵ":"Ꭵ","ꭶ":"Ꭶ","ꭷ":"Ꭷ","ꭸ":"Ꭸ","ꭹ":"Ꭹ","ꭺ":"Ꭺ","ꭻ":"Ꭻ","ꭼ":"Ꭼ","ꭽ":"Ꭽ","ꭾ":"Ꭾ","ꭿ":"Ꭿ","ꮀ":"Ꮀ","ꮁ":"Ꮁ","ꮂ":"Ꮂ","ꮃ":"Ꮃ","ꮄ":"Ꮄ","ꮅ":"Ꮅ","ꮆ":"Ꮆ","ꮇ":"Ꮇ","ꮈ":"Ꮈ","ꮉ":"Ꮉ","ꮊ":"Ꮊ","ꮋ":"Ꮋ","ꮌ":"Ꮌ","ꮍ":"Ꮍ","ꮎ":"Ꮎ","ꮏ":"Ꮏ","ꮐ":"Ꮐ","ꮑ":"Ꮑ","ꮒ":"Ꮒ","ꮓ":"Ꮓ","ꮔ":"Ꮔ","ꮕ":"Ꮕ","ꮖ":"Ꮖ","ꮗ":"Ꮗ","ꮘ":"Ꮘ","ꮙ":"Ꮙ","ꮚ":"Ꮚ","ꮛ":"Ꮛ","ꮜ":"Ꮜ","ꮝ":"Ꮝ","ꮞ":"Ꮞ","ꮟ":"Ꮟ","ꮠ":"Ꮠ","ꮡ":"Ꮡ","ꮢ":"Ꮢ","ꮣ":"Ꮣ","ꮤ":"Ꮤ","ꮥ":"Ꮥ","ꮦ":"Ꮦ","ꮧ":"Ꮧ","ꮨ":"Ꮨ","ꮩ":"Ꮩ","ꮪ":"Ꮪ","ꮫ":"Ꮫ","ꮬ":"Ꮬ","ꮭ":"Ꮭ","ꮮ":"Ꮮ","ꮯ":"Ꮯ","ꮰ":"Ꮰ","ꮱ":"Ꮱ","ꮲ":"Ꮲ","ꮳ":"Ꮳ","ꮴ":"Ꮴ","ꮵ":"Ꮵ","ꮶ":"Ꮶ","ꮷ":"Ꮷ","ꮸ":"Ꮸ","ꮹ":"Ꮹ","ꮺ":"Ꮺ","ꮻ":"Ꮻ","ꮼ":"Ꮼ","ꮽ":"Ꮽ","ꮾ":"Ꮾ","ꮿ":"Ꮿ","ﬀ":"ff","ﬁ":"fi","ﬂ":"fl","ﬃ":"ffi","ﬄ":"ffl","ﬅ":"st","ﬆ":"st","ﬓ":"մն","ﬔ":"մե","ﬕ":"մի","ﬖ":"վն","ﬗ":"մխ"};
+                const TRUSTED_ISSUE_AUTHORS = new Set(['vadorus']);
+                function fold(value) {
+                  return Array.from(value.normalize('NFC'), ch => FOLD_EXCEPTIONS[ch] ?? ch.toLowerCase()).join('');
+                }
+                function trustedIssue(issue) {
+                  return TRUSTED_ISSUE_AUTHORS.has(fold(String(issue.user?.login || '')));
+                }
+                function reservationState(issue) {
+                  const body = issue.body || '', id = issue.number;
+                  const matches = body.split(/\r?\n/).filter(line =>
+                    /^\s*\**\s*r[ée]servation[- ]?[ée]tat\s*\**\s*:/i.test(line));
+                  if (!matches.length) return null;
+                  if (matches.length !== 1 ||
+                      !/^Réservation-état: (Réservée|En cours|En revue|Terminée|Libérée)$/.test(matches[0])) {
+                    throw new Error('Réservation illisible : issue #' + id);
+                  }
+                  const scopeValue = field(body, 'Zones');
+                  const scope = zones(scopeValue);
+                  if ((scopeValue !== null && !scope) ||
+                      (['Réservée', 'En cours', 'En revue'].includes(matches[0].slice(18)) && !scope)) {
+                    throw new Error('Réservation illisible : issue #' + id);
+                  }
+                  if (!['Réservée', 'En cours', 'En revue'].includes(matches[0].slice(18))) return null;
+                  return { state: matches[0].slice(18), zones: scope };
+                }
                 function zones(value) {
                   if (!value) return null;
-                  const result = value.split(',').map(x => x.trim());
+                  const result = value.split(',').map(x => x.trim().normalize('NFC'));
                   if (result.some(x => !x || x.startsWith('/') || x.includes('\\') ||
-                      /[:*?]/.test(x) || x.split('/').some(p => p === '.' || p === '..') ||
-                      x.replace(/\/$/, '').split('/').some(p => !p))) return null;
+                      !/^[\p{L}\p{Nd}._\/-]+$/u.test(x) ||
+                      x.includes('//') || x.replace(/\/$/, '').split('/').some(p => !p || p === '.' || p === '..')))
+                    return null;
                   return result;
                 }
+                function zoneKey(value) {
+                  return fold(value.replace(/\/$/, ''));
+                }
+                function containsZone(parent, child) {
+                  const left = zoneKey(parent), right = zoneKey(child);
+                  return right === left || right.startsWith(left + '/');
+                }
                 function within(path, scope) {
-                  return scope.some(zone => zone.endsWith('/') ? path.startsWith(zone) : path === zone);
+                  return scope.some(zone => containsZone(zone, path));
+                }
+                function zonesOverlap(first, second) {
+                  return first.some(a => second.some(b => containsZone(a, b) || containsZone(b, a)));
+                }
+                function issueSignature(items) {
+                  return JSON.stringify(items.map(x => [x.number, x.state, x.updated_at, x.body]).sort((a, b) => a[0] - b[0]));
                 }
                 async function filesOf(pull) {
                   const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -113,6 +128,7 @@ jobs:
                 const writer = field(pr.body, 'Auteur-IA');
                 const reviewer = field(pr.body, 'Relecteur-IA');
                 const tests = field(pr.body, 'Tests');
+                let reservationsBefore = null;
                 if (!agent(writer)) errors.push('Auteur-IA unique et valide obligatoire.');
                 if (!agent(reviewer)) errors.push('Relecteur-IA unique et valide obligatoire.');
                 if (writer === reviewer) errors.push('Auteur et relecteur doivent être distincts.');
@@ -129,14 +145,36 @@ jobs:
                 } else {
                   const issue = (await github.rest.issues.get({ owner, repo, issue_number: Number(task.slice(1)) })).data;
                   if (issue.pull_request || issue.state !== 'open') errors.push('La référence doit être une issue ouverte.');
+                  if (!trustedIssue(issue)) errors.push('Auteur non autorisé : issue #' + issue.number);
                   if (field(issue.body, 'Responsable-IA') !== writer) errors.push('Auteur différent de la réservation de l’issue.');
                   if (field(issue.body, 'Relecteur-IA') !== reviewer) errors.push('Relecteur différent de la réservation de l’issue.');
-                  if (!['Réservée', 'En cours', 'En revue'].includes(field(issue.body, 'Réservation-état'))) {
-                    errors.push('Réservation de l’issue inactive ou absente.');
+                  let ownReservation = null;
+                  if (trustedIssue(issue)) {
+                    try { ownReservation = reservationState(issue); }
+                    catch (error) { errors.push(error.message); }
                   }
-                  const scope = zones(field(issue.body, 'Zones'));
+                  if (!ownReservation) errors.push('Réservation de l’issue inactive ou absente.');
+                  const scope = ownReservation?.zones || null;
                   if (!scope) errors.push('Zones explicites et relatives obligatoires dans l’issue.');
                   else for (const path of paths) if (!within(path, scope)) errors.push('Hors réservation : ' + path);
+                  // An active issue reserves its whole declared scope, even without a PR.
+                  // Tracking-only issues have no active reservation state.
+                  reservationsBefore = (await github.paginate(github.rest.issues.listForRepo, {
+                    owner, repo, state: 'open', per_page: 100
+                  })).filter(x => !x.pull_request);
+                  const listed = reservationsBefore.find(x => x.number === issue.number);
+                  if (!listed || listed.body !== issue.body || listed.updated_at !== issue.updated_at) {
+                    errors.push('Issue de la PR modifiée pendant le contrôle : relancer.');
+                  }
+                  for (const other of reservationsBefore) {
+                    if (other.number === issue.number || !trustedIssue(other)) continue;
+                    let record;
+                    try { record = reservationState(other); }
+                    catch (error) { errors.push(error.message); continue; }
+                    if (record && scope && zonesOverlap(scope, record.zones)) {
+                      errors.push('Conflit de réservation : issue #' + other.number);
+                    }
+                  }
                 }
                 const others = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
                 for (const summary of others) {
@@ -155,21 +193,81 @@ jobs:
                 if (latest.head.sha !== pr.head.sha || latest.base.sha !== pr.base.sha || latest.body !== pr.body) {
                   errors.push('PR modifiée pendant le contrôle : relancer sur les données actuelles.');
                 }
+                if (reservationsBefore) {
+                  const reservationsAfter = (await github.paginate(github.rest.issues.listForRepo, {
+                    owner, repo, state: 'open', per_page: 100
+                  })).filter(x => !x.pull_request);
+                  if (issueSignature(reservationsBefore) !== issueSignature(reservationsAfter)) {
+                    errors.push('Réservations modifiées pendant le contrôle : relancer.');
+                  }
+                }
                 for (const error of errors) core.error(error);
                 if (errors.length) throw new Error('Coordination incomplète ou conflit : arbitrage requis.');
                 else core.info('Inventaire et déclarations cohérents. Ce résultat ne prouve ni autorisation, ni tests, ni revue indépendante.');
               })();
-              await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                status: 'completed', conclusion: 'success',
-                output: { title: 'Coordination cohérente', summary: 'Inventaire et déclarations vérifiés ; aucune autorisation ni revue réelle certifiée.' }
-              });
+              core.info('Politique vérifiée : contrôle natif du job multi-agent-gate réussi.');
             } catch (error) {
-              if (check) await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                status: 'completed', conclusion: 'failure',
-                output: { title: 'Coordination bloquée', summary: String(error.message).slice(0, 6000) }
+              core.setFailed('Coordination bloquée : ' + String(error.message || error));
+            }
+
+  invalidate-stale-gates:
+    if: github.event_name == 'issues'
+    name: invalidate-stale-gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: write
+    steps:
+      - name: Invalidate earlier green reservation checks after issue changes
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Issues from unknown authors have no authority over coordination gates.
+            const TRUSTED_ISSUE_AUTHORS = new Set(['vadorus']);
+            function trustedIssue(issue) {
+              return TRUSTED_ISSUE_AUTHORS.has(String(issue?.user?.login || '').toLowerCase());
+            }
+            function reservationChange(payload) {
+              if (!trustedIssue(payload.issue)) return false;
+              const marker = /^\s*\**\s*r[ée]servation[- ]?[ée]tat\s*\**\s*:/im;
+              return ['deleted', 'transferred'].includes(payload.action) ||
+                marker.test(payload.issue?.body || '') ||
+                marker.test(payload.changes?.body?.from || '');
+            }
+            if (reservationChange(context.payload)) {
+              const { owner, repo } = context.repo;
+              const issueNumber = context.payload.issue?.number || '?';
+              const pullRequests = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100
               });
-              // The required check carries policy failure. Keep the transport job
-              // successful after reporting it; infrastructure failures remain visible.
-              if (check) core.error('Coordination bloquée : ' + error.message);
-              else core.setFailed('Contrôle non publié : ' + error.message);
+              let restarted = 0;
+              for (const pr of pullRequests) {
+                // GitHub creates the required status through the native job.
+                // Rerun only the last completed policy workflow for this exact PR and HEAD.
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  owner, repo, workflow_id: 'ai-coordination.yml',
+                  event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100
+                });
+                const eligible = runs.filter(run =>
+                  run.event === 'pull_request_target' &&
+                  run.head_sha === pr.head.sha &&
+                  run.status === 'completed' &&
+                  run.pull_requests?.some(p => p.number === pr.number));
+                const latest = eligible.sort((a, b) => b.id - a.id)[0];
+                if (!latest) {
+                  core.setFailed('Aucune exécution de politique terminée à relancer : PR #' + pr.number);
+                  continue;
+                }
+                await github.rest.actions.reRunWorkflow({
+                  owner, repo, run_id: latest.id
+                });
+                restarted++;
+              }
+              core.info('Exécutions de politique relancées : ' + restarted);
+            } else {
+              core.info('Issue non liée à une réservation active ou précédente.');
             }

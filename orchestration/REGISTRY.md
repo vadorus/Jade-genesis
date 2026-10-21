@@ -5,11 +5,11 @@ pas de workflow, ne fusionne rien et ne publie pas de commande d'autorisation hu
 
 ## Préconditions
 
-La branche de données **orchestration/state** est une branche Git orpheline avec un
-**commit racine à arborescence vide**, jamais une copie de main. Cette initialisation
-spéciale doit être confirmée avant d'utiliser les commandes : le connecteur GitHub
-disponible au moment du développement n'a pas su créer ce commit racine. La branche
-n'a volontairement pas été créée à partir de main en remplacement.
+La branche de données **orchestration/state** est une branche Git **orpheline**,
+jamais une copie de main. Elle a été créée le 21/10/2026 avec un **commit racine sans
+parent** (`623a8cb5403998721f68159a1883f721222aca13`) contenant uniquement
+`registry/README.md` (fichier d'initialisation immuable, ignoré dans l'état des tâches).
+La liste blanche des transitions n'autorise PAS à modifier ce README.
 
 Les fichiers de travail appartiennent à la PR de code sur
 **codex/orchestration-registry**, issue #94, Zone: orchestration/. Les données sont
@@ -66,9 +66,9 @@ interrompt la proposition.
 
 ## Limites et risques avant utilisation réelle
 
-1. **La branche orpheline n'est pas initialisée.** Les commandes ne sont pas
-   opérationnelles sur GitHub tant qu'un commit racine vide n'a pas été créé par
-   un outil Git capable de faire des commits sans parent.
+1. **La branche orpheline est initialisée**, mais les transactions réelles
+   `heartbeat` et `claim` nécessitent une validation indépendante et les autorisations
+   GitHub présentes sur chaque issue. Le code reste en proposition seule par défaut.
 2. La mise à jour sans forçage garantit la concurrence **entre transitions du
    registre** ; elle ne peut pas rendre atomiques les modifications d'issues et de
    PR sur GitHub. Des changements intervenant après leur lecture restent

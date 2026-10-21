@@ -236,6 +236,34 @@ class RegistryTests(unittest.TestCase):
         self.fake.trees[sha] = current
         return sha
 
+    def test_review_waiting_three_hours_is_not_recovered(self):
+        self.registry.claim(registry.STATE_REPO, 94, "Codex",
+                            branch_name="codex/orchestration-registry")
+        self.registry.task_change("handoff", registry.STATE_REPO, 94, "Codex",
+                                  head_sha="1" * 40)
+        path = registry.task_path(registry.STATE_REPO, 94)
+        previous = self.fake.current()[path]
+        self.assertEqual(previous["state"], "review")
+        self.assertIsNone(previous["lease_until"])
+        self.fake.now += timedelta(hours=3)
+        with self.assertRaisesRegex(registry.RegistryError, "Transition vide"):
+            self.registry.recover()
+        task = self.fake.current()[path]
+        self.assertEqual(task["state"], "review")
+        self.assertEqual(task["head_sha"], "1" * 40)
+        self.assertEqual(task["branch"], "codex/orchestration-registry")
+        self.assertEqual(self.fake.patches, 2)
+        with self.assertRaisesRegex(registry.RegistryError, "Tâche déjà réservée"):
+            self.registry.claim(registry.STATE_REPO, 94, "Codex")
+
+    def test_orphan_readme_seed_is_ignored_but_other_files_are_refused(self):
+        init = self.fake.trees["t0"]
+        init["registry/README.md"] = self.fake._blob({"seed": "root"})
+        self.assertEqual(len(self.registry.status()["agents"]), 1)
+        init["registry/undeclared.md"] = self.fake._blob({"other": "unexpected"})
+        with self.assertRaisesRegex(registry.RegistryError, "Chemin de registre"):
+            self.registry.status()
+
     def test_stale_heartbeat_is_offline_and_blocks_claim(self):
         current = self.fake.current()
         a = current[registry.agent_path("Codex")]

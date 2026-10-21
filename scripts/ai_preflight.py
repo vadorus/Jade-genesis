@@ -13,11 +13,16 @@ import json
 import re
 import subprocess
 import sys
+import unicodedata
 
 PRODUCTS = {'vadorus/addonhardwaregame2d': 'v013/demo-octobre',
             'vadorus/tech-empire-roblox': 'main', 'vadorus/Jade-genesis': 'main'}
 AGENTS = ('Claude', 'Codex', 'Antigravity', 'Humain')
 ACTIVE_RESERVATIONS = ('Réservée', 'En cours', 'En revue')
+RESERVATION_STATES = ACTIVE_RESERVATIONS + ('Terminée', 'Libérée')
+# Explicitly approved GitHub identities; no trust based on a free-text IA label.
+TRUSTED_ISSUE_AUTHORS = ('vadorus',)
+RESERVATION_MARKER = re.compile(r'^\s*\**\s*r[ée]servation[- ]?[ée]tat\s*\**\s*:', re.IGNORECASE)
 
 def command(argv):
     result = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
@@ -42,17 +47,45 @@ def paths_of(files):
     return {path for item in files for path in (item['filename'], item.get('previous_filename')) if path}
 
 def parse_zones(value):
-    zones = [x.strip() for x in (value or '').split(',')]
+    """NFC names, no markup/whitespace/globs; directories end with /."""
+    if not isinstance(value, str) or not value:
+        return None
+    zones = [unicodedata.normalize('NFC', x.strip()) for x in value.split(',')]
     for zone in zones:
-        if (not zone or zone.startswith('/') or '\\' in zone or
-            re.search(r'[:*?]', zone) or
-            any(x in ('', '.', '..') for x in zone.removesuffix('/').split('/'))):
+        parts = zone.rstrip('/').split('/')
+        if (not zone or zone.startswith('/') or '\\' in zone or '//' in zone or
+                not parts or any(p in ('', '.', '..') for p in parts) or
+                not all(ch.isalpha() or ch.isdecimal() or ch in '._-/' for ch in zone)):
             return None
     return zones
 
 def _zone_key(value):
-    """Normalize relative paths for conservative cross-platform comparisons."""
-    return value.rstrip('/').casefold()
+    """Unicode NFC + casefold. Workflows must apply the same rule."""
+    return unicodedata.normalize('NFC', value.rstrip('/')).casefold()
+
+def trusted_issue(issue):
+    return str((issue.get('user') or {}).get('login') or '').casefold() in TRUSTED_ISSUE_AUTHORS
+
+def reservation_record(issue):
+    """Return active reservation, or None. Malformed attempted header is fatal."""
+    number, body = issue.get('number', '?'), issue.get('body') or ''
+    attempted = [line for line in body.splitlines() if RESERVATION_MARKER.match(line)]
+    if not attempted:
+        return None
+    valid_header = re.fullmatch(
+        r'Réservation-état: (Réservée|En cours|En revue|Terminée|Libérée)', attempted[0]
+    ) if len(attempted) == 1 else None
+    if not valid_header:
+        raise ValueError('Réservation illisible : issue #' + str(number))
+    raw_zones = field(body, 'Zones')
+    parsed = parse_zones(raw_zones) if raw_zones else None
+    if raw_zones is not None and not parsed:
+        raise ValueError('Réservation illisible : issue #' + str(number))
+    if valid_header.group(1) not in ACTIVE_RESERVATIONS:
+        return None
+    if not parsed:
+        raise ValueError('Réservation illisible : issue #' + str(number))
+    return {'state': valid_header.group(1), 'zones': parsed}
 
 def _contains_zone(parent, child):
     """A bare path may be a file or folder; match at '/' boundaries only."""
@@ -68,17 +101,18 @@ def zones_overlap(first, second):
                for left in first for right in second)
 
 def conflicting_reservations(task_number, task_zones, issues):
-    """Fail closed for overlapping or malformed active reservations."""
+    """Malformed trusted reservation blocks; untrusted issues are ignored."""
     errors = []
     for other in issues:
-        if (other.get('number') == task_number or other.get('state') != 'open' or
-                'pull_request' in other or
-                field(other.get('body'), 'Réservation-état') not in ACTIVE_RESERVATIONS):
+        if (other.get('number') == task_number or other.get('state') != 'open'
+                or 'pull_request' in other or not trusted_issue(other)):
             continue
-        zones = parse_zones(field(other.get('body'), 'Zones'))
-        if not zones:
-            errors.append('Réservation active invalide dans issue #' + str(other['number']))
-        elif zones_overlap(task_zones, zones):
+        try:
+            record = reservation_record(other)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if record and zones_overlap(task_zones, record['zones']):
             errors.append('Conflit de réservation avec issue #' + str(other['number']))
     return errors
 
@@ -121,15 +155,22 @@ def inspect(args):
         if not args.writer or not args.reviewer or args.writer == args.reviewer or not args.paths:
             errors.append('Auteur, relecteur distinct et fichiers prévus obligatoires.')
         issue = api(f'repos/{args.repo}/issues/{args.task}')
+        if not trusted_issue(issue):
+            errors.append('Auteur non autorisé : issue #' + str(args.task))
         if 'pull_request' in issue or issue['state'] != 'open':
             errors.append('Référence de tâche différente d’une issue ouverte.')
         if field(issue.get('body'), 'Responsable-IA') != args.writer:
             errors.append('Auteur différent de la réservation de l’issue.')
         if field(issue.get('body'), 'Relecteur-IA') != args.reviewer:
             errors.append('Relecteur différent de la réservation de l’issue.')
-        if field(issue.get('body'), 'Réservation-état') not in ACTIVE_RESERVATIONS:
+        try:
+            own_record = reservation_record(issue) if trusted_issue(issue) else None
+        except ValueError as exc:
+            errors.append(str(exc))
+            own_record = None
+        if not own_record:
             errors.append('Réservation inactive ou absente.')
-        zones = parse_zones(field(issue.get('body'), 'Zones'))
+        zones = own_record['zones'] if own_record else None
         if not zones or any(not within(p, zones) for p in args.paths):
             errors.append('Fichiers prévus hors des zones réservées.')
         if zones:

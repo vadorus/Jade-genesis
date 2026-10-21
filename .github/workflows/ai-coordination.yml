@@ -137,7 +137,7 @@ jobs:
                   if (!value) return null;
                   const result = value.split(',').map(x => x.trim().normalize('NFC'));
                   if (result.some(x => !x || x.startsWith('/') || x.includes('\\') ||
-                      !/^[\p{L}\p{Nd}._/-]+$/u.test(x) ||
+                      !/^[\p{L}\p{Nd}._\/-]+$/u.test(x) ||
                       x.includes('//') || x.replace(/\/$/, '').split('/').some(p => !p || p === '.' || p === '..')))
                     return null;
                   return result;

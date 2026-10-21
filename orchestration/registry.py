@@ -220,7 +220,7 @@ class Registry:
             commit = self.api.call("POST", base + "git/commits", {
                 "tree": tree["sha"], "parents": [snap.head],
                 "message": "orch-registry: " + action + " by " + actor +
-                           "\n\nAgent-IA: Codex"
+                           "\n\nAgent-IA: " + (actor if actor in AGENTS else "Codex")
             })
             try:
                 # GitHub's non-forced fast-forward is the serialization point:

@@ -43,11 +43,12 @@ Ticket de préparation : #90. Auteur : Codex ; relecture indépendante prévue :
 En mode `--github`, le champ JSON `authorized` est **ignoré**. Pour vérifier une autorisation, le programme exige une issue ouverte de l'auteur de confiance, des Zones compatibles avec la tâche, et un commentaire de **vadorus**, dont GitHub renvoie `author_association: OWNER` :
 
 ```text
-/autoriser
-sha256:<64 caractères hexadécimaux>
+/autoriser <12 premiers caractères hexadécimaux du SHA-256>
 ```
 
-L'empreinte SHA-256 porte sur **le corps intégral de l'issue et les Zones normalisées**. Une édition du corps change l'empreinte et rend le commentaire caduc ; un simple `/autoriser` sans empreinte ne peut pas prouver le périmètre historique et est refusé. Aucun workflow n'étant autorisé pour enregistrer l'empreinte au moment du commentaire, il faut publier l'empreinte explicitement. Pour obtenir le commentaire à copier (lecture seule, en partant d'un clone temporaire de la branche GitHub) :
+Le format intégral historique (`/autoriser`, puis `sha256:<64 caractères>` à la ligne suivante) reste accepté. **Les commentaires dont `performed_via_github_app` n'est pas `null` sont toujours refusés**, même avec `login: vadorus` et `author_association: OWNER`.
+
+L'empreinte SHA-256 porte sur **le corps intégral de l'issue et les Zones normalisées**. La forme courte compare exactement les 12 premiers caractères (48 bits) : elle est pratique sur téléphone, mais moins résistante aux collisions que les 64 caractères. Une édition du corps change normalement l'empreinte et rend le commentaire caduc ; un simple `/autoriser` sans empreinte est refusé. Aucun nouveau workflow n'a été ajouté. Pour obtenir le commentaire à copier (lecture seule, en partant d'un clone temporaire de la branche GitHub) :
 
 ```sh
 GITHUB_TOKEN=<jeton en variable d'environnement> python3 orchestration/dispatcher.py \
@@ -58,8 +59,8 @@ Le texte généré est une **préparation**, pas une approbation. Seul le compte
 
 La détection de la propre PR repose sur le même dépôt GitHub, le champ `Tâche: #N` dans le corps, `Auteur-IA` égal à `Responsable-IA` sur l'issue, une branche préfixée `codex/`, `claude/` ou `antigravity/`, et un dépôt de tête identique. **Deux PR pour la même tâche bloquent avec `duplicate_pr_for_task`**. Chaque PR est interrogée individuellement pour obtenir son vrai `changed_files`. Une erreur d'API, un jeton absent ou des fichiers manquants bloque la planification.
 
-Quand Claude n'a plus de quota déclaré, Gemini/Antigravity peut relire **uniquement** les tâches `documentation` ou `testing` non sensibles (hors `.github/`, `scripts/ai_preflight.py` et code d'autorisation), et seulement si Codex est l'auteur. Il n'y a jamais d'auto-relecture. Un agent hors quota reste inconnu jusqu'à une déclaration fraîche ; ce programme **n'interroge aucun quota fournisseur**.
+Quand Claude n'a plus de quota déclaré, Gemini/Antigravity peut relire **uniquement** les tâches `documentation` ou `testing` dont **toutes** les zones sont strictement sous `docs/` (sauf les fichiers `AI_*.md`), ou sous `tests/` (sauf `tests/test_ai_preflight.py`). Les réservations globales `docs/` ou `tests/`, toutes les zones `orchestration/`, tout autre chemin, et toute tâche d'implémentation restent exclus. Il n'y a jamais d'auto-relecture : Codex est l'auteur lorsqu'Antigravity relit. Un agent hors quota reste inconnu jusqu'à une déclaration fraîche ; ce programme **n'interroge aucun quota fournisseur**.
 
 Ce module reste un **simulateur de propositions** : aucune tâche n'est envoyée à Claude, Codex ou Antigravity, aucune issue/PR n'est modifiée automatiquement, aucune API payante n'est appelée, aucun état de travail durable n'est encore mis à jour par le répartiteur.
 
-Tests ajoutés dans `orchestration/test_dispatcher.py` : cas d'autorisation, auto-PR/PR étrangère/PR double, liste de fichiers incomplète, jeton manquant, erreur d'API et relecteur de secours. **Ils doivent être exécutés indépendamment avant de considérer la phase A comme validée.** Aucun nouveau workflow GitHub Actions n'a été créé.
+Tests ajoutés dans `orchestration/test_dispatcher.py` : cas d'autorisation, auto-PR/PR étrangère/PR double, liste de fichiers incomplète, jeton manquant, erreur d'API et relecteur de secours. Pour R1–R3, **12 tests ciblés exécutés avec succès le 21/10/2026 sur une copie des fonctions modifiées**, sans accès GitHub ni appel d'IA ; la **suite complète du dépôt n'a pas été relancée** dans cet environnement. Elle reste obligatoire pour la relecture Claude. Aucun nouveau workflow GitHub Actions n'a été créé.

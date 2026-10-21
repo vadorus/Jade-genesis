@@ -1,0 +1,22 @@
+{
+  "trusted_issue_authors": ["vadorus"],
+  "agents": [
+    {"id": "Claude", "status": "available", "quota_units": null},
+    {"id": "Codex", "status": "available", "quota_units": null},
+    {"id": "Antigravity", "status": "offline", "quota_units": null}
+  ],
+  "claims": [],
+  "tasks": [
+    {
+      "id": "#90",
+      "repo": "vadorus/Jade-genesis",
+      "zones": ["orchestration/"],
+      "kind": "implementation",
+      "priority": 90,
+      "estimated_units": 2,
+      "dependencies": [],
+      "authorized": false,
+      "status": "queued"
+    }
+  ]
+}

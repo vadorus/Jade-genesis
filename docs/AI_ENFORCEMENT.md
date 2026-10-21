@@ -10,10 +10,22 @@ permission de commit, push ou intervention sensible.
 - Issue ouverte avec réservation cohérente et fichiers compris dans ses zones.
 - Inventaire paginé de toutes les PR ouvertes, brouillons et bases différentes
   inclus ; mêmes tâches, mêmes fichiers et anciennes destinations de renommage.
+- Inventaire des issues ouvertes avec réservation active (`Réservée`, `En cours`,
+  `En revue`) : refus si leurs zones se chevauchent, qu'il s'agisse de fichiers
+  exacts, de répertoires ou de répertoires imbriqués. Une réservation active
+  mal formée bloque aussi le contrôle. Les tickets purement informatifs, sans
+  réservation active, ne bloquent pas.
+- Nouvelle lecture des issues avant de terminer : toute modification de
+  l'inventaire pendant la vérification provoque un échec conservateur.
 - Aucun succès si une liste de fichiers est tronquée, une requête échoue ou la
   PR change pendant le contrôle. Les anciennes PR n'ont plus de dispense.
 - L'exception `Tâche: COORDINATION` est réservée au numéro de PR initial et à
   un sous-ensemble de la liste fermée de fichiers autorisés. Elle exige aussi auteur, relecteur et tests. Après fusion, cette exception ne peut plus servir car la PR initiale ne peut pas être rouverte.
+
+Le job `preflight-unit-tests` sur `pull_request` exécute les tests Python et la
+logique JavaScript avec un jeton GitHub limité en lecture. Le job de contrôle
+`coordination-policy-runner` sur `pull_request_target` n'exécute aucun code de PR.
+Les tests CI prouvent uniquement les cas couverts, pas l'absence de concurrence.
 
 Le workflow `pull_request_target` exécute seulement sa version déjà intégrée
 dans la branche par défaut (`main`), selon la documentation GitHub actuelle.
@@ -35,8 +47,12 @@ Réservation-état: Réservée
 Zones: scripts/Example.gd, tests/example_test.gd
 ```
 
-`Zones` accepte des fichiers exacts ou un répertoire avec `/` final ; ni glob,
-ni chemin absolu, ni `..`. Vérifier cette réservation juste avant chaque reprise.
+`Zones` accepte des chemins relatifs (fichiers et dossiers) ; écrire de préférence
+les dossiers avec `/` final. Pour éviter les fausses autorisations, un chemin sans
+`/` final réserve aussi ses descendants : `scripts` couvre `scripts/a.py`.
+La comparaison ignore la casse (`Scripts` et `scripts` se chevauchent) et respecte
+les limites de dossiers (`scripts` ne couvre pas `scripts-old`). Aucun glob,
+chemin absolu ni `..`. Vérifier les réservations avant chaque reprise.
 Une réservation textuelle ne prouve pas une autorisation humaine et ne constitue
 pas un verrou atomique. Ne créer/modifier aucune issue sans autorisation adaptée.
 
@@ -79,9 +95,17 @@ le contrôle hors du pilote et conserver la preuve datée dans la passation.
 - `Auteur-IA`, `Relecteur-IA`, réservation et `Tests` sont des déclarations. Le
   contrôle ne prouve ni l'identité d'une IA, ni l'exécution de tests, ni une revue.
 - L'inventaire n'est pas une exclusion mutuelle. Une modification d'une autre PR
-  ou d'une issue après le contrôle peut rendre un succès ancien obsolète. Le
-  workflow réagit aux événements de la PR courante, pas à toutes les réservations.
-  Rafraîchir l'inventaire et les contrôles avant fusion humaine.
+  ou d'une issue après le contrôle peut rendre un succès ancien obsolète.
+  Le job `invalidate-stale-gates` (événements GitHub `issues`) marque en échec
+  les anciens `multi-agent-gate` verts des PR ouvertes lorsqu'une issue de
+  réservation est créée, éditée, fermée, supprimée ou transférée. Il n'exécute
+  aucun code de PR. Pour revoir un succès, rééditer la description de la PR
+  (déclencheur `pull_request_target: edited`) ou pousser une nouvelle tête.
+  **Ce mécanisme ne fonctionne qu'après intégration du workflow de confiance
+  dans la branche GitHub par défaut.** L'arrivée et la publication des événements
+  restent asynchrones : ce n'est ni un verrou atomique ni une garantie contre
+  toutes les courses. Réexécuter le précontrôle et vérifier les conflits avant
+  reprise et fusion ; une réussite ancienne peut être périmée.
 - Toute personne autorisée à pousser une branche peut créer un autre workflow
   publiant un faux `multi-agent-gate` depuis l’app GitHub Actions : épingler cette
   app ne distingue pas les workflows. Les administrateurs peuvent aussi modifier

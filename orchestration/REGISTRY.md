@@ -41,9 +41,11 @@ Pour modifier les données, ajouter --apply avant la sous-commande et fournir
 GITHUB_TOKEN avec les droits minimaux nécessaires (dépôt privé : contents read/write).
 Pour une tâche d'un autre dépôt : --repo owner/repo, ou owner/repo#123.
 
-Une tâche active possède un bail de 2 h. Un heartbeat de plus de 6 h rend l'agent
-hors ligne. Les quotas sont **déclaratifs** et ne constituent pas une mesure
-des abonnements fournisseurs.
+Une tâche en `claimed` ou `in_progress` possède un bail de 2 h.
+Après `handoff`, la tâche en `review` conserve sa réservation **sans expiration**
+jusqu'à une décision explicite ou `release` ; `recover` ne la touche pas.
+Un heartbeat de plus de 6 h rend l'agent hors ligne. Les quotas sont
+**déclaratifs** et ne constituent pas une mesure des abonnements fournisseurs.
 
 ## Sérialisation et reprise
 
@@ -77,6 +79,9 @@ interrompt la proposition.
    disponibilités et interruptions restent administrés séparément.
 4. Le code n'initialise pas la branche, ne supprime pas de fichiers, ne touche pas
    aux protections et ne contacte pas d'IA.
+6. L'issue #94 n'a pas encore de commentaire d'autorisation humaine valide ;
+   un `claim --apply` doit **refuser** la tâche tant qu'Alexandre n'en a pas
+   personnellement publié un. Cet outil ne rédige ni ne publie ces commandes.
 5. Les tests de orchestration/test_registry.py utilisent une **fausse API Git**
    dont la ref accepte seulement les descendants directs sans forçage ;
    le banc de tests n'est pas une preuve d'intégration GitHub réelle.

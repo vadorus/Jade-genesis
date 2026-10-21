@@ -6,6 +6,7 @@ Quotas and agent availability are declared explicitly, never inferred.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -76,7 +77,7 @@ def api_pages(repo: str, endpoint: str, token: str | None, fetch=None) -> list[d
 def issue_fields(body: str) -> tuple[str, list[str]] | None:
     # Recognize imperfect attempts conservatively; a trusted malformed reservation halts planning.
     body = unicodedata.normalize("NFC", body)
-    if not re.search(r"r[ée]servation[- ]?[ée]tat", body, flags=re.IGNORECASE):
+    if not re.search(r"^\s*\**\s*r[ée]servation[- ]?[ée]tat\s*\**\s*:", body, flags=re.IGNORECASE | re.MULTILINE):
         return None
     matches = re.findall(r"^Réservation-état:\s*(.+?)\s*$", body, re.MULTILINE)
     if len(matches) != 1 or matches[0] not in ACTIVE + ("Terminée", "Libérée"):
@@ -91,37 +92,135 @@ def issue_fields(body: str) -> tuple[str, list[str]] | None:
     return matches[0], scopes
 
 
-def github_claims(repositories: list[str], trusted_users: list[str], token: str | None = None, fetch=None) -> list[dict]:
-    """Read open issue claims and PR files. Fail closed on errors/incomplete snapshots."""
-    trusted = {u.casefold() for u in trusted_users}
+def issue_field(body: str, name: str) -> str | None:
+    values = [line[len(name) + 2:] for line in (body or "").splitlines()
+              if line.startswith(name + ": ")]
+    return values[0] if len(values) == 1 and values[0] else None
+
+
+def approval_fingerprint(body: str, zones: list[str]) -> str:
+    """Hash of the exact issue body AND canonical zones, recorded by its owner."""
+    payload = json.dumps({"body": body, "zones": [zone_key(z) for z in zones]},
+                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def verified_approval(issue: dict, zones: list[str], comments: list[dict]) -> bool:
+    """Plain /autoriser cannot bind historic issue contents: require a hash on line 2."""
+    expected = approval_fingerprint(issue.get("body") or "", zones)
+    for comment in comments:
+        if ((comment.get("user") or {}).get("login") != "vadorus" or
+                comment.get("author_association") != "OWNER"):
+            continue
+        match = re.fullmatch(r"/autoriser\r?\nsha256:([0-9a-f]{64})\s*",
+                             comment.get("body") or "")
+        if match and match.group(1) == expected:
+            return True
+    return False
+
+
+def github_claims(repositories: list[str], trusted_users: list[str], token: str | None = None,
+                  fetch=None, tasks: list[dict] | None = None) -> list[dict]:
+    """Read verified authorizations, issue reservations and exact PR file inventories.
+
+    All reads must succeed; no GitHub writes. Missing API token always fails closed.
+    The binding is a dated owner-authored command including the exact body/zone hash.
+    """
+    if not token:
+        raise PlanningError("GITHUB_TOKEN required for authoritative GitHub mode")
+    trusted = {u.casefold() for u in trusted_users} | {"vadorus"}
     claims = []
+    tasks = tasks or []
     for repo in sorted(set(repositories)):
         repo_key(repo)
         owner = repo.split("/")[0].casefold()
+        opened_issues = {}
         for issue in api_pages(repo, "issues?state=open", token, fetch):
             if "pull_request" in issue:
                 continue
+            number = issue["number"]
+            opened_issues[number] = issue
             author = str((issue.get("user") or {}).get("login") or "").casefold()
-            # Untrusted accounts cannot reserve files by creating public issues.
             if author not in trusted | {owner}:
                 continue
             try:
                 record = issue_fields(issue.get("body") or "")
             except PlanningError as exc:
-                raise PlanningError(f"Trusted issue #{issue.get('number')} in {repo}: {exc}") from exc
+                raise PlanningError(f"Trusted issue #{number} in {repo}: {exc}") from exc
             if record:
-                claims.append({"repo": repo, "task_id": f"issue:{issue['number']}", "zones": record[1]})
-        for pr in api_pages(repo, "pulls?state=open", token, fetch):
-            number = pr["number"]
+                claims.append({"repo": repo, "task_id": f"issue:{number}",
+                               "zones": record[1], "kind": "issue", "issue_number": number,
+                               "issue_writer": issue_field(issue.get("body") or "", "Responsable-IA"),
+                               "authorized": False})
+        for task in tasks:
+            if repo_key(task.get("repo")) != repo_key(repo):
+                continue
+            match = re.fullmatch(r"#([1-9]\d*)", task["id"])
+            if not match:
+                raise PlanningError("GitHub task must reference an issue: " + task["id"])
+            issue_no = int(match.group(1))
+            issue = opened_issues.get(issue_no)
+            if not issue or "pull_request" in issue:
+                raise PlanningError("Missing open task issue: " + task["id"])
+            if str((issue.get("user") or {}).get("login") or "").casefold() not in trusted | {owner}:
+                raise PlanningError("Untrusted task issue: " + task["id"])
+            record = issue_fields(issue.get("body") or "")
+            if not record:
+                raise PlanningError("Task issue has no active reservation: " + task["id"])
+            # The scope named by GitHub must cover the proposed task.
+            if not all(any(zone_key(x) == zone_key(z) or
+                           zone_key(x).startswith(zone_key(z) + "/")
+                           for z in record[1]) for x in task["zones"]):
+                raise PlanningError("Task outside issue scope: " + task["id"])
+            comments = api_pages(repo, f"issues/{issue_no}/comments", token, fetch)
+            approved = verified_approval(issue, record[1], comments)
+            entry = next((claim for claim in claims
+                          if claim["task_id"] == f"issue:{issue_no}"), None)
+            if entry is None:
+                raise PlanningError("Task reservation missing from claims")
+            entry["authorized"] = approved
+        for summary in api_pages(repo, "pulls?state=open", token, fetch):
+            number = summary["number"]
+            # pulls.list omits changed_files: fetch each PR individually.
+            meta_url = f"https://api.github.com/repos/{repo}/pulls/{number}"
+            headers = {"Accept": "application/vnd.github+json",
+                       "User-Agent": "jade-orchestration-read-only",
+                       "X-GitHub-Api-Version": "2022-11-28",
+                       "Authorization": "Bearer " + token}
+            if fetch is None:
+                with urlopen(Request(meta_url, headers=headers), timeout=15) as response:
+                    detailed = json.load(response)
+            else:
+                detailed = fetch(meta_url, headers)
+            if (not isinstance(detailed, dict) or detailed.get("number") != number or
+                    type(detailed.get("changed_files")) is not int or
+                    detailed["changed_files"] < 0):
+                raise PlanningError(f"Missing changed_files in PR #{number} of {repo}")
             listed = api_pages(repo, f"pulls/{number}/files", token, fetch)
-            if len(listed) != pr.get("changed_files"):
-                # Pulls.list may omit changed_files; fetch the exact PR if needed via /pulls/<n>.
-                if pr.get("changed_files") is not None:
-                    raise PlanningError(f"Incomplete file inventory: {repo} PR #{number}")
-            files = list({p for x in listed for p in (x.get("filename"), x.get("previous_filename")) if p})
-            if not files or len(listed) >= 3000:
+            if len(listed) != detailed["changed_files"] or len(listed) >= 3000:
+                raise PlanningError(f"Incomplete file inventory: {repo} PR #{number}")
+            files = list({p for x in listed
+                          for p in (x.get("filename"), x.get("previous_filename")) if p})
+            if not files:
                 raise PlanningError(f"Unusable PR file inventory: {repo} PR #{number}")
-            claims.append({"repo": repo, "task_id": f"pr:{number}", "zones": files})
+            body = detailed.get("body") or ""
+            task_link = issue_field(body, "Tâche")
+            author_label = issue_field(body, "Auteur-IA")
+            linked_issue = None
+            if task_link and re.fullmatch(r"#[1-9]\d*", task_link):
+                linked_issue = opened_issues.get(int(task_link[1:]))
+            assigned = issue_field((linked_issue or {}).get("body") or "", "Responsable-IA")
+            branch = (detailed.get("head") or {}).get("ref") or ""
+            head_repo = ((detailed.get("head") or {}).get("repo") or {}).get("full_name")
+            prefixes = {"Claude": "claude/", "Codex": "codex/", "Antigravity": "antigravity/"}
+            valid_self = bool(linked_issue and task_link and assigned and
+                              author_label == assigned and
+                              branch.startswith(prefixes.get(assigned, "\0")) and
+                              head_repo and repo_key(head_repo) == repo_key(repo) and
+                              str(((linked_issue or {}).get("user") or {}).get("login") or "").casefold() in trusted)
+            claims.append({"repo": repo, "task_id": f"pr:{number}", "zones": files,
+                           "kind": "pr", "linked_task": task_link,
+                           "writer": author_label, "verified_self": valid_self})
     return claims
 
 

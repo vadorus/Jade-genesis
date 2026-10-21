@@ -224,6 +224,22 @@ def github_claims(repositories: list[str], trusted_users: list[str], token: str 
     return claims
 
 
+def safe_fallback_review(task: dict) -> bool:
+    """Second reviewer only for narrow documentation/testing, never authorization code."""
+    if task["kind"] not in ("documentation", "testing"):
+        return False
+    for value in task["zones"]:
+        zone = zone_key(value)
+        parts = zone.split("/")
+        if (zone == ".github" or zone.startswith(".github/") or
+                zone == "scripts/ai_preflight.py" or
+                zone in ("scripts", "orchestration", "orchestration/dispatcher.py") or
+                any("auth" in part or "permission" in part or "security" in part
+                    for part in parts)):
+            return False
+    return True
+
+
 def plan(state: dict, external_claims: list[dict] | None = None) -> dict:
     tasks = state.get("tasks", [])
     profiles = state.get("agents", [])
@@ -268,16 +284,36 @@ def plan(state: dict, external_claims: list[dict] | None = None) -> dict:
         if task.get("status", "queued") != "queued":
             blocked("not_queued")
             continue
-        if task.get("authorized") is not True:
+        github_mode = external_claims is not None
+        if github_mode:
+            # JSON authorized=true has NO standing when reading GitHub.
+            owner_claim = next((c for c in external_claims
+                                if c.get("kind") == "issue"
+                                and repo_key(c["repo"]) == repo_key(task["repo"])
+                                and c["task_id"] == f"issue:{tid.lstrip('#')}"), None)
+            if not owner_claim or owner_claim.get("authorized") is not True:
+                blocked("github_authorization_missing_or_stale")
+                continue
+        elif task.get("authorized") is not True:
             blocked("requires_human_authorization")
             continue
         deps = task.get("dependencies", [])
         if not isinstance(deps, list) or any(d not in index or index[d].get("status") != "done" for d in deps):
             blocked("dependencies_unmet")
             continue
-        conflicts = [c["task_id"] for c in claims if repo_key(c["repo"]) == repo_key(task["repo"])
+        linked_prs = [c for c in claims if c.get("kind") == "pr"
+                      and repo_key(c["repo"]) == repo_key(task["repo"])
+                      and c.get("linked_task") == tid]
+        if len(linked_prs) > 1:
+            blocked("duplicate_pr_for_task", sorted(c["task_id"] for c in linked_prs))
+            continue
+        own_pr = linked_prs[0] if len(linked_prs) == 1 and linked_prs[0].get("verified_self") else None
+        if own_pr and task.get("assigned_writer") and own_pr.get("writer") != task["assigned_writer"]:
+            own_pr = None
+        conflicts = [c["task_id"] for c in claims
+                     if repo_key(c["repo"]) == repo_key(task["repo"])
                      and c.get("task_id") not in (tid, f"issue:{tid.lstrip('#')}")
-                     and overlaps(task["zones"], c["zones"])]
+                     and c is not own_pr and overlaps(task["zones"], c["zones"])]
         if conflicts:
             blocked("reserved_zone_conflict", sorted(set(conflicts)))
             continue
@@ -288,11 +324,18 @@ def plan(state: dict, external_claims: list[dict] | None = None) -> dict:
             if task.get("preferred_writer") in candidates:
                 candidates.remove(task["preferred_writer"])
                 candidates.insert(0, task["preferred_writer"])
-        writer = next((a for a in candidates if remaining.get(a) is not None and remaining[a] >= task["estimated_units"]), None)
+        if (reviewer == "Claude" and
+                (remaining.get("Claude") is None or remaining["Claude"] < 1) and
+                safe_fallback_review(task)):
+            reviewer = "Antigravity"
+            candidates = ["Codex"]  # Gemini cannot review her own changes.
+        writer = next((name for name in candidates
+                       if name != reviewer and remaining.get(name) is not None
+                       and remaining[name] >= task["estimated_units"]), None)
         if not writer:
             blocked("no_writer_with_confirmed_quota")
             continue
-        if reviewer == writer or remaining.get(reviewer) is None or remaining[reviewer] < 1:
+        if remaining.get(reviewer) is None or remaining[reviewer] < 1:
             blocked("reviewer_unavailable_or_quota_unknown")
             continue
         remaining[writer] -= task["estimated_units"]
@@ -315,7 +358,8 @@ def main(argv=None) -> int:
         external = None
         if options.github:
             external = github_claims(sorted({x["repo"] for x in state["tasks"]}),
-                                     state.get("trusted_issue_authors", []), os.getenv("GITHUB_TOKEN"))
+                                     state.get("trusted_issue_authors", []), os.getenv("GITHUB_TOKEN"),
+                                     tasks=state["tasks"])
         output = plan(state, external)
         output["snapshot"] = "github_live_metadata" if options.github else "simulation_no_github_snapshot"
         print(json.dumps(output, ensure_ascii=False, indent=2))

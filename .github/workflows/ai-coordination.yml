@@ -1,71 +1,42 @@
 name: Multi-agent coordination gate
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
   issues:
     types: [opened, edited, deleted, transferred, closed, reopened]
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches: [main]
 
-# Only the pull_request job checks out untrusted code, with a read-only token.
-# The privileged pull_request_target job never executes or checks out PR code.
-# checks:write is limited to reporting the result on the current PR HEAD.
+# Trusted pull_request_target policy executes only inline workflow code from default branch.
+# Untrusted code and unit tests run separately with a read-only token.
 permissions:
   contents: read
   issues: read
   pull-requests: read
-  checks: write
 
 concurrency:
   group: coordination-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
-  preflight-unit-tests:
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout PR merge commit (read-only job)
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - name: Execute Python and JavaScript policy tests
-        run: python3 -m unittest discover -s tests -p 'test_ai_preflight.py' -v
-
-  coordination-policy-runner:
+  multi-agent-gate:
     if: github.event_name == 'pull_request_target'
-    name: coordination-policy-runner
+    name: multi-agent-gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Validate metadata and report on PR HEAD
+      - name: Validate PR metadata and reservations
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7, verified via GitHub tag
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const number = context.payload.pull_request.number;
-            let check;
             try {
             const snapshot = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
               if (snapshot.state !== 'open') throw new Error('PR fermée.');
               const expectedHead = snapshot.head.sha;
               const expectedBase = snapshot.base.sha;
-              // C3: every workflow execution gets its own check run. Never mutate a prior
-              // execution's result, even if this PR still has the same HEAD.
-              const externalId = 'coordination-pr-' + number + '-head-' + expectedHead +
-                '-run-' + context.runId + '-attempt-' + (process.env.GITHUB_RUN_ATTEMPT || '1');
-              check = (await github.rest.checks.create({
-                owner, repo, name: 'multi-agent-gate', head_sha: expectedHead,
-                status: 'in_progress', external_id: externalId,
-                details_url: 'https://github.com/' + owner + '/' + repo +
-                  '/actions/runs/' + context.runId
-              })).data;
               await (async () => {
                 // Executed only as trusted inline code from the default branch. No PR checkout.
                 const { owner, repo } = context.repo;
@@ -234,19 +205,9 @@ jobs:
                 if (errors.length) throw new Error('Coordination incomplète ou conflit : arbitrage requis.');
                 else core.info('Inventaire et déclarations cohérents. Ce résultat ne prouve ni autorisation, ni tests, ni revue indépendante.');
               })();
-              await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                status: 'completed', conclusion: 'success',
-                output: { title: 'Coordination cohérente', summary: 'Inventaire et déclarations vérifiés ; aucune autorisation ni revue réelle certifiée.' }
-              });
+              core.info('Politique vérifiée : contrôle natif du job multi-agent-gate réussi.');
             } catch (error) {
-              if (check) await github.rest.checks.update({ owner, repo, check_run_id: check.id,
-                status: 'completed', conclusion: 'failure',
-                output: { title: 'Coordination bloquée', summary: String(error.message).slice(0, 6000) }
-              });
-              // The required check carries policy failure. Keep the transport job
-              // successful after reporting it; infrastructure failures remain visible.
-              if (check) core.error('Coordination bloquée : ' + error.message);
-              else core.setFailed('Contrôle non publié : ' + error.message);
+              core.setFailed('Coordination bloquée : ' + String(error.message || error));
             }
 
   invalidate-stale-gates:
@@ -258,7 +219,7 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
-      checks: write
+      actions: write
     steps:
       - name: Invalidate earlier green reservation checks after issue changes
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -283,33 +244,30 @@ jobs:
               const pullRequests = await github.paginate(github.rest.pulls.list, {
                 owner, repo, state: 'open', per_page: 100
               });
-              let invalidated = 0;
+              let restarted = 0;
               for (const pr of pullRequests) {
-                const runs = await github.paginate(github.rest.checks.listForRef, {
-                  owner, repo, ref: pr.head.sha, check_name: 'multi-agent-gate',
-                  filter: 'all', per_page: 100
+                // GitHub creates the required status through the native job.
+                // Rerun only the last completed policy workflow for this exact PR and HEAD.
+                const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                  owner, repo, workflow_id: 'ai-coordination.yml',
+                  event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100
                 });
-                // Ignore foreign apps or another PR reusing the same commit SHA.
-                // Select just the newest check for this PR; older runs remain immutable.
-                const externalPrefix = 'coordination-pr-' + pr.number + '-head-' + pr.head.sha;
-                const candidates = runs.filter(run => run.app?.id === 15368 &&
-                  (run.external_id === externalPrefix ||
-                   run.external_id?.startsWith(externalPrefix + '-run-')));
-                const latest = candidates.sort((a, b) => b.id - a.id)[0];
-                if (!latest ||
-                    (latest.status === 'completed' && latest.conclusion !== 'success')) continue;
-                await github.rest.checks.update({
-                  owner, repo, check_run_id: latest.id,
-                  status: 'completed', conclusion: 'failure',
-                  output: {
-                    title: 'Réservation modifiée : contrôle à refaire',
-                    summary: 'Issue #' + issueNumber +
-                      ' modifiée depuis une validation. Relancer le contrôle de la PR avant fusion.'
-                  }
+                const eligible = runs.filter(run =>
+                  run.event === 'pull_request_target' &&
+                  run.head_sha === pr.head.sha &&
+                  run.status === 'completed' &&
+                  run.pull_requests?.some(p => p.number === pr.number));
+                const latest = eligible.sort((a, b) => b.id - a.id)[0];
+                if (!latest) {
+                  core.setFailed('Aucune exécution de politique terminée à relancer : PR #' + pr.number);
+                  continue;
+                }
+                await github.rest.actions.reRunWorkflow({
+                  owner, repo, run_id: latest.id
                 });
-                invalidated++;
+                restarted++;
               }
-              core.info('Validations précédentes invalidées : ' + invalidated);
+              core.info('Exécutions de politique relancées : ' + restarted);
             } else {
               core.info('Issue non liée à une réservation active ou précédente.');
             }

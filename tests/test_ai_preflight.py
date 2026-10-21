@@ -15,7 +15,7 @@ SPEC.loader.exec_module(preflight)
 
 
 def issue(number, state="Réservée", zones="scripts/", open_state="open", pr=False):
-    value = {"number": number, "state": open_state, "body": (
+    value = {"number": number, "state": open_state, "user": {"login": "vadorus"}, "body": (
         "Réservation-état: " + state + "\nZones: " + zones
     )}
     if pr:
@@ -69,7 +69,7 @@ class ReservationOverlapTests(unittest.TestCase):
 
     def test_inactive_issue_ignored(self):
         self.assertEqual(preflight.conflicting_reservations(
-            1, ["scripts/"], [issue(2, state="À qualifier")]), [])
+            1, ["scripts/"], [issue(2, state="Terminée")]), [])
 
     def test_own_issue_ignored(self):
         self.assertEqual(preflight.conflicting_reservations(
@@ -122,7 +122,7 @@ class ReservationOverlapTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
     def test_workflow_js_zone_logic(self):
         script = self.workflow_script()
-        functions = script[script.index("function zoneKey(value) {"):
+        functions = script[script.index("function field(body, name) {"):
                            script.index("function issueSignature(items) {")]
         assertions = """
 const assert = require('node:assert/strict');
@@ -147,14 +147,15 @@ assert.equal(within('scripts-old/file.gd', ['scripts']), false);
         functions = script[:script.index("if (reservationChange(context.payload)) {")]
         assertions = """
 const assert = require('node:assert/strict');
-assert.equal(reservationChange({action:'edited', issue:{body:'Réservation-état: En cours'}}), true);
+assert.equal(reservationChange({action:'edited', issue:{user:{login:'vadorus'},body:'Réservation-état: En cours'}}), true);
 assert.equal(reservationChange({action:'edited', issue:{body:'Suivi simple'},
-  changes:{body:{from:'Réservation-état: Réservée'}}}), true);
-assert.equal(reservationChange({action:'closed', issue:{body:'Réservation-état: En cours'}}), true);
-assert.equal(reservationChange({action:'deleted', issue:{}}), true);
-assert.equal(reservationChange({action:'transferred', issue:{}}), true);
-assert.equal(reservationChange({action:'edited', issue:{body:'Simple issue'}}), false);
-assert.equal(reservationChange({action:'edited', issue:{body:'Note: Réservation-état: En cours'}}), false);
+  changes:{body:{from:'Réservation-état: Réservée'}}}), false);
+assert.equal(reservationChange({action:'closed', issue:{user:{login:'vadorus'}, body:'Réservation-état: En cours'}}), true);
+assert.equal(reservationChange({action:'deleted', issue:{user:{login:'vadorus'}}}), true);
+assert.equal(reservationChange({action:'transferred', issue:{user:{login:'vadorus'}}}), true);
+assert.equal(reservationChange({action:'edited', issue:{user:{login:'vadorus'},body:'Simple issue'}}), false);
+assert.equal(reservationChange({action:'edited', issue:{user:{login:'vadorus'},body:'Note: Réservation-état: En cours'}}), false);
+assert.equal(reservationChange({action:'edited', issue:{user:{login:'stranger'}, body:'Réservation-état: En cours'}}), false);
 """
         result = subprocess.run(["node", "-"], input=functions + "\n" + assertions,
                                 text=True, capture_output=True, timeout=15, check=False)
@@ -183,6 +184,85 @@ assert.equal(reservationChange({action:'edited', issue:{body:'Note: Réservation
                 errors = preflight.conflicting_reservations(
                     1, [filename], [issue(2, zones=",".join(scope))])
                 self.assertEqual(bool(errors), blocked)
+
+    def test_untrusted_issue_has_no_reservation_authority(self):
+        unknown = issue(4, zones="scripts/")
+        unknown["user"]["login"] = "stranger"
+        self.assertEqual(preflight.conflicting_reservations(1, ["scripts/"], [unknown]), [])
+
+    def test_tracking_phrase_not_a_reservation(self):
+        tracking = {"number": 6, "state": "open", "user": {"login": "vadorus"},
+                    "body": "Ce ticket cite Réservation-état sans créer de réservation."}
+        self.assertIsNone(preflight.reservation_record(tracking))
+        self.assertEqual(preflight.conflicting_reservations(1, ["scripts/"], [tracking]), [])
+
+    @staticmethod
+    def shared_cases():
+        # Exactly the same bodies are submitted to the Python and JS parsers.
+        return [
+            ("Réservation-état: Réservée\\nZones: scripts/", True),
+            ("Réservation-état : Réservée\\nZones: scripts/", False),
+            ("**Réservation-état:** Réservée\\nZones: scripts/", False),
+            ("Réservation-état: réservée\\nZones: scripts/", False),
+            ("Réservation-état: Réservée\\nRéservation-état: En cours\\nZones: scripts/", False),
+            ("  Réservation-état: Réservée\\nZones: scripts/", False),
+            ("Réservation-état: Réservée\\nZones: `scripts/`", False),
+            ("Réservation-état: Réservée\\nZones: scripts/ (tout le dossier)", False),
+            ("Réservation-état: Réservée\\nZones: scripts/;docs/", False),
+            ("Ceci mentionne Réservation-état dans une phrase.", None),
+            ("Réservation-état: Terminée", None),
+            ("Réservation-état: En revue\\nZones: docs/État.md", True),
+        ]
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_shared_reservation_cases_python_and_javascript(self):
+        import json
+        cases = [(body.replace("\\\\n", "\\n"), expected) for body, expected in self.shared_cases()]
+        observed_python = []
+        for body, expected in cases:
+            candidate = {"number": 7, "body": body}
+            try:
+                outcome = preflight.reservation_record(candidate)
+                actual = None if outcome is None else True
+            except ValueError as exc:
+                self.assertEqual(str(exc), "Réservation illisible : issue #7")
+                actual = False
+            observed_python.append(actual)
+            self.assertEqual(actual, expected, body)
+        script = self.workflow_script()
+        source = script[script.index("function field(body, name) {"):
+                        script.index("function issueSignature(items) {")]
+        node = """
+const values = JSON.parse(process.argv[1]);
+const results = values.map(body => {
+  try {
+    const item = reservationState({number:7, body});
+    return item ? true : null;
+  } catch (error) {
+    if (error.message !== 'Réservation illisible : issue #7') throw error;
+    return false;
+  }
+});
+console.log(JSON.stringify(results));
+"""
+        completed = subprocess.run(["node", "-", json.dumps([body for body, _ in cases], ensure_ascii=False)],
+                                   input=source + "\\n" + node, text=True, capture_output=True, timeout=20)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), observed_python)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_unicode_casefold_parity(self):
+        script = self.workflow_script()
+        source = script[script.index("function field(body, name) {"):
+                        script.index("function issueSignature(items) {")]
+        cases = ["STRASSE", "Straße", "DОCS/État.md", "DОCS/e\\u0301tat.md", "ﬃ", "FFI", "ς", "σ"]
+        import json
+        assertions = "console.log(JSON.stringify(" + json.dumps(cases, ensure_ascii=False) + ".map(fold)));"
+        completed = subprocess.run(["node", "-"], input=source + "\\n" + assertions,
+                                   text=True, capture_output=True, timeout=15)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout),
+                         [__import__("unicodedata").normalize("NFC", p).casefold() for p in cases])
 
     def test_workflow_rechecks_reservation_snapshot(self):
         source = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8")

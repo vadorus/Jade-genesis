@@ -160,14 +160,18 @@ class GithubAuthorityTests(unittest.TestCase):
         self.comments = []
         self.issues = [self.issue]
 
-    def approve(self, *, author="vadorus", association="OWNER", body=None):
+    def approve(self, *, author="vadorus", association="OWNER", body=None,
+                short=False, app=None):
         digest = mod.approval_fingerprint(
             self.issue["body"], ["orchestration/"])
         self.comments = [{
             "id": 1,
-            "body": body or "/autoriser\nsha256:" + digest,
+            "body": body if body is not None else (
+                "/autoriser " + digest[:12] if short else
+                "/autoriser\nsha256:" + digest),
             "user": {"login": author},
             "author_association": association,
+            "performed_via_github_app": app,
             "created_at": "2026-10-21T10:00:00Z",
         }]
 
@@ -270,6 +274,54 @@ class GithubAuthorityTests(unittest.TestCase):
         self.assertEqual(mod.plan(self.value, self.claims())["blocked"][0]["reason"],
                          "github_authorization_missing_or_stale")
 
+    def test_approval_posted_via_github_app_is_refused(self):
+        for app in ({"id": 123, "slug": "automation-agent"}, {}):
+            with self.subTest(app=app):
+                self.approve(short=True, app=app)
+                self.assertFalse(mod.verified_approval(
+                    self.issue, ["orchestration/"], self.comments))
+                result = mod.plan(self.value, self.claims())
+                self.assertEqual(result["blocked"][0]["reason"],
+                                 "github_authorization_missing_or_stale")
+
+    def test_phone_short_approval_is_accepted(self):
+        self.approve(short=True)
+        self.assertEqual(self.comments[0]["body"].count("\n"), 0)
+        self.assertEqual(len(self.comments[0]["body"].split(" ")[1]), 12)
+        self.assertTrue(mod.verified_approval(
+            self.issue, ["orchestration/"], self.comments))
+        self.assertEqual(len(mod.plan(self.value, self.claims())["assignments"]), 1)
+
+    def test_phone_short_approval_wrong_code_is_refused(self):
+        digest = mod.approval_fingerprint(self.issue["body"], ["orchestration/"])
+        wrong = "0" if digest[0] != "0" else "1"
+        self.approve(body="/autoriser " + wrong + digest[1:12])
+        self.assertEqual(mod.plan(self.value, self.claims())["blocked"][0]["reason"],
+                         "github_authorization_missing_or_stale")
+
+    def test_phone_short_approval_stale_after_edit_is_refused(self):
+        self.approve(short=True)
+        self.issue["body"] += "\nNote: la réservation a changé"
+        self.assertFalse(mod.verified_approval(
+            self.issue, ["orchestration/"], self.comments))
+        self.assertEqual(mod.plan(self.value, self.claims())["blocked"][0]["reason"],
+                         "github_authorization_missing_or_stale")
+
+    def test_phone_short_code_rejects_truncated_and_extra_characters(self):
+        digest = mod.approval_fingerprint(self.issue["body"], ["orchestration/"])
+        for candidate in (
+            "/autoriser " + digest[:11],
+            "/autoriser " + digest[:13],
+            "/autoriser " + digest[:12] + " trailing",
+            "/autoriser " + digest[:12].upper(),
+        ):
+            if candidate.endswith(digest[:12].upper()) and candidate == "/autoriser " + digest[:12]:
+                continue
+            with self.subTest(candidate=candidate):
+                self.approve(body=candidate)
+                self.assertFalse(mod.verified_approval(
+                    self.issue, ["orchestration/"], self.comments))
+
     def test_no_api_token_rejected_even_with_fake_fetch(self):
         with self.assertRaisesRegex(mod.PlanningError, "GITHUB_TOKEN"):
             mod.github_claims(["vadorus/Jade-genesis"], [], token=None,
@@ -284,18 +336,30 @@ class GithubAuthorityTests(unittest.TestCase):
                               fetch=quota_error, tasks=self.value["tasks"])
 
     def test_gemini_review_allowed_only_for_low_risk_tasks(self):
-        value = state()
-        value["agents"][0]["quota_units"] = None
-        value["tasks"][0].update(kind="documentation", zones=["docs/help.md"])
-        result = mod.plan(value)
-        self.assertEqual(result["assignments"][0]["reviewer"], "Antigravity")
-        self.assertEqual(result["assignments"][0]["writer"], "Codex")
+        for kind, scopes in [
+            ("documentation", ["docs/help.md"]),
+            ("testing", ["tests/test_ui.py"]),
+            ("documentation", ["docs/tutorial.md", "tests/test_tutorial.py"]),
+        ]:
+            with self.subTest(kind=kind, scopes=scopes):
+                value = state()
+                value["agents"][0]["quota_units"] = None
+                value["tasks"][0].update(kind=kind, zones=scopes)
+                result = mod.plan(value)
+                self.assertEqual(result["assignments"][0]["reviewer"], "Antigravity")
+                self.assertEqual(result["assignments"][0]["writer"], "Codex")
 
     def test_gemini_review_rejected_for_sensitive_paths(self):
         for kind, scope in [
             ("documentation", [".github/README.md"]),
-            ("testing", ["scripts/ai_preflight.py"]),
-            ("testing", ["orchestration/dispatcher.py"]),
+            ("documentation", ["docs/AI_COORDINATION.md"]),
+            ("documentation", ["docs/sub/AI_SECURITY.md"]),
+            ("documentation", ["docs/"]),
+            ("testing", ["tests/test_ai_preflight.py"]),
+            ("testing", ["tests/"]),
+            ("testing", ["orchestration/test_dispatcher.py"]),
+            ("testing", ["tests/test_ok.py", "orchestration/test_dispatcher.py"]),
+            ("documentation", ["docs/help.md", "scripts/other.py"]),
             ("implementation", ["docs/help.md"]),
         ]:
             with self.subTest(scope=scope):

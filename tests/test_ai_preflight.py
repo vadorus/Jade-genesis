@@ -166,7 +166,7 @@ assert.equal(reservationChange({action:'edited', issue:{user:{login:'stranger'},
         self.assertIn("types: [opened, edited, deleted, transferred, closed, reopened]", source)
         self.assertIn("if: github.event_name == 'issues'", source)
         self.assertIn("if: github.event_name == 'pull_request_target'", source)
-        self.assertIn("check.app?.id !== 15368", source)
+        self.assertIn("run.app?.id === 15368", source)
         self.assertIn("conclusion: 'failure'", source)
         self.assertEqual(len(self.workflow_scripts()), 2)
 
@@ -263,6 +263,111 @@ console.log(JSON.stringify(results));
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(json.loads(completed.stdout),
                          [__import__("unicodedata").normalize("NFC", p).casefold() for p in cases])
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_three_successive_runs_on_same_sha_each_create_own_gate(self):
+        """Exercise the workflow's actual creation block, not a textual assertion."""
+        script = self.workflow_script()
+        creation = script[script.index("const externalId = 'coordination-pr-'"):
+                          script.index("await (async () => {", script.index("const externalId = 'coordination-pr-'"))]
+        node = """
+const assert = require('node:assert/strict');
+const checks = [];
+const github = {rest: {checks: {
+  create: async request => {
+    const data = {...request, id: checks.length + 101};
+    checks.push(data);
+    return {data};
+  },
+  update: async request => {
+    const run = checks.find(item => item.id === request.check_run_id);
+    assert(run);
+    run.status = request.status;
+    run.conclusion = request.conclusion;
+  }
+}}};
+async function run(runId, attempt, verdict) {
+  const context = {runId};
+  process.env.GITHUB_RUN_ATTEMPT = String(attempt);
+  const owner = 'vadorus', repo = 'Jade-genesis', number = 88;
+  const expectedHead = 'c'.repeat(40);
+  let check;
+""" + creation + """
+  await github.rest.checks.update({
+    check_run_id: check.id, status: 'completed', conclusion: verdict
+  });
+}
+(async () => {
+  await run(5001, 1, 'failure');
+  await run(5002, 1, 'failure');
+  await run(5003, 1, 'success');
+  assert.equal(checks.length, 3);
+  assert.equal(new Set(checks.map(c => c.id)).size, 3);
+  assert.equal(new Set(checks.map(c => c.external_id)).size, 3);
+  assert.deepEqual(checks.map(c => c.conclusion), ['failure', 'failure', 'success']);
+  assert(checks[2].external_id.includes('-run-5003-attempt-1'));
+  assert(checks.every(c => c.head_sha === 'c'.repeat(40)));
+  assert(checks.every(c => c.name === 'multi-agent-gate'));
+})().catch(error => {console.error(error);process.exitCode = 1;});
+"""
+        result = subprocess.run(["node", "-"], input=node, text=True, capture_output=True,
+                                timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_invalidator_touches_only_latest_check_per_pr(self):
+        """Run the exact issue invalidation loop with synthetic GitHub check runs."""
+        script = self.workflow_scripts()[1]
+        start = script.index("for (const pr of pullRequests) {")
+        end = script.index("core.info('Validations précédentes invalidées : '", start)
+        invalidation = script[start:end]
+        node = """
+const assert = require('node:assert/strict');
+const sha = 'c'.repeat(40);
+const own = 'coordination-pr-88-head-' + sha;
+const make = (id, external_id, conclusion='success', appId=15368) =>
+  ({id, external_id, conclusion, status:'completed', app:{id:appId}});
+const runs = [
+  make(101, own),
+  make(102, own + '-run-5002-attempt-1'),
+  make(103, own + '-run-5003-attempt-1'),
+  make(104, 'coordination-pr-89-head-' + sha + '-run-5004-attempt-1'),
+  make(105, own + '-run-5005-attempt-1', 'success', 999)
+];
+const changed = [];
+const github = {
+  paginate: async () => runs,
+  rest: {checks: {
+    listForRef: () => {},
+    update: async input => {
+      changed.push(input.check_run_id);
+      const run = runs.find(c => c.id === input.check_run_id);
+      assert(run);
+      run.status = input.status;
+      run.conclusion = input.conclusion;
+    }
+  }}
+};
+async function invalidate() {
+  const owner='vadorus', repo='Jade-genesis', issueNumber=90;
+  const pullRequests = [{number:88, head:{sha}}];
+  let invalidated = 0;
+""" + invalidation + """
+  return invalidated;
+}
+(async () => {
+  assert.equal(await invalidate(), 1);
+  assert.deepEqual(changed, [103]);
+  assert.deepEqual(runs.map(c=>c.conclusion), [
+    'success','success','failure','success','success'
+  ]);
+  assert.equal(await invalidate(), 0);
+  assert.deepEqual(changed, [103]);
+})().catch(error => {console.error(error);process.exitCode = 1;});
+"""
+        result = subprocess.run(["node", "-"], input=node, text=True, capture_output=True,
+                                timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_workflow_rechecks_reservation_snapshot(self):
         source = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8")

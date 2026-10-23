@@ -83,8 +83,30 @@ internal fun JadeMemoryV2(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        item {
-            MemoryHealthCard(health)
+        item { MemoryHealthCard(health) }
+        item { V2SecondaryButton(
+            text = if (state.correctionExamStopped) "Autoriser les examens locaux de corrections" else "Arrêter les examens locaux de corrections",
+            onClick = { vm.stopCorrectionExam(!state.correctionExamStopped) }
+        ) }
+        item { V2SectionLabel("Corrections explicites (${state.corrections.count { it.state == "ACTIVE" }} actives)") }
+        items(state.corrections.size) { index ->
+            val correction = state.corrections[index]
+            V2Card {
+                Text(correction.question, color = JadeColors.Muted)
+                Text(correction.fact, color = JadeColors.Ink)
+                val keys = com.jadegenesis.mobile.memory.CorrectionPolicy.keys(correction.fact)
+                Text(if (keys.isEmpty()) "Examen lexical : non évaluable." else
+                    "Indicateur lexical seulement : ${keys.joinToString(", ")}", color = JadeColors.Muted)
+                if (correction.state == "PENDING") {
+                    Text("Conflit en attente — remplacer les faits suivants ?", color = JadeColors.Warn)
+                    val targetIds = correction.targets.split('|')
+                    state.corrections.filter { it.id in targetIds }.forEach { Text(it.fact) }
+                    // Ordinary USER facts may also be replacement targets.
+                    state.correctionTargets.filter { it.id in targetIds && it.id !in state.corrections.map { c -> c.id } }.forEach { Text(it.content) }
+                    V2SecondaryButton(text = "Confirmer le remplacement", onClick = { vm.confirmCorrection(correction.id) })
+                }
+                V2SecondaryButton(text = if (correction.state == "PENDING") "Annuler cette proposition" else "Oublier", onClick = { vm.forgetCorrection(correction.id) })
+            }
         }
         item {
             Row(

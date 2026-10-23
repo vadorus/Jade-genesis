@@ -29,7 +29,7 @@ class CognitiveCore(
     suspend fun think(context: BrainContext): BrainResult {
         val executionId = "cog-${UUID.randomUUID()}"
         val startedAt = System.currentTimeMillis()
-        val conversationLearning = ConversationLearningRuntime.currentOrNull()
+        val conversationLearning = if (context.corrections.isEmpty()) ConversationLearningRuntime.currentOrNull() else null
         val learningUpdate = if (context.operation == "answer" && conversationLearning != null) {
             runCatching {
                 conversationLearning.beginUserMessage(context.userInput)
@@ -286,7 +286,7 @@ class CognitiveCore(
         record(
             executionId,
             CognitivePhase.VERIFY,
-            "CRITIC verdict=${review.verdict}, confiance=${"%.2f".format(review.confidence)}. ${review.note.take(180)}",
+            "CRITIC verdict=${review.verdict}, confiance=${"%.2f".format(review.confidence)}. ${if (context.corrections.isEmpty()) review.note.take(180) else "Contenu privé omis."}",
             backendId = verified.backendId,
             nodeId = verified.nodeId.takeIf { it.isNotBlank() },
             durationMs = elapsedMs(verificationStarted),

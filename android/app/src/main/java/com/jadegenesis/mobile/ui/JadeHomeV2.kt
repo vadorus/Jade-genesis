@@ -75,6 +75,8 @@ internal fun JadeHomeV2(
 ) {
     var draft by remember { mutableStateOf("") }
     var lastSent by remember { mutableStateOf("") }
+    var correctionRef by remember { mutableStateOf("") }
+    var correctionDraft by remember { mutableStateOf("") }
     var vitalOpen by remember { mutableStateOf(false) }
     var perceptionOpen by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -91,6 +93,17 @@ internal fun JadeHomeV2(
             ?: "Le chat utilise actuellement le cerveau de secours. Consulte les diagnostics du dernier essai."
     } else null
 
+    if (correctionRef.isNotBlank()) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { correctionRef = "" },
+            title = { Text("Quel est le fait juste ?") },
+            text = { OutlinedTextField(value = correctionDraft, onValueChange = { correctionDraft = it.take(1500) }, label = { Text("Correction explicite") }) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                vm.correctLatest(correctionDraft, correctionRef); correctionRef = ""
+            }, enabled = correctionDraft.isNotBlank() && !state.chatBusy && state.answerRef == correctionRef) { Text("Retenir") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = { correctionRef = "" }) { Text("Annuler") } }
+        )
+    }
     Column(modifier = modifier.background(JadeColors.Bg)) {
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -251,6 +264,9 @@ internal fun JadeHomeV2(
                 }
             } else if (state.response.isNotBlank()) {
                 item { ConversationBubbleV2(fromJade = true, text = state.response) }
+                if (state.answerRef.isNotBlank()) item {
+                    V2SecondaryButton(text = "Corriger", onClick = { correctionRef = state.answerRef; correctionDraft = "" })
+                }
             } else {
                 item {
                     ConversationBubbleV2(
@@ -262,6 +278,9 @@ internal fun JadeHomeV2(
 
             if (state.screenMessage.isNotBlank()) {
                 item { V2InlineMessage(state.screenMessage, JadeColors.Info) }
+            }
+            if (state.taskMessage.isNotBlank()) {
+                item { V2InlineMessage(state.taskMessage, JadeColors.Info) }
             }
             if (state.researchMessage.isNotBlank()) {
                 item { V2InlineMessage(state.researchMessage, JadeColors.Violet) }

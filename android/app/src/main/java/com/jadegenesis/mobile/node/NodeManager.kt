@@ -524,6 +524,41 @@ class NodeManager(
         }
     }
 
+    /** No task queue, performance/eval recording, retry or exception-body logging. */
+    private suspend fun correctionRequest(nodeId: String, path: String, body: JSONObject?, budgetMs: Int): JSONObject = withContext(Dispatchers.IO) {
+        val node = registryMutex.withLock { loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId } }
+            ?: error("correction_node_unavailable")
+        val route = routeCandidates(node).firstOrNull() ?: error("correction_route_unavailable")
+        val started = android.os.SystemClock.elapsedRealtime()
+        try {
+            val (code, raw) = httpRequest(route, node.token, if (body == null) "GET" else "POST", path,
+                body?.toString()?.toByteArray(Charsets.UTF_8), minOf(2000, budgetMs), budgetMs,
+                maxResponseBytes = 128000, absoluteTimeoutMs = budgetMs)
+            check(code == 200 && android.os.SystemClock.elapsedRealtime() - started < budgetMs)
+            JSONObject(raw)
+        } catch (_: Exception) { error("correction_request_unavailable") }
+    }
+
+    suspend fun executePrivateBrain(nodeId: String, request: DistributedTaskRequest): NodeTaskResponse {
+        val node = registryMutex.withLock { loadStoredNodesUnsafe().firstOrNull { it.nodeId == nodeId } }
+            ?: error("correction_node_unavailable")
+        val body = JSONObject(taskRequestBody(request).toString(Charsets.UTF_8))
+        val raw = correctionRequest(nodeId, "/task", body, 90000)
+        return parseCompletedTaskResponse(node, request, 200, raw.toString())
+    }
+
+    suspend fun correctionHaltRunning(nodeId: String): Boolean = try {
+        val raw = correctionRequest(nodeId, "/correct-mem/status", null, 2000)
+        raw.opt("schema_version") == 1 && raw.opt("state") == "RUNNING" &&
+            (raw.opt("captured_at") is Long || raw.opt("captured_at") is Int) && raw.optLong("captured_at") >= 0 &&
+            kotlin.math.abs(System.currentTimeMillis() - raw.optLong("captured_at", 0)) <= 10000
+    } catch (_: Exception) { false }
+
+    suspend fun correctionExam(nodeId: String, payload: JSONObject, budgetMs: Int): String {
+        val raw = correctionRequest(nodeId, "/correct-mem/exam", payload, budgetMs.coerceIn(100, 90000))
+        return raw.optString("text").takeIf { it.isNotBlank() } ?: error("correction_exam_empty")
+    }
+
     suspend fun executeTask(
         nodeId: String,
         request: DistributedTaskRequest
@@ -1044,7 +1079,8 @@ class NodeManager(
         requestBody: ByteArray?,
         connectTimeoutMs: Int,
         readTimeoutMs: Int,
-        maxResponseBytes: Int = MAX_TASK_RESPONSE_BYTES
+        maxResponseBytes: Int = MAX_TASK_RESPONSE_BYTES,
+        absoluteTimeoutMs: Int? = null
     ): Pair<Int, String> {
         require(route.kind == NodeRouteKind.TAILSCALE) {
             "Transport refusé : Jade exige Tailscale pour les requêtes authentifiées."
@@ -1066,6 +1102,9 @@ class NodeManager(
             }
         }
 
+        val deadlineTimer = absoluteTimeoutMs?.let { java.util.Timer(true).apply {
+            schedule(object : java.util.TimerTask() { override fun run() { connection.disconnect() } }, it.toLong())
+        } }
         return try {
             if (requestBody != null) {
                 connection.outputStream.use { it.write(requestBody) }
@@ -1081,6 +1120,7 @@ class NodeManager(
             }.orEmpty()
             code to body
         } finally {
+            deadlineTimer?.cancel()
             connection.disconnect()
         }
     }

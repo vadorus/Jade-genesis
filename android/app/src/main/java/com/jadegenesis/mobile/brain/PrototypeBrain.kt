@@ -24,6 +24,10 @@ class PrototypeBrain : BrainBackend {
     )
 
     override suspend fun think(context: BrainContext): BrainResult {
+        if (context.corrections.isNotEmpty()) {
+            return BrainResult(text = "Correction(s) retenue(s) d’Alexandre, rappel lexical de secours :\n" +
+                context.corrections.take(5).joinToString("\n") { "• ${it.content}" })
+        }
         val text = context.userInput.lowercase().trim()
 
         if (

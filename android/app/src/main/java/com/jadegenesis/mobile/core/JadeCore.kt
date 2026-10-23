@@ -1,5 +1,7 @@
 package com.jadegenesis.mobile.core
 
+import kotlinx.coroutines.sync.withLock
+
 import android.content.Context
 import android.util.Base64
 import com.jadegenesis.mobile.brain.BrainRouter
@@ -1138,6 +1140,24 @@ class JadeCore(context: Context) {
         )
     }
 
+    private val correctionDao get() = JadeDatabase.get(appContext).correctionDao()
+    private val corrections get() = com.jadegenesis.mobile.memory.CorrectionStore(correctionDao)
+
+    suspend fun correctionRows() = corrections.visible()
+    suspend fun correctionTargetFacts() = correctionDao.activeFacts()
+    fun correctionExamStopped() = appContext.getSharedPreferences("jade_correction_exam", android.content.Context.MODE_PRIVATE).getBoolean("stopped", false)
+    fun setCorrectionExamStopped(stopped: Boolean) {
+        check(appContext.getSharedPreferences("jade_correction_exam", android.content.Context.MODE_PRIVATE).edit().putBoolean("stopped", stopped).commit())
+    }
+    suspend fun proposeCorrection(question: String, answerRef: String, wrongAnswer: String, fact: String) =
+        com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.propose(question, answerRef, wrongAnswer, fact, profiler.nodeId()) }
+    suspend fun confirmCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.confirm(id, profiler.nodeId()) }
+    suspend fun forgetCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.forget(id) }
+
+    suspend fun runCorrectionExam() = com.jadegenesis.mobile.memory.CorrectionExamRunner(
+        appContext, correctionDao, nodeManager
+    ).run(selfModel())
+
     suspend fun latestMemories(limit: Int = 30): List<MemorySnapshot> =
         memory.latest(limit)
 
@@ -1180,7 +1200,11 @@ class JadeCore(context: Context) {
         ).text
     }
 
-    suspend fun ask(userInput: String): String {
+    suspend fun ask(userInput: String): String = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock {
+        askWithCorrections(userInput)
+    }
+
+    private suspend fun askWithCorrections(userInput: String): String {
         runCatching { nodeManager.refreshRemoteNodes() }
             .onFailure { error ->
                 diagnostics.log(
@@ -1196,6 +1220,7 @@ class JadeCore(context: Context) {
             userInput = userInput,
             selfModel = self,
             memories = memory.latestForContext(limit = 14, query = userInput),
+            corrections = corrections.relevant(userInput),
             tools = tools.describe()
         )
 

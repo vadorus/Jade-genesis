@@ -1192,6 +1192,9 @@ class JadeCore(context: Context) {
         ).text
     }
 
+    // Non-reentrant mutex: a long answer delays corrections/forgetting until ask returns.
+    // Never call proposeCorrection/confirmCorrection/forgetCorrection (or ask) from inside
+    // askWithCorrections: reacquiring this same mutex would deadlock.
     suspend fun ask(userInput: String): String = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock {
         askWithCorrections(userInput)
     }

@@ -16,7 +16,8 @@ class CorrectionStore(private val dao: CorrectionDao) {
 
     suspend fun relevant(query: String): List<MemorySnapshot> = active()
         .map { it to CorrectionPolicy.score(it.question, it.fact, query) }
-        .filter { it.second > 0 }
+        // An identical original question scores 1000; otherwise require two distinct terms.
+        .filter { it.second >= 2 }
         .sortedWith(compareByDescending<Pair<UserCorrection, Int>> { it.second }
             .thenByDescending { it.first.createdAt }.thenBy { it.first.id })
         .take(5).map { (row, _) ->

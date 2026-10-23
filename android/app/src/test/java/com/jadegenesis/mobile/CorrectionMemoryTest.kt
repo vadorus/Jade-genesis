@@ -77,13 +77,28 @@ class CorrectionMemoryTest {
         val dao = Store()
         val old = dao.propose("Quel satellite ancien ?", "ref", "faux", "Europe 42", "synthetic")
         dao.corrections[old.id] = old.copy(createdAt = 1)
-        repeat(80) { i -> dao.propose("Sujet distinct $i", "ref$i", "faux", "Valeur$i", "synthetic") }
+        repeat(80) { i -> dao.propose("Dossier orbital $i", "ref$i", "faux", "Valeur$i", "synthetic") }
         assertEquals(old.id, CorrectionStore(dao).relevant("Quel satellite ancien ?").single().id)
         repeat(8) { i -> dao.propose("Voie $i", "voie$i", "faux", "Comète$i", "synthetic") }
         // Shared lexical query, unrelated recent corrections cannot evict the matching set.
-        assertEquals(5, CorrectionStore(dao).relevant("Sujet distinct").size)
+        assertEquals(5, CorrectionStore(dao).relevant("Dossier orbital").size)
         dao.forget(old.id)
         assertTrue(CorrectionStore(dao).relevant("Quel satellite ancien ?").isEmpty())
+    }
+
+    @Test fun oneSharedWordDoesNotRecallCorrectionButTwoDo() = runBlocking {
+        val dao = Store()
+        val row = dao.propose("Quel processeur équipe Orion ?", "ref", "faux", "Orion utilise Vega", "synthetic")
+        val store = CorrectionStore(dao)
+        assertTrue(store.relevant("Comparer ce processeur mobile").isEmpty())
+        assertTrue(store.relevant("processeur processeur mobile").isEmpty())
+        assertEquals(listOf(row.id), store.relevant("Comparer le processeur Orion").map { it.id })
+    }
+
+    @Test fun identicalOriginalQuestionRecallsEvenWithoutLexicalTerms() = runBlocking {
+        val dao = Store()
+        val row = dao.propose("Où ?", "ref", "faux", "Paris", "synthetic")
+        assertEquals(listOf(row.id), CorrectionStore(dao).relevant("  OÙ ? ").map { it.id })
     }
 
     @Test fun sameDedicatedFactsReachAnswerVerifyReviseAndPixelFallback() = runBlocking {
@@ -105,6 +120,15 @@ class CorrectionMemoryTest {
             assertFalse(payload.contains("PRIVATE_REF"))
             assertFalse(payload.contains("satellite"))
             assertTrue(brain.think(copy).text.contains("Europe 42"))
+        }
+        // Every normal branch, including tool selection, survives the appended reminder.
+        for (input in listOf("qui es-tu", "consolider", "file de tâches", "apprentissage",
+            "nœuds", "ressources", "inspecte mon appareil", "Bonjour")) {
+            val corrected = context.copy(userInput = input)
+            val normal = brain.think(corrected.copy(corrections = emptyList()))
+            val actual = brain.think(corrected)
+            assertEquals(normal.copy(text = normal.text +
+                "\n\nRappel — correction(s) d'Alexandre :\n• Europe 42"), actual)
         }
     }
 

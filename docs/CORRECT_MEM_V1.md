@@ -1,72 +1,98 @@
-# CORRECT-MEM V1 â€” candidat local, issue #85
+# CORRECT-MEM V1a — retenir les corrections, issue #85
 
-Auteur : Codex. Relecteur prÃ©vu : Claude, indisponible (quota). Alexandre a
-autorisÃ© le 18/10/2026 la poursuite sans Claude et l'Ã©dition isolÃ©e de JadeCore
-et du runtime ; aucune revue indÃ©pendante n'est revendiquÃ©e. Base :
-`c140aff3fc9a313255ae4b93d5f605c66e3d2ee9`. Aucun APK ou dÃ©ploiement.
+Auteur : Codex. Relecteur : Claude. Plan validé le 24/10/2026 ; relecture du
+code initial sur PR #100 : trois corrections demandées, appliquées dans cette
+révision et soumises à une nouvelle relecture. Base produit : main
+`c3d6789517c11a9df31a34a85d9b07d7b2891e14`. Aucun essai Pixel ni fusion.
 
-## Contrat
+## Capture et stockage
 
-Seuls `corrige : <fait juste>` et le bouton **Corriger** crÃ©ent une correction.
-La rÃ©ponse affichÃ©e doit encore correspondre Ã  la rÃ©fÃ©rence sÃ©lectionnÃ©e. Un
-Ã©chec de nouveau message invalide la rÃ©fÃ©rence prÃ©cÃ©dente. `non, â€¦` ne crÃ©e
-jamais de FACT USER_CORRECTION ; les autres systÃ¨mes conversationnels existants
-ne sont pas remplacÃ©s par ce mÃ©canisme.
+Seuls `corrige : <fait juste>` et le bouton **Corriger** créent une correction.
+La réponse affichée doit encore correspondre à la référence sélectionnée. Un
+nouveau message invalide la référence précédente, même en cas d'échec.
+`non, …` ne crée pas automatiquement de FACT USER_CORRECTION.
 
-Le fait (1500 caractÃ¨res maximum, sans troncature silencieuse) est un
-FACT/USER_CORRECTION de confiance 1.0. Une table privÃ©e conserve la question,
-la rÃ©fÃ©rence/copie de la rÃ©ponse fautive et les propositions en attente. Une
-proposition en conflit n'est pas encore un FACT. La migration Room v2â†’v3 est
-additive ; le chemin v1â†’v2 reste conservÃ©, sans rÃ©initialisation destructive.
-La confiance signifie Â« fourni explicitement Â», pas vÃ©ritÃ© universelle.
+Le fait juste seul (1500 caractères maximum) est un FACT/USER_CORRECTION de
+confiance 1.0. Une table privée conserve la question, la référence et la copie
+de la réponse fautive, ainsi que les propositions en attente. La confiance
+signifie « fourni explicitement », sans garantie de vérité universelle.
+La migration Room v2→v3 est additive ; le chemin v1→v2 reste conservé,
+sans réinitialisation destructive.
 
-Une question identique, un fait identique ou un recouvrement lexical d'au moins
-deux termes produit un conflit potentiel. L'Ã©cran MÃ©moire affiche les cibles
-et demande confirmation. L'insertion et supersededBy sont transactionnels,
-avec revalidation de l'ensemble exact des cibles ; un consentement pÃ©rimÃ© est
-refusÃ©. Fermer/annuler ne remplace rien. Un conflit en attente est signalÃ© et
-ses cibles sont exclues du contexte prioritaire. Le lexique ne dÃ©tecte pas
-toutes les contradictions sÃ©mantiques.
+Une question identique, un fait identique ou au moins deux termes communs
+produit un conflit potentiel. La proposition reste PENDING, sans nouveau FACT
+ni remplacement avant confirmation. L'écran Mémoire affiche les cibles ;
+l'insertion et supersededBy sont transactionnels, avec revalidation de
+l'ensemble exact des cibles. Un consentement périmé est refusé. Un conflit
+en attente exclut ses cibles du contexte prioritaire. Le lexique ne détecte
+pas toutes les contradictions sémantiques.
 
-Le rappel parcourt les corrections actives sans limite par rÃ©cence, classe le
-fait et la question historique par MemoryContextSearch et garde au plus cinq
-rÃ©sultats dans un quota distinct. Le stockage refuse de nouvelles propositions
-au-delÃ  de 10000 liens, sans effacer les anciens. Les faits ordinaires ne sont
-pas plafonnÃ©s par cette limite. Une question exactement rÃ©pÃ©tÃ©e est prioritaire ;
-les paraphrases et termes courts peuvent Ã©chapper au lexique.
+## Pertinence, contexte et secours
 
-## Contexte et oubli
+Le rappel parcourt les corrections actives sans limite par récence et garde
+au plus cinq corrections dans un quota séparé. Une correction est pertinente
+si sa question d'origine est identique après normalisation, **ou si au moins
+deux termes distincts de la requête correspondent à sa question et son fait**
+selon MemoryContextSearch. Un seul mot commun, même répété, ne suffit pas.
+La question identique est prioritaire. Les paraphrases et termes courts
+peuvent échapper au lexique. Le stockage refuse les nouvelles propositions
+au-delà de 10000 liens, sans effacer les anciens.
 
-Les PC/VPS reÃ§oivent un tableau `corrections` sÃ©parÃ© des dix souvenirs ordinaires,
-avec seulement content/source/confiance. Question historique et rÃ©ponse fausse
-ne sont jamais envoyÃ©es comme souvenirs. La mÃªme section survit aux copies
-answer/verify/revise. Le runtime annonce `correct_mem_v1` et ajoute :
-Â« Faits corrigÃ©s par Alexandre : ils priment sur tes connaissances. Â»
-Les faits ne deviennent pas des commandes/permissions et ne remplacent pas une
-observation runtime actuelle.
+Les PC/VPS reçoivent un tableau `corrections` séparé des souvenirs ordinaires,
+avec seulement content/source/confidence. La question historique et la réponse
+fausse ne sont jamais envoyées comme souvenirs. La section survit aux copies
+answer/verify/revise. Le runtime annonce `correct_mem_v1` et précise :
+« Faits corrigés par Alexandre : ils priment sur tes connaissances. »
+Ces faits ne sont ni des commandes ni des permissions ; ils ne remplacent
+pas une observation actuelle.
 
-Un nÅ“ud ancien sans cette capacitÃ© n'est pas utilisÃ© pour un tour corrigÃ© ;
-le secours Pixel restitue les faits pertinents comme rappel lexical identifiÃ©,
-sans prÃ©tendre Ã  une gÃ©nÃ©ration. La prÃ©sence du contexte ne prouve pas
-l'obÃ©issance d'un modÃ¨le. Aucun dÃ©ploiement des nÅ“uds n'est inclus.
+Un nœud sans `correct_mem_v1` est écarté pour un tour utilisant une correction.
+Le secours PrototypeBrain produit sa réponse normale, puis ajoute à la fin
+« Rappel — correction(s) d'Alexandre : … », sans remplacer cette réponse ni
+supprimer sa sélection d'outil. Le rappel reste lexical ; la présence du
+contexte ne prouve pas l'obéissance d'un modèle.
 
-`oublie : <fait exact>` ne supprime qu'une correspondance unique ; sinon la
-liste MÃ©moire permet de choisir. L'oubli efface le FACT et les liens/propositions
-associÃ©s, sans rÃ©activer un ancien fait superseded. Les tours utilisant des
-corrections n'alimentent pas ConversationLearning ni les sorties de RuntimeEval ;
-les corrections ne passent pas par la consolidation, l'auto-supersession ou la
-rÃ©tention automatique. Un verrou commun sÃ©rialise conversation/rejeu et oubli.
-AprÃ¨s l'oubli confirmÃ©, aucune nouvelle requÃªte ne reprend ce fait. Une requÃªte
-dÃ©jÃ  reÃ§ue par un modÃ¨le distant ne peut pas Ãªtre retirÃ©e rÃ©troactivement.
-La suppression est logique dans SQLite ; aucune promesse d'effacement forensique
-des pages libres/sauvegardes externes.
+## Condition de déploiement
 
+**Les node-agent du VPS et du PC doivent être mis à jour AVANT l'APK.**
+Vérifier qu'ils annoncent `correct_mem_v1` avant de distribuer l'APK V1a.
+Sinon toute question liée à une correction écarterait ces anciens nœuds et
+passerait au secours local. Cet ordre est une condition de tout déploiement
+ultérieurement autorisé ; cette PR n'autorise ni n'effectue ce déploiement.
+
+## Oubli et confidentialité
+
+`oublie : <fait exact>` supprime une correspondance unique ; sinon la liste
+Mémoire permet de choisir. L'oubli transactionnel efface le FACT et les liens
+ou propositions associés, sans réactiver un fait superseded. Les corrections
+ne passent pas par la consolidation, l'auto-supersession ou la purge ; leurs
+tours n'alimentent ni ConversationLearning ni les sorties de RuntimeEval.
+Le transport privé distant est synchrone, sans file ni erreurs contenant
+les textes privés. Aucun contenu réel n'est publié dans les diagnostics.
+
+Le verrou commun sérialise conversation et mutations des corrections.
+Il est **non réentrant** : une question longue retarde correction/oubli ;
+aucun appel à ask, proposeCorrection, confirmCorrection ou forgetCorrection
+ne doit être ajouté à l'intérieur de askWithCorrections, sous peine de blocage.
+Après oubli confirmé, aucune nouvelle requête ne reprend le fait. Une requête
+déjà reçue par un modèle ne peut pas être retirée rétroactivement.
+La suppression SQLite ne promet pas l'effacement forensique des pages libres
+ou des sauvegardes externes.
 
 ## Découpage et validation
 
-V1a contient uniquement la rétention. Aucun examen, endpoint HALT, compteur ou
-rapport n’est activé par V1a ; V1b les ajoute dans une PR séparée et une migration
-v3→v4 additive. Le candidat complet initial est conservé sur
-`jade/correct-mem-v1-candidate`. CI : tests JVM, KSP/Room, APK debug signé debug
-et release non signé ; signature stable non utilisée. Les résultats réels sont
-consignés dans la PR. Aucun appareil ni modèle vivant testé.
+V1a contient uniquement la rétention. Examen nocturne, HALT lecture seule,
+compteurs et rapport #76 restent dans V1b (#101, fermée en attente), avec
+migration additive v3→v4. Le candidat initial est préservé sur
+`jade/correct-mem-v1-candidate`.
+
+Cette révision passe au versionCode **49**, supérieur à V1a initiale 47 et
+au candidat V1b 48 ; versionName 0.1.31. V1b devra prendre un versionCode
+supérieur à 49 lors de sa reprise après V1a.
+Tests synthétiques : exclusion à un seul terme, inclusion à deux termes,
+question identique sans terme lexical, quota cinq, remplacement/oubli,
+et réponse normale du prototype conservée avant le rappel, outils inclus.
+La CI exécute les tests JVM et KSP/Room, compile les APK debug et release,
+puis vérifie version et signature. Debug est signé Android Debug ; release
+reste non signée et non debuggable, sans clé stable. Les preuves de la tête
+exacte sont publiées dans la PR. Aucun appareil ni modèle vivant testé.

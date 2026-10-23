@@ -83,6 +83,51 @@ class ReservationOverlapTests(unittest.TestCase):
         self.assertEqual(len(preflight.conflicting_reservations(
             1, ["scripts/"], [issue(2, zones="../secrets/")])), 1)
 
+    def test_trailing_spaces_and_blocked_state_retains_zones(self):
+        trailing = issue(2, state="En revue  ", zones="scripts/")
+        self.assertEqual(preflight.reservation_record(trailing)["state"], "En revue")
+        blocked = issue(2, state="Bloquée", zones="scripts/")
+        self.assertEqual(preflight.reservation_record(blocked)["zones"], ["scripts/"])
+        self.assertEqual(len(preflight.conflicting_reservations(1, ["scripts/a.py"], [blocked])), 1)
+        self.assertEqual(preflight.conflicting_reservations(1, ["docs/a.md"], [blocked]), [])
+
+    def test_illformed_unrelated_issue_warns_but_conflict_still_blocks(self):
+        import warnings
+        unrelated = issue(2, state="Inconnue", zones="docs/notice.md")
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            result = preflight.conflicting_reservations(1, ["scripts/ai.py"], [unrelated])
+        self.assertEqual(result, [])
+        self.assertEqual(len(captured), 1)
+        self.assertIn("Réservation illisible", str(captured[0].message))
+        related = issue(2, state="Inconnue", zones="scripts/")
+        self.assertEqual(len(preflight.conflicting_reservations(
+            1, ["scripts/ai.py"], [related])), 1)
+        ambiguous = issue(2, state="Inconnue", zones="../invalid/")
+        self.assertEqual(len(preflight.conflicting_reservations(
+            1, ["scripts/ai.py"], [ambiguous])), 1)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_native_js_warning_guard_for_malformed_disjoint_reservation(self):
+        script = self.workflow_script()
+        source = script[script.index("function field(body, name) {"):
+                        script.index("function issueSignature(items) {")]
+        assertions = """
+const assert = require('node:assert/strict');
+const disjoint = {number:2, body:'Réservation-état: Inconnue\\nZones: docs/unrelated.md'};
+const overlapping = {number:2, body:'Réservation-état: Inconnue\\nZones: scripts/'};
+const ambiguous = {number:2, body:'Réservation-état: Inconnue'};
+assert.equal(unrelatedReservationWarning(disjoint, ['scripts/']), true);
+assert.equal(unrelatedReservationWarning(overlapping, ['scripts/']), false);
+assert.equal(unrelatedReservationWarning(ambiguous, ['scripts/']), false);
+assert.equal(reservationState({number:4,body:'Réservation-état: Bloquée\\nZones: scripts/'}).state, 'Bloquée');
+assert.equal(reservationState({number:5,body:'Réservation-état: En revue  \\nZones: scripts/'}).state, 'En revue');
+"""
+        self.assertIn("core.warning(error.message", script)
+        result = subprocess.run(["node", "-"], input=source + "\n" + assertions,
+                                text=True, capture_output=True, timeout=20, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_closed_issue_or_pr_ignored(self):
         self.assertEqual(preflight.conflicting_reservations(
             1, ["scripts/"], [issue(2, open_state="closed"), issue(3, pr=True)]), [])
@@ -207,12 +252,14 @@ assert.equal(reservationChange({action:'edited', issue:{user:{login:'stranger'},
             ("**Réservation-état:** Réservée\\nZones: scripts/", False),
             ("Réservation-état: réservée\\nZones: scripts/", False),
             ("Réservation-état: Réservée\\nRéservation-état: En cours\\nZones: scripts/", False),
-            ("  Réservation-état: Réservée\\nZones: scripts/", False),
+            ("  Réservation-état: Réservée\\nZones: scripts/", True),
             ("Réservation-état: Réservée\\nZones: `scripts/`", False),
             ("Réservation-état: Réservée\\nZones: scripts/ (tout le dossier)", False),
             ("Réservation-état: Réservée\\nZones: scripts/;docs/", False),
             ("Ceci mentionne Réservation-état dans une phrase.", None),
             ("Réservation-état: Terminée", None),
+            ("Réservation-état: En revue  \\nZones: scripts/", True),
+            ("Réservation-état: Bloquée\\nZones: docs/État.md", True),
             ("Réservation-état: En revue\\nZones: docs/État.md", True),
         ]
 

@@ -15,7 +15,21 @@ data class UserCorrection(
     val fact: String,
     val createdAt: Long,
     val state: String,
-    val targets: String = "|"
+    val targets: String = "|",
+    @androidx.room3.ColumnInfo(defaultValue = "0") val lastExamAt: Long = 0L
+)
+
+@Entity(tableName = "correction_exam_nights")
+data class CorrectionExamNight(
+    @PrimaryKey val night: String,
+    val attempts: Int = 0,
+    val replayed: Int = 0,
+    val evaluable: Int = 0,
+    val repeated: Int = 0,
+    val unavailable: Int = 0,
+    val interrupted: Int = 0,
+    val usedMs: Long = 0,
+    val updatedAt: Long = 0
 )
 
 object CorrectionPolicy {
@@ -40,6 +54,35 @@ object CorrectionPolicy {
             normalize(fact) == normalize(existingFact) ||
             MemoryContextSearch.matchingTerms(existingFact, MemoryContextSearch.terms(fact)) >= 2
 
+    /** Exact lexical indicator only: negation or semantic contradictions are not decided here. */
+    fun keys(fact: String): List<String> {
+        val numbers = Regex("(?<![\\p{L}\\p{N}])[+-]?\\d+(?:[.,:/-]\\d+)*(?:\\s?(?:%|€|kg|km|cm|ms|h))?")
+            .findAll(fact).map { it.value }.toList()
+        val names = Regex("(?<![\\p{L}\\p{N}])[\\p{Lu}][\\p{L}'’-]{2,}")
+            .findAll(fact).map { it.value }.filterNot { it in setOf("Le", "Les", "La", "Un", "Une", "The", "Il", "Elle", "Mon", "Ma") }.toList()
+        return (numbers + names).distinct()
+    }
+
+    fun passes(fact: String, answer: String): Boolean? {
+        val keys = keys(fact)
+        if (keys.isEmpty()) return null
+        val normalized = Normalizer.normalize(answer, Normalizer.Form.NFC)
+        return keys.all { key ->
+            val escaped = Regex.escape(Normalizer.normalize(key, Normalizer.Form.NFC))
+            val pattern = if (key.first().isDigit() || key.first() in "+-")
+                "(?<![\\p{L}\\p{N}+\\-])(?<!\\d[.,:/-])$escaped(?![\\p{L}\\p{N}]|[.,:/-]\\d)"
+            else "(?<![\\p{L}\\p{N}])$escaped(?![\\p{L}\\p{N}])"
+            Regex(pattern).containsMatchIn(normalized)
+        }
+    }
+}
+
+object CorrectionExamBudget {
+    const val NIGHT_MS = 900000L
+    const val CALL_MS = 90000L
+    fun slice(stats: CorrectionExamNight, elapsedMs: Long): Long =
+        if (stats.attempts >= 10) 0 else minOf(CALL_MS, NIGHT_MS - stats.usedMs,
+            NIGHT_MS - elapsedMs.coerceAtLeast(0)).coerceAtLeast(0)
 }
 
 object CorrectionGate { val mutex = kotlinx.coroutines.sync.Mutex() }

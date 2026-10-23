@@ -1145,10 +1145,18 @@ class JadeCore(context: Context) {
 
     suspend fun correctionRows() = corrections.visible()
     suspend fun correctionTargetFacts() = correctionDao.activeFacts()
+    fun correctionExamStopped() = appContext.getSharedPreferences("jade_correction_exam", android.content.Context.MODE_PRIVATE).getBoolean("stopped", false)
+    fun setCorrectionExamStopped(stopped: Boolean) {
+        check(appContext.getSharedPreferences("jade_correction_exam", android.content.Context.MODE_PRIVATE).edit().putBoolean("stopped", stopped).commit())
+    }
     suspend fun proposeCorrection(question: String, answerRef: String, wrongAnswer: String, fact: String) =
         com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.propose(question, answerRef, wrongAnswer, fact, profiler.nodeId()) }
     suspend fun confirmCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.confirm(id, profiler.nodeId()) }
     suspend fun forgetCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.forget(id) }
+
+    suspend fun runCorrectionExam() = com.jadegenesis.mobile.memory.CorrectionExamRunner(
+        appContext, correctionDao, nodeManager
+    ).run(selfModel())
 
     suspend fun latestMemories(limit: Int = 30): List<MemorySnapshot> =
         memory.latest(limit)

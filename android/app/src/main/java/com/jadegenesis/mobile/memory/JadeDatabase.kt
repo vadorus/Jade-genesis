@@ -8,8 +8,8 @@ import androidx.room3.migration.Migration
 import androidx.sqlite.execSQL
 
 @Database(
-    entities = [MemoryEntity::class, UserCorrection::class],
-    version = 3,
+    entities = [MemoryEntity::class, UserCorrection::class, CorrectionExamNight::class],
+    version = 4,
     exportSchema = false
 )
 abstract class JadeDatabase : RoomDatabase() {
@@ -60,6 +60,11 @@ abstract class JadeDatabase : RoomDatabase() {
             connection.execSQL("CREATE TABLE IF NOT EXISTS user_corrections (id TEXT NOT NULL PRIMARY KEY, question TEXT NOT NULL, answerRef TEXT NOT NULL, wrongAnswer TEXT NOT NULL, fact TEXT NOT NULL, createdAt INTEGER NOT NULL, state TEXT NOT NULL, targets TEXT NOT NULL)")
         }
 
+        internal val MIGRATION_3_4 = Migration(3, 4) { connection ->
+            connection.execSQL("ALTER TABLE user_corrections ADD COLUMN lastExamAt INTEGER NOT NULL DEFAULT 0")
+            connection.execSQL("CREATE TABLE IF NOT EXISTS correction_exam_nights (night TEXT NOT NULL PRIMARY KEY, attempts INTEGER NOT NULL, replayed INTEGER NOT NULL, evaluable INTEGER NOT NULL, repeated INTEGER NOT NULL, unavailable INTEGER NOT NULL, interrupted INTEGER NOT NULL, usedMs INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+        }
+
         fun get(context: Context): JadeDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -67,7 +72,7 @@ abstract class JadeDatabase : RoomDatabase() {
                     JadeDatabase::class.java,
                     "jade_memory.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

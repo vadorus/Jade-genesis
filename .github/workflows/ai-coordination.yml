@@ -108,8 +108,50 @@ jobs:
                 function zonesOverlap(first, second) {
                   return first.some(a => second.some(b => containsZone(a, b) || containsZone(b, a)));
                 }
+                // Only reservation-relevant data can invalidate a check.
+                // Metadata timestamps change for comments and labels, too.
+                const RESERVATION_FIELDS = ['Réservation-état', 'Zones', 'Responsable-IA', 'Relecteur-IA'];
+                const crypto = require('crypto');
+                function normalizedBody(value) {
+                  return String(value ?? '').replace(/\r\n/g, '\n');
+                }
+                function reservationSnapshot(issue) {
+                  const body = normalizedBody(issue?.body);
+                  return [issue?.state ?? null, ...RESERVATION_FIELDS.map(name => field(body, name))];
+                }
                 function issueSignature(items) {
-                  return JSON.stringify(items.map(x => [x.number, x.state, x.updated_at, x.body]).sort((a, b) => a[0] - b[0]));
+                  return JSON.stringify(items.map(x => [x.number, ...reservationSnapshot(x)]).sort((a, b) => a[0] - b[0]));
+                }
+                function bodyDescription(issue) {
+                  if (!issue) return 'absent';
+                  const body = normalizedBody(issue.body);
+                  return 'length=' + body.length + ' sha256=' +
+                    crypto.createHash('sha256').update(body, 'utf8').digest('hex');
+                }
+                function logReservationDifferences(before, after) {
+                  const oldById = new Map(before.map(x => [x.number, x]));
+                  const newById = new Map(after.map(x => [x.number, x]));
+                  for (const number of [...new Set([...oldById.keys(), ...newById.keys()])].sort((a, b) => a - b)) {
+                    const previous = oldById.get(number), current = newById.get(number);
+                    if (JSON.stringify(reservationSnapshot(previous)) ===
+                        JSON.stringify(reservationSnapshot(current)) && Boolean(previous) === Boolean(current)) continue;
+                    const oldState = previous?.state ?? '(absent)';
+                    const newState = current?.state ?? '(absent)';
+                    if (oldState !== newState) {
+                      core.info('Issue #' + number + ' diff state: before=' + oldState + ' after=' + newState);
+                    }
+                    const changedFields = RESERVATION_FIELDS.filter(name =>
+                      field(normalizedBody(previous?.body), name) !== field(normalizedBody(current?.body), name));
+                    if (changedFields.length || !previous || !current) {
+                      core.info('Issue #' + number + ' diff body (' + changedFields.join(', ') +
+                        '): before ' + bodyDescription(previous) + ' ; after ' + bodyDescription(current));
+                    }
+                    if (previous?.updated_at !== current?.updated_at) {
+                      core.info('Issue #' + number + ' diff updated_at: before=' +
+                        (previous?.updated_at ?? '(absent)') + ' after=' +
+                        (current?.updated_at ?? '(absent)'));
+                    }
+                  }
                 }
                 async function filesOf(pull) {
                   const files = await github.paginate(github.rest.pulls.listFiles, {
@@ -163,7 +205,8 @@ jobs:
                     owner, repo, state: 'open', per_page: 100
                   })).filter(x => !x.pull_request);
                   const listed = reservationsBefore.find(x => x.number === issue.number);
-                  if (!listed || listed.body !== issue.body || listed.updated_at !== issue.updated_at) {
+                  if (!listed || issueSignature([listed]) !== issueSignature([issue])) {
+                    logReservationDifferences([issue], listed ? [listed] : []);
                     errors.push('Issue de la PR modifiée pendant le contrôle : relancer.');
                   }
                   for (const other of reservationsBefore) {
@@ -198,6 +241,7 @@ jobs:
                     owner, repo, state: 'open', per_page: 100
                   })).filter(x => !x.pull_request);
                   if (issueSignature(reservationsBefore) !== issueSignature(reservationsAfter)) {
+                    logReservationDifferences(reservationsBefore, reservationsAfter);
                     errors.push('Réservations modifiées pendant le contrôle : relancer.');
                   }
                 }

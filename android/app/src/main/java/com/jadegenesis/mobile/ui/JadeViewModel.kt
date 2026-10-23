@@ -37,6 +37,8 @@ private data class RefreshBundle(
     val self: SelfModel,
     val memories: List<MemorySnapshot>,
     val memoryCount: Int,
+    val corrections: List<com.jadegenesis.mobile.memory.UserCorrection>,
+    val correctionTargets: List<com.jadegenesis.mobile.memory.MemoryEntity>,
     val taskHistory: List<DistributedTaskResult>,
     val taskQueue: List<QueuedTaskSnapshot>,
     val pendingTasks: Int,
@@ -57,6 +59,9 @@ data class JadeUiState(
     val taskBusy: Boolean = false,
     val selfModel: SelfModel? = null,
     val response: String = "",
+    val answerRef: String = "",
+    val correctionTargets: List<com.jadegenesis.mobile.memory.MemoryEntity> = emptyList(),
+    val corrections: List<com.jadegenesis.mobile.memory.UserCorrection> = emptyList(),
     val nodeMessage: String = "",
     val taskMessage: String = "",
     val lastTaskResult: DistributedTaskResult? = null,
@@ -388,9 +393,71 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private var correctionQuestion = ""
+    private var correctionAnswer = ""
+    private var correctionAnswerRef = ""
+
+    fun correctLatest(fact: String, answerRef: String) {
+        if (answerRef.isBlank() || answerRef != correctionAnswerRef || _state.value.response != correctionAnswer || _state.value.chatBusy) return
+        UserActivityTracker.markActive(getApplication<Application>())
+        sendCorrection(correctionQuestion, answerRef, correctionAnswer, fact)
+    }
+
+    private fun sendCorrection(question: String, ref: String, answer: String, fact: String) {
+        _state.value = _state.value.copy(chatBusy = true, error = null)
+        viewModelScope.launch {
+            try {
+                val row = core.proposeCorrection(question, ref, answer, fact)
+                _state.value = _state.value.copy(corrections = core.correctionRows(),
+                    correctionTargets = core.correctionTargetFacts(),
+                    taskMessage = if (row.state == "PENDING") "Conflit en attente : confirmer le remplacement dans Mémoire." else "Correction mémorisée.")
+            } catch (_: Exception) {
+                _state.value = _state.value.copy(error = "Correction non enregistrée. Vérifie la cible et la longueur du fait (1500 caractères maximum).")
+            } finally { _state.value = _state.value.copy(chatBusy = false) }
+        }
+    }
+
+    fun confirmCorrection(id: String) {
+        viewModelScope.launch {
+            try {
+                val confirmed = core.confirmCorrection(id)
+                _state.value = _state.value.copy(corrections = core.correctionRows(),
+                    correctionTargets = core.correctionTargetFacts(),
+                    taskMessage = if (confirmed) "Remplacement confirmé." else "Cible modifiée : confirmation refusée, recrée la correction.")
+            } catch (_: Exception) { _state.value = _state.value.copy(error = "Remplacement non enregistré.") }
+        }
+    }
+
+    fun forgetCorrection(id: String) {
+        viewModelScope.launch {
+            try {
+                core.forgetCorrection(id)
+                _state.value = _state.value.copy(corrections = core.correctionRows(),
+                    correctionTargets = core.correctionTargetFacts(), taskMessage = "Correction oubliée.")
+            } catch (_: Exception) { _state.value = _state.value.copy(error = "Oubli non effectué.") }
+        }
+    }
+
     fun send(text: String) {
         val input = text.trim()
-        if (input.isBlank()) return
+        if (input.isBlank() || _state.value.chatBusy) return
+        UserActivityTracker.markActive(getApplication<Application>())
+        val command = com.jadegenesis.mobile.memory.CorrectionPolicy.command(input)
+        if (command?.first == "corrige") {
+            if (correctionAnswerRef.isBlank() || _state.value.response != correctionAnswer) {
+                _state.value = _state.value.copy(error = "Choisis d’abord une réponse de Jade à corriger.")
+            } else sendCorrection(correctionQuestion, correctionAnswerRef, correctionAnswer, command.second)
+            return
+        }
+        if (command?.first == "oublie") {
+            val normalize = com.jadegenesis.mobile.memory.CorrectionPolicy::normalize
+            val matches = _state.value.corrections.filter { normalize(it.fact) == normalize(command.second) }
+            if (matches.size == 1) forgetCorrection(matches.single().id)
+            else _state.value = _state.value.copy(taskMessage = "Choisis précisément la correction à oublier dans Mémoire (${matches.size} correspondance(s) exacte(s)).")
+            return
+        }
+        correctionAnswerRef = ""
+        _state.value = _state.value.copy(chatBusy = true, answerRef = "")
         // #78: a long conversation keeps the "in use" signal fresh.
         UserActivityTracker.markActive(getApplication<Application>())
 
@@ -416,13 +483,21 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     core.ask(input)
                 }
 
+                if (prefix == null) {
+                    correctionQuestion = input
+                    correctionAnswer = response
+                    correctionAnswerRef = java.util.UUID.randomUUID().toString()
+                } else { correctionAnswerRef = "" }
                 val bundle = loadBundle(initialize = false)
                 _state.value = _state.value.copy(
+                    answerRef = if (prefix == null) correctionAnswerRef else "",
                     chatBusy = false,
                     response = response,
                     selfModel = bundle.self,
                     memories = bundle.memories,
                     memoryCount = bundle.memoryCount,
+                    corrections = bundle.corrections,
+                    correctionTargets = bundle.correctionTargets,
                     taskHistory = bundle.taskHistory,
                     taskQueue = bundle.taskQueue,
                     pendingTasks = bundle.pendingTasks,
@@ -581,6 +656,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     selfModel = bundle.self,
                     memories = bundle.memories,
                     memoryCount = bundle.memoryCount,
+                    corrections = bundle.corrections,
+                    correctionTargets = bundle.correctionTargets,
                     learningCandidates = bundle.learningCandidates,
                     diagnostics = bundle.diagnostics,
                     error = null
@@ -700,6 +777,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             self = self,
             memories = core.latestMemories(),
             memoryCount = core.memoryCount(),
+            corrections = core.correctionRows(),
+            correctionTargets = core.correctionTargetFacts(),
             taskHistory = core.recentTaskHistory(),
             taskQueue = core.recentTaskQueue(),
             pendingTasks = core.pendingTaskCount(),
@@ -720,6 +799,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             selfModel = bundle.self,
             memories = bundle.memories,
             memoryCount = bundle.memoryCount,
+            corrections = bundle.corrections,
+            correctionTargets = bundle.correctionTargets,
             taskHistory = bundle.taskHistory,
             taskQueue = bundle.taskQueue,
             pendingTasks = bundle.pendingTasks,
@@ -755,6 +836,8 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             pendingTasks = bundle.pendingTasks,
             memories = bundle.memories,
             memoryCount = bundle.memoryCount,
+            corrections = bundle.corrections,
+            correctionTargets = bundle.correctionTargets,
             cognitiveTrace = bundle.cognitiveTrace,
             learningCandidates = bundle.learningCandidates,
             diagnostics = bundle.diagnostics,

@@ -64,6 +64,7 @@ class LocalPCBrain(
         val brainPlan = CognitiveBrainPolicy.plan(context)
         val firstLearning = firstLearningRequest(context)
         val compatible = compatibleNodes(context.selfModel.knownNodes)
+            .filter { context.corrections.isEmpty() || "correct_mem_v1" in it.capabilities }
             .let { candidates ->
                 if (firstLearning == null) {
                     candidates
@@ -163,6 +164,7 @@ class LocalPCBrain(
                 }
             )
             put("operation", context.operation)
+            put("corrections", com.jadegenesis.mobile.memory.CorrectionContextPayload.encode(context.corrections))
             put("brain_profile", brainPlan.profile.name.lowercase())
             put("brain_profile_reason", brainPlan.reason.take(300))
             put("desired_context_tokens", brainPlan.desiredContextTokens)
@@ -299,14 +301,13 @@ class LocalPCBrain(
             )
         }.toString()
 
-        val evalStore = RuntimeEvalRuntime.currentOrNull()
+        val evalStore = if (context.corrections.isEmpty()) RuntimeEvalRuntime.currentOrNull() else null
         val attemptedAt = System.currentTimeMillis()
         val response = try {
-            nodeManager.executeTask(
-                nodeId = node.nodeId,
-                request = admissionProbe.copy(payload = payload)
-            )
+            if (context.corrections.isNotEmpty()) nodeManager.executePrivateBrain(node.nodeId, admissionProbe.copy(payload = payload))
+            else nodeManager.executeTask(nodeId = node.nodeId, request = admissionProbe.copy(payload = payload))
         } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
             evalStore?.recordExecution(
                 request = admissionProbe,
                 node = node,
@@ -316,6 +317,7 @@ class LocalPCBrain(
                 brainProfile = brainPlan.profile.name.lowercase(),
                 createdAt = System.currentTimeMillis()
             )
+            if (context.corrections.isNotEmpty()) error("private_correction_request_failed")
             throw error
         } finally {
             admissionController.release(lease)
@@ -372,7 +374,7 @@ class LocalPCBrain(
     }
 
     private fun firstLearningRequest(context: BrainContext): FirstLearningRequest? {
-        if (context.operation != "answer") return null
+        if (context.operation != "answer" || context.corrections.isNotEmpty()) return null
         val prefix = "/normalize "
         if (!context.userInput.startsWith(prefix, ignoreCase = true)) return null
         val value = context.userInput.substring(prefix.length).take(4_096)

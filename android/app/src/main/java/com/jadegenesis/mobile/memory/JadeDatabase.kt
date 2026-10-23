@@ -8,12 +8,13 @@ import androidx.room3.migration.Migration
 import androidx.sqlite.execSQL
 
 @Database(
-    entities = [MemoryEntity::class],
-    version = 2,
+    entities = [MemoryEntity::class, UserCorrection::class],
+    version = 3,
     exportSchema = false
 )
 abstract class JadeDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
+    abstract fun correctionDao(): CorrectionDao
 
     companion object {
         @Volatile
@@ -55,6 +56,10 @@ abstract class JadeDatabase : RoomDatabase() {
             )
         }
 
+        internal val MIGRATION_2_3 = Migration(2, 3) { connection ->
+            connection.execSQL("CREATE TABLE IF NOT EXISTS user_corrections (id TEXT NOT NULL PRIMARY KEY, question TEXT NOT NULL, answerRef TEXT NOT NULL, wrongAnswer TEXT NOT NULL, fact TEXT NOT NULL, createdAt INTEGER NOT NULL, state TEXT NOT NULL, targets TEXT NOT NULL)")
+        }
+
         fun get(context: Context): JadeDatabase =
             INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -62,7 +67,7 @@ abstract class JadeDatabase : RoomDatabase() {
                     JadeDatabase::class.java,
                     "jade_memory.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

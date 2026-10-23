@@ -978,6 +978,7 @@ def health_payload(
     metrics = brain_metrics_snapshot()
     capabilities = [
         "node_runtime",
+        "correct_mem_v1",
         "compute",
         "python_runtime",
         "hardware_profile",
@@ -1221,6 +1222,9 @@ def run_memory_consolidation(payload: str) -> tuple[str, int]:
     return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(duration_ms)
 
 
+from correct_mem import correction_prompt
+
+
 def _brain_system_prompt(context: dict[str, Any]) -> str:
     identity = context.get("identity", {})
     name = str(identity.get("name", "Jade Genesis"))
@@ -1240,6 +1244,7 @@ def _brain_system_prompt(context: dict[str, Any]) -> str:
         "N'invente jamais de débit, type d'accès Internet, latence, charge, température, version ou statut. "
         "Si une valeur n'est pas présente, indique simplement qu'elle n'est pas mesurée ou disponible. "
     )
+    common += correction_prompt(context)
     if operation == "tool_build":
         return common + (
             "Tu es dans Tool Lab v1. Conçois un OUTIL CANDIDAT, jamais activé automatiquement. "
@@ -1761,12 +1766,17 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
                     config=config,
                 )
             except Exception as exc:
+                try:
+                    private = task_kind == "brain_chat" and bool(json.loads(payload).get("corrections"))
+                except (ValueError, TypeError, AttributeError):
+                    private = False
+                safe_error = "private_brain_request_failed" if private else str(exc)
                 log_event(
                     "ERROR",
                     "sync_task_failed",
                     f"{task_kind} a échoué.",
                     task_id=task_id,
-                    error=str(exc)[:180],
+                    error=safe_error[:180],
                 )
                 self._send_json(
                     422,
@@ -1775,7 +1785,7 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
                         "success": False,
                         "task_id": task_id,
                         "task_kind": task_kind,
-                        "error": str(exc)[:300],
+                        "error": safe_error[:300],
                     },
                 )
                 return

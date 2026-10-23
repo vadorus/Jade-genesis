@@ -184,7 +184,7 @@ class MemoryStore(private val dao: MemoryDao) {
                     .thenBy { it.id }
             )
             group
-                .filter { it.id != survivor.id && it.source != "USER" }
+                .filter { it.id != survivor.id && it.source !in setOf("USER", "USER_CORRECTION") }
                 .forEach { duplicate ->
                     dao.markSuperseded(duplicate.id, survivor.id)
                     superseded += 1

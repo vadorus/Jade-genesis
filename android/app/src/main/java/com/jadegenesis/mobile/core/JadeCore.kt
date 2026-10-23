@@ -1,5 +1,7 @@
 package com.jadegenesis.mobile.core
 
+import kotlinx.coroutines.sync.withLock
+
 import android.content.Context
 import android.util.Base64
 import com.jadegenesis.mobile.brain.BrainRouter
@@ -1138,6 +1140,16 @@ class JadeCore(context: Context) {
         )
     }
 
+    private val correctionDao get() = JadeDatabase.get(appContext).correctionDao()
+    private val corrections get() = com.jadegenesis.mobile.memory.CorrectionStore(correctionDao)
+
+    suspend fun correctionRows() = corrections.visible()
+    suspend fun correctionTargetFacts() = correctionDao.activeFacts()
+    suspend fun proposeCorrection(question: String, answerRef: String, wrongAnswer: String, fact: String) =
+        com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.propose(question, answerRef, wrongAnswer, fact, profiler.nodeId()) }
+    suspend fun confirmCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.confirm(id, profiler.nodeId()) }
+    suspend fun forgetCorrection(id: String) = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock { correctionDao.forget(id) }
+
     suspend fun latestMemories(limit: Int = 30): List<MemorySnapshot> =
         memory.latest(limit)
 
@@ -1180,7 +1192,14 @@ class JadeCore(context: Context) {
         ).text
     }
 
-    suspend fun ask(userInput: String): String {
+    // Non-reentrant mutex: a long answer delays corrections/forgetting until ask returns.
+    // Never call proposeCorrection/confirmCorrection/forgetCorrection (or ask) from inside
+    // askWithCorrections: reacquiring this same mutex would deadlock.
+    suspend fun ask(userInput: String): String = com.jadegenesis.mobile.memory.CorrectionGate.mutex.withLock {
+        askWithCorrections(userInput)
+    }
+
+    private suspend fun askWithCorrections(userInput: String): String {
         runCatching { nodeManager.refreshRemoteNodes() }
             .onFailure { error ->
                 diagnostics.log(
@@ -1196,6 +1215,7 @@ class JadeCore(context: Context) {
             userInput = userInput,
             selfModel = self,
             memories = memory.latestForContext(limit = 14, query = userInput),
+            corrections = corrections.relevant(userInput),
             tools = tools.describe()
         )
 

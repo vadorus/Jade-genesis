@@ -15,6 +15,8 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source != 'USER_CORRECTION'
+          AND NOT EXISTS (SELECT 1 FROM user_corrections c WHERE c.state = 'PENDING' AND instr(c.targets, '|' || memory_events.id || '|') > 0)
         ORDER BY createdAt DESC, id DESC
         LIMIT :limit
         """
@@ -25,6 +27,8 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source != 'USER_CORRECTION'
+          AND NOT EXISTS (SELECT 1 FROM user_corrections c WHERE c.state = 'PENDING' AND instr(c.targets, '|' || memory_events.id || '|') > 0)
           AND source LIKE 'JADE_CONSOLIDATION_%'
         ORDER BY createdAt DESC, id DESC
         LIMIT :limit
@@ -36,6 +40,8 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source != 'USER_CORRECTION'
+          AND NOT EXISTS (SELECT 1 FROM user_corrections c WHERE c.state = 'PENDING' AND instr(c.targets, '|' || memory_events.id || '|') > 0)
           AND source = 'USER'
         ORDER BY createdAt DESC, id DESC
         LIMIT :limit
@@ -57,6 +63,8 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source != 'USER_CORRECTION'
+          AND NOT EXISTS (SELECT 1 FROM user_corrections c WHERE c.state = 'PENDING' AND instr(c.targets, '|' || memory_events.id || '|') > 0)
           AND content LIKE '%' || :query || '%'
         ORDER BY createdAt DESC, id DESC
         LIMIT :limit
@@ -97,6 +105,8 @@ interface MemoryDao {
         """
         SELECT * FROM memory_events
         WHERE supersededBy IS NULL
+          AND source != 'USER_CORRECTION'
+          AND NOT EXISTS (SELECT 1 FROM user_corrections c WHERE c.state = 'PENDING' AND instr(c.targets, '|' || memory_events.id || '|') > 0)
           AND source NOT LIKE 'JADE_CONSOLIDATION_%'
           AND (
                 createdAt > :afterCreatedAt
@@ -128,7 +138,7 @@ interface MemoryDao {
         WHERE createdAt <= :processedThroughCreatedAt
           AND createdAt < :cutoffCreatedAt
           AND supersededBy IS NULL
-          AND source != 'USER'
+          AND source NOT IN ('USER', 'USER_CORRECTION')
           AND verifiedAt IS NULL
           AND recallCount < :recallProtectionCount
           AND (
@@ -159,7 +169,7 @@ interface MemoryDao {
         WHERE createdAt <= :processedThroughCreatedAt
           AND createdAt < :cutoffCreatedAt
           AND supersededBy IS NOT NULL
-          AND source != 'USER'
+          AND source NOT IN ('USER', 'USER_CORRECTION')
         ORDER BY createdAt ASC, id ASC
         LIMIT :limit
         """

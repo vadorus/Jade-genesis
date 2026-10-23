@@ -320,7 +320,8 @@ data class BrainContext(
     val tools: List<ToolInfo>,
     val operation: String = "answer",
     val draftResponse: String? = null,
-    val reviewNote: String? = null
+    val reviewNote: String? = null,
+    val corrections: List<MemorySnapshot> = emptyList()
 )
 
 data class BrainResult(

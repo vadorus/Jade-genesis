@@ -313,13 +313,23 @@ class GithubAuthorityTests(unittest.TestCase):
             "/autoriser " + digest[:11],
             "/autoriser " + digest[:13],
             "/autoriser " + digest[:12] + " trailing",
-            "/autoriser " + digest[:12].upper(),
+            "/autoriser " + digest[:12] + "\nextra",
         ):
-            if candidate.endswith(digest[:12].upper()) and candidate == "/autoriser " + digest[:12]:
-                continue
             with self.subTest(candidate=candidate):
                 self.approve(body=candidate)
                 self.assertFalse(mod.verified_approval(
+                    self.issue, ["orchestration/"], self.comments))
+
+    def test_phone_short_code_uppercase_and_trailing_space_accepted(self):
+        digest = mod.approval_fingerprint(self.issue["body"], ["orchestration/"])
+        for candidate in (
+            "/autoriser " + digest[:12].upper(),
+            "/autoriser " + digest[:12] + " ",
+            "/autoriser " + digest[:12].upper() + "   ",
+        ):
+            with self.subTest(candidate=candidate):
+                self.approve(body=candidate)
+                self.assertTrue(mod.verified_approval(
                     self.issue, ["orchestration/"], self.comments))
 
     def test_no_api_token_rejected_even_with_fake_fetch(self):

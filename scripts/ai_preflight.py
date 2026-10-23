@@ -14,11 +14,12 @@ import re
 import subprocess
 import sys
 import unicodedata
+import warnings
 
 PRODUCTS = {'vadorus/addonhardwaregame2d': 'v013/demo-octobre',
             'vadorus/tech-empire-roblox': 'main', 'vadorus/Jade-genesis': 'main'}
 AGENTS = ('Claude', 'Codex', 'Antigravity', 'Humain')
-ACTIVE_RESERVATIONS = ('Réservée', 'En cours', 'En revue')
+ACTIVE_RESERVATIONS = ('Réservée', 'En cours', 'En revue', 'Bloquée')
 RESERVATION_STATES = ACTIVE_RESERVATIONS + ('Terminée', 'Libérée')
 # Explicitly approved GitHub identities; no trust based on a free-text IA label.
 TRUSTED_ISSUE_AUTHORS = ('vadorus',)
@@ -73,7 +74,7 @@ def reservation_record(issue):
     if not attempted:
         return None
     valid_header = re.fullmatch(
-        r'Réservation-état: (Réservée|En cours|En revue|Terminée|Libérée)', attempted[0]
+        r'Réservation-état: (Réservée|En cours|En revue|Bloquée|Terminée|Libérée)', attempted[0].strip()
     ) if len(attempted) == 1 else None
     if not valid_header:
         raise ValueError('Réservation illisible : issue #' + str(number))
@@ -101,7 +102,7 @@ def zones_overlap(first, second):
                for left in first for right in second)
 
 def conflicting_reservations(task_number, task_zones, issues):
-    """Malformed trusted reservation blocks; untrusted issues are ignored."""
+    """Warn only for demonstrably disjoint malformed issues; otherwise block."""
     errors = []
     for other in issues:
         if (other.get('number') == task_number or other.get('state') != 'open'
@@ -110,7 +111,12 @@ def conflicting_reservations(task_number, task_zones, issues):
         try:
             record = reservation_record(other)
         except ValueError as exc:
-            errors.append(str(exc))
+            # Missing/invalid Zones cannot prove that a malformed issue is disjoint.
+            declared = parse_zones(field(other.get('body'), 'Zones'))
+            if declared and task_zones and not zones_overlap(task_zones, declared):
+                warnings.warn(str(exc) + ' (Zones disjointes de la PR).', RuntimeWarning)
+            else:
+                errors.append(str(exc))
             continue
         if record and zones_overlap(task_zones, record['zones']):
             errors.append('Conflit de réservation avec issue #' + str(other['number']))

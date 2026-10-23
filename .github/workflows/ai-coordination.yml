@@ -73,18 +73,19 @@ jobs:
                   const matches = body.split(/\r?\n/).filter(line =>
                     /^\s*\**\s*r[ée]servation[- ]?[ée]tat\s*\**\s*:/i.test(line));
                   if (!matches.length) return null;
-                  if (matches.length !== 1 ||
-                      !/^Réservation-état: (Réservée|En cours|En revue|Terminée|Libérée)$/.test(matches[0])) {
+                  const stateLine = matches[0]?.trim();
+                  const stateMatch = stateLine?.match(/^Réservation-état: (Réservée|En cours|En revue|Bloquée|Terminée|Libérée)$/);
+                  if (matches.length !== 1 || !stateMatch) {
                     throw new Error('Réservation illisible : issue #' + id);
                   }
                   const scopeValue = field(body, 'Zones');
                   const scope = zones(scopeValue);
                   if ((scopeValue !== null && !scope) ||
-                      (['Réservée', 'En cours', 'En revue'].includes(matches[0].slice(18)) && !scope)) {
+                      (['Réservée', 'En cours', 'En revue', 'Bloquée'].includes(stateMatch[1]) && !scope)) {
                     throw new Error('Réservation illisible : issue #' + id);
                   }
-                  if (!['Réservée', 'En cours', 'En revue'].includes(matches[0].slice(18))) return null;
-                  return { state: matches[0].slice(18), zones: scope };
+                  if (!['Réservée', 'En cours', 'En revue', 'Bloquée'].includes(stateMatch[1])) return null;
+                  return { state: stateMatch[1], zones: scope };
                 }
                 function zones(value) {
                   if (!value) return null;
@@ -118,6 +119,11 @@ jobs:
                 function reservationSnapshot(issue) {
                   const body = normalizedBody(issue?.body);
                   return [issue?.state ?? null, ...RESERVATION_FIELDS.map(name => field(body, name))];
+                }
+                // Only trusted, parseable Zones can prove a malformed issue unrelated.
+                function unrelatedReservationWarning(issue, scope) {
+                  const declared = zones(field(issue.body, 'Zones'));
+                  return Boolean(scope && declared && !zonesOverlap(scope, declared));
                 }
                 function issueSignature(items) {
                   return JSON.stringify(items.map(x => [x.number, ...reservationSnapshot(x)]).sort((a, b) => a[0] - b[0]));
@@ -213,7 +219,14 @@ jobs:
                     if (other.number === issue.number || !trustedIssue(other)) continue;
                     let record;
                     try { record = reservationState(other); }
-                    catch (error) { errors.push(error.message); continue; }
+                    catch (error) {
+                      if (unrelatedReservationWarning(other, scope)) {
+                        core.warning(error.message + ' (Zones disjointes de la PR).');
+                      } else {
+                        errors.push(error.message);
+                      }
+                      continue;
+                    }
                     if (record && scope && zonesOverlap(scope, record.zones)) {
                       errors.push('Conflit de réservation : issue #' + other.number);
                     }

@@ -16,7 +16,7 @@ Le fait juste seul (1500 caractères maximum) est un FACT/USER_CORRECTION de
 confiance 1.0. Une table privée conserve la question, la référence et la copie
 de la réponse fautive, ainsi que les propositions en attente. La confiance
 signifie « fourni explicitement », sans garantie de vérité universelle.
-La migration Room v2→v3 de V1a et v3→v4 de V1b sont additives ; le chemin v1→v2 reste conservé,
+Les migrations Room v2→v3 de V1a et v3→v4 de V1b sont additives ; le chemin v1→v2 reste conservé,
 sans réinitialisation destructive.
 
 Une question identique, un fait identique ou au moins deux termes communs

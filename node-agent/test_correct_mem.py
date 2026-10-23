@@ -53,6 +53,11 @@ class CorrectMemTest(unittest.TestCase):
                 "corrections": [{"source": "USER_CORRECTION", "confidence": 1.0,
                                  "content": "PRIVATE_CORRECTION 42"}]}
 
+    def test_invalid_facts_rejected_without_private_error(self):
+        for row in ({"content": "private"}, {"source": "USER_CORRECTION", "confidence": True, "content": "private"}):
+            with self.assertRaisesRegex(ValueError, "^invalid_correction_context$"):
+                cm.correction_prompt({"corrections": [row]})
+
     def test_prompts_answer_verify_revise_have_separate_quota(self):
         for operation in ("answer", "verify", "revise"):
             context = self.context() | {"operation": operation, "memories": [{"content": "ordinary"}] * 10}

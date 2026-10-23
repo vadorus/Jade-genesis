@@ -367,9 +367,85 @@ async function execute(pullRequests) {
                                 capture_output=True, timeout=20, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js indisponible")
+    def test_workflow_reservation_snapshot_ignores_timestamps_and_redacts_body(self):
+        """Execute the actual workflow JS functions, including the real field parser."""
+        script = self.workflow_script()
+        field_start = script.index("function field(body, name) {")
+        field_end = script.index("function agent(value)", field_start)
+        snapshot_start = script.index("const RESERVATION_FIELDS =")
+        snapshot_end = script.index("async function filesOf(pull)", snapshot_start)
+        helpers = script[field_start:field_end] + script[snapshot_start:snapshot_end]
+        node = r"""
+const assert = require('node:assert/strict');
+const info = [];
+const core = {info: message => info.push(message)};
+""" + helpers + r"""
+const text = [
+  'Responsable-IA: Codex',
+  'Relecteur-IA: Claude',
+  'Réservation-état: En cours',
+  'Zones: .github/workflows/ai-coordination.yml, tests/test_ai_preflight.py',
+  'Notes: PRIVATE_CONTENT_DO_NOT_LOG'
+].join('\n');
+function item(body=text, state='open', updated='2026-10-22T15:00:00Z') {
+  return {number:96, state, updated_at:updated, body};
+}
+const initial = item();
+const metadataOnly = {...initial, updated_at:'2026-10-22T15:05:00Z',
+                      labels:[{name:'agent:codex'}]};
+assert.equal(issueSignature([initial]), issueSignature([metadataOnly]),
+             'updated_at / labels alone must not block');
+const crlf = item(text.replace(/\n/g, '\r\n'));
+assert.equal(issueSignature([initial]), issueSignature([crlf]),
+             'CRLF and LF must compare equal');
+const unrelated = item(text + '\nDocumentation: harmless edit');
+assert.equal(issueSignature([initial]), issueSignature([unrelated]),
+             'only reservation-relevant fields must be compared');
+const reservationChanged = item(text.replace('En cours', 'En revue'));
+assert.notEqual(issueSignature([initial]), issueSignature([reservationChanged]));
+logReservationDifferences([initial], [reservationChanged]);
+assert(info.some(x => x.includes('Issue #96 diff body') &&
+                      x.includes('Réservation-état')));
+assert(info.some(x => /length=\d+ sha256=[0-9a-f]{64}/.test(x)));
+assert(!info.some(x => x.includes('PRIVATE_CONTENT_DO_NOT_LOG')));
+info.length = 0;
+const zonesChanged = item(text.replace('tests/test_ai_preflight.py',
+                                      'tests/other_file.py'));
+assert.notEqual(issueSignature([initial]), issueSignature([zonesChanged]));
+logReservationDifferences([initial], [zonesChanged]);
+assert(info.some(x => x.includes('diff body (Zones)')));
+assert(info.every(x => !x.includes('PRIVATE_CONTENT_DO_NOT_LOG')));
+const writerChanged = item(text.replace('Responsable-IA: Codex',
+                                      'Responsable-IA: Gemini'));
+const reviewerChanged = item(text.replace('Relecteur-IA: Claude',
+                                        'Relecteur-IA: Gemini'));
+assert.notEqual(issueSignature([initial]), issueSignature([writerChanged]));
+assert.notEqual(issueSignature([initial]), issueSignature([reviewerChanged]));
+info.length = 0;
+const stateChanged = item(text, 'closed', '2026-10-22T15:06:00Z');
+assert.notEqual(issueSignature([initial]), issueSignature([stateChanged]));
+logReservationDifferences([initial], [stateChanged]);
+assert(info.some(x => x.includes('diff state: before=open after=closed')));
+assert(info.some(x => x.includes('diff updated_at: before=')));
+assert(info.every(x => !x.includes('PRIVATE_CONTENT_DO_NOT_LOG')));
+info.length = 0;
+assert.notEqual(issueSignature([initial]), issueSignature([]));
+logReservationDifferences([initial], []);
+assert(info.some(x => x.includes('Issue #96 diff body')));
+assert(info.every(x => !x.includes('PRIVATE_CONTENT_DO_NOT_LOG')));
+""" 
+        result = subprocess.run(["node", "-"], input=node, text=True, capture_output=True,
+                                timeout=20, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_workflow_rechecks_reservation_snapshot(self):
         source = (REPO / ".github" / "workflows" / "ai-coordination.yml").read_text(encoding="utf-8")
         self.assertIn("issueSignature(reservationsBefore) !== issueSignature(reservationsAfter)", source)
+        self.assertIn("issueSignature([listed]) !== issueSignature([issue])", source)
+        self.assertIn("logReservationDifferences(reservationsBefore, reservationsAfter)", source)
+        self.assertNotIn("listed.updated_at !== issue.updated_at", source)
+
 
 
 if __name__ == "__main__":

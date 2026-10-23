@@ -104,10 +104,6 @@ class NightCycleEngine(context: Context) {
             fatalError = safeError(prepared.exceptionOrNull())
         } else {
             steps += syncStep(NightCyclePhase.SYNC_BEFORE)
-            // Dedicated private replay, never core.ask/conversation learning or generated tools.
-            try { core.runCorrectionExam() }
-            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { /* Counts remain in the private durable exam ledger. */ }
 
             val memoryStarted = System.currentTimeMillis()
             var memorySuccess = true

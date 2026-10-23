@@ -33,18 +33,6 @@ interface CorrectionDao {
     @Query("DELETE FROM user_corrections WHERE id = :id OR (state = 'PENDING' AND instr(targets, '|' || :id || '|') > 0)")
     suspend fun deleteLinks(id: String)
 
-    @Query("UPDATE user_corrections SET lastExamAt = :at WHERE id = :id")
-    suspend fun markExam(id: String, at: Long)
-
-    @Query("SELECT * FROM correction_exam_nights WHERE night = :night")
-    suspend fun examNight(night: String): CorrectionExamNight?
-
-    @Query("SELECT * FROM correction_exam_nights ORDER BY night DESC LIMIT 1")
-    suspend fun lastExamNight(): CorrectionExamNight?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun saveNight(row: CorrectionExamNight)
-
     @Transaction
     suspend fun propose(question: String, answerRef: String, wrongAnswer: String, fact: String, origin: String): UserCorrection {
         require(question.isNotBlank() && answerRef.isNotBlank() && wrongAnswer.isNotBlank()) { "Réponse à corriger manquante." }

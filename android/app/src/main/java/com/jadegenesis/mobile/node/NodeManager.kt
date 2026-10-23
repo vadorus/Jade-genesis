@@ -547,18 +547,6 @@ class NodeManager(
         return parseCompletedTaskResponse(node, request, 200, raw.toString())
     }
 
-    suspend fun correctionHaltRunning(nodeId: String): Boolean = try {
-        val raw = correctionRequest(nodeId, "/correct-mem/status", null, 2000)
-        raw.opt("schema_version") == 1 && raw.opt("state") == "RUNNING" &&
-            (raw.opt("captured_at") is Long || raw.opt("captured_at") is Int) && raw.optLong("captured_at") >= 0 &&
-            kotlin.math.abs(System.currentTimeMillis() - raw.optLong("captured_at", 0)) <= 10000
-    } catch (_: Exception) { false }
-
-    suspend fun correctionExam(nodeId: String, payload: JSONObject, budgetMs: Int): String {
-        val raw = correctionRequest(nodeId, "/correct-mem/exam", payload, budgetMs.coerceIn(100, 90000))
-        return raw.optString("text").takeIf { it.isNotBlank() } ?: error("correction_exam_empty")
-    }
-
     suspend fun executeTask(
         nodeId: String,
         request: DistributedTaskRequest

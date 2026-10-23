@@ -12,7 +12,6 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from correct_mem import correction_metrics
 
 SCHEMA_VERSION = 1
 DAY_MS = 86_400_000
@@ -359,7 +358,6 @@ def generate_report(config_dir: Path | str | None = None, *,
         },
         "delta": delta,
         "halt_state": state,
-        "corrections": correction_metrics(root, now),
         "warnings": sorted(warnings),
     }
 
@@ -379,17 +377,6 @@ def format_text(report: dict[str, Any]) -> str:
         ),
     ]
     current = report["current"]["metrics"]
-    correction = report.get("corrections")
-    lines.append("CORRECTIONS (dernier snapshot, indicateur lexical seulement)")
-    if correction is None:
-        lines.append("  inconnu : snapshot absent ou invalide")
-    else:
-        lines.append("  actives={} | conflits={} | erreurs reprises/rejoués={}/{} | taux={} | partiel={} | périmé={}".format(
-            correction["active"], correction["pending"], correction["repeated"], correction["replayed"],
-            _pretty(correction["repeat_rate"]), correction["partial"], correction["stale"]))
-        lines.append("  nuit={} | non évaluables={} | indisponibles={} | interruptions={} | observé_ms={}".format(
-            _pretty(correction["night"]), correction["replayed"] - correction["evaluable"],
-            correction["unavailable"], correction["interrupted"], correction["observed_at"]))
     previous = report["previous"]["metrics"]
     for section, names in METRICS.items():
         lines.append("")

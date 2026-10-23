@@ -25,14 +25,13 @@ class MigrationAndQueries(unittest.TestCase):
         db=self.database(3)
         self.assertEqual(('synthetic original',0,0,None,None),db.execute('SELECT content,lastRecalledAt,recallCount,verifiedAt,supersededBy FROM memory_events').fetchone())
         self.assertEqual(5,len(db.execute("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_events' AND name LIKE 'index_%'").fetchall()))
-        self.assertEqual(9,len(db.execute('PRAGMA table_info(user_corrections)').fetchall()))
-        self.assertEqual(9,len(db.execute('PRAGMA table_info(correction_exam_nights)').fetchall()))
+        self.assertEqual(8,len(db.execute('PRAGMA table_info(user_corrections)').fetchall()))
 
     def test_real_dao_queries_exclude_corrections_and_pending_targets(self):
         db=self.database(3)
         db.execute("INSERT INTO memory_events VALUES ('corrected','FACT','private synthetic correction','USER_CORRECTION',1,'synthetic',2,0,0,NULL,NULL)")
-        db.execute("INSERT INTO user_corrections VALUES ('corrected','q','ref','wrong','private synthetic correction',2,'ACTIVE','|',0)")
-        db.execute("INSERT INTO user_corrections VALUES ('pending','q2','ref2','wrong2','replacement',3,'PENDING','|preserved|',0)")
+        db.execute("INSERT INTO user_corrections VALUES ('corrected','q','ref','wrong','private synthetic correction',2,'ACTIVE','|')")
+        db.execute("INSERT INTO user_corrections VALUES ('pending','q2','ref2','wrong2','replacement',3,'PENDING','|preserved|')")
         source=(BASE/'MemoryDao.kt').read_text(encoding='utf-8')
         queries={method:sql for sql,method in re.findall(r'@Query\(\s*"""(.*?)"""\s*\)\s*suspend fun (\w+)',source,re.S)}
         args={'limit':20,'query':'synthetic','afterCreatedAt':0,'afterId':''}

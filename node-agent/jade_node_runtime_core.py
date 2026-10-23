@@ -979,7 +979,6 @@ def health_payload(
     capabilities = [
         "node_runtime",
         "correct_mem_v1",
-        "correct_mem_exam_v1",
         "compute",
         "python_runtime",
         "hardware_profile",
@@ -1223,7 +1222,7 @@ def run_memory_consolidation(payload: str) -> tuple[str, int]:
     return json.dumps(result, ensure_ascii=False, separators=(",", ":")), int(duration_ms)
 
 
-from correct_mem import correction_prompt, halt_projection, run_exam
+from correct_mem import correction_prompt
 
 
 def _brain_system_prompt(context: dict[str, Any]) -> str:
@@ -1673,9 +1672,6 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
                 self._reject_unauthorized()
                 return
 
-            if path == "/correct-mem/status":
-                self._send_json(200, halt_projection(CONFIG_DIR))
-                return
             if path == "/health":
                 self._send_json(200, health_payload(config, store))
                 return
@@ -1721,7 +1717,7 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
-            if path not in {"/task", "/tasks", "/correct-mem/exam"}:
+            if path not in {"/task", "/tasks"}:
                 self._send_json(404, {"success": False, "error": "not_found"})
                 return
             if not self._authorized():
@@ -1731,15 +1727,6 @@ def make_handler(config: dict[str, Any], store: AsyncTaskStore):
             request = self._read_json_body()
             if request is None:
                 self._send_json(400, {"success": False, "error": "invalid_or_empty_json"})
-                return
-
-            if path == "/correct-mem/exam":
-                try:
-                    result = run_exam(request, config, CONFIG_DIR, _brain_system_prompt, _brain_user_prompt, urlopen)
-                    self._send_json(200, result)
-                except Exception:
-                    # Fixed error only, never exception/model text in diagnostics.
-                    self._send_json(409, {"error": "correction_exam_unavailable"})
                 return
 
             try:

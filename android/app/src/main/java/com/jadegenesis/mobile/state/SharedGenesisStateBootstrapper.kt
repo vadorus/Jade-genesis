@@ -92,24 +92,6 @@ class SharedGenesisStateBootstrapper(context: Context) {
             }.toString()
         )
 
-        val correctionDao = com.jadegenesis.mobile.memory.JadeDatabase.get(appContext).correctionDao()
-        val correctionRows = com.jadegenesis.mobile.memory.CorrectionStore(correctionDao).visible()
-        val exam = correctionDao.lastExamNight()
-        coordinator.publish(originNode = replicaId, kind = "correction_metrics", entityId = "active", payload = JSONObject().apply {
-            put("schema_version", 1)
-            put("observed_at", now)
-            put("active", correctionRows.count { it.state == "ACTIVE" })
-            put("pending", correctionRows.count { it.state == "PENDING" })
-            put("night", exam?.night ?: JSONObject.NULL)
-            put("attempts", exam?.attempts ?: 0)
-            put("replayed", exam?.replayed ?: 0)
-            put("evaluable", exam?.evaluable ?: 0)
-            put("repeated", exam?.repeated ?: 0)
-            put("unavailable", exam?.unavailable ?: 0)
-            put("interrupted", exam?.interrupted ?: 0)
-            put("exam_updated_at", exam?.updatedAt ?: 0)
-        }.toString())
-
         coordinator.publish(
             originNode = replicaId,
             kind = "memory_cursor",

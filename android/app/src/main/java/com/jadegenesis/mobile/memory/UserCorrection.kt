@@ -58,8 +58,16 @@ object CorrectionPolicy {
     fun keys(fact: String): List<String> {
         val numbers = Regex("(?<![\\p{L}\\p{N}])[+-]?\\d+(?:[.,:/-]\\d+)*(?:\\s?(?:%|€|kg|km|cm|ms|h))?")
             .findAll(fact).map { it.value }.toList()
-        val names = Regex("(?<![\\p{L}\\p{N}])[\\p{Lu}][\\p{L}'’-]{2,}")
-            .findAll(fact).map { it.value }.filterNot { it in setOf("Le", "Les", "La", "Un", "Une", "The", "Il", "Elle", "Mon", "Ma") }.toList()
+        val capitalized = Regex("(?<![\\p{L}\\p{N}])[\\p{Lu}][\\p{L}'’-]{2,}")
+            .findAll(fact).filter { match -> match.value.any(Char::isLowerCase) }.toList()
+        val occurrences = capitalized.groupingBy { it.value }.eachCount()
+        val names = capitalized.filter { match ->
+            val prefix = fact.substring(0, match.range.first)
+                .substringAfterLast('\n').substringAfterLast('\r')
+                .substringAfterLast('.').substringAfterLast('!').substringAfterLast('?')
+            val sentenceInitial = prefix.none(Char::isLetterOrDigit)
+            !sentenceInitial || occurrences.getValue(match.value) > 1
+        }.map { it.value }.filterNot { it in setOf("Le", "Les", "La", "Un", "Une", "The", "Il", "Elle", "Mon", "Ma") }
         return (numbers + names).distinct()
     }
 

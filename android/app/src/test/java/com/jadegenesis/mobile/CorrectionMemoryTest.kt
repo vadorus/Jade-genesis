@@ -4,6 +4,11 @@ import com.jadegenesis.mobile.memory.*
 import com.jadegenesis.mobile.model.*
 import com.jadegenesis.mobile.brain.PrototypeBrain
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.sync.withLock
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
@@ -150,9 +155,84 @@ class CorrectionMemoryTest {
         assertEquals(true, CorrectionPolicy.passes("Mars 12", "Mars n’a pas 12"))
     }
 
+    @Test fun sentenceInitialCapitalizationIsNotAnObligatoryName() {
+        assertEquals(listOf("2024", "Jade"), CorrectionPolicy.keys("Depuis 2024, Jade tourne sur le VPS"))
+        assertEquals(true, CorrectionPolicy.passes("Depuis 2024, Jade tourne sur le VPS", "Jade fonctionne en 2024."))
+        assertEquals(listOf("Jade"), CorrectionPolicy.keys("Jade échange avec Jade."))
+        assertEquals(listOf("2024", "Jade"), CorrectionPolicy.keys("Depuis 2024. Ensuite Jade fonctionne ! Toujours Jade répond."))
+        assertEquals(listOf("2024"), CorrectionPolicy.keys("Depuis 2024, depuis longtemps."))
+        assertEquals(emptyList<String>(), CorrectionPolicy.keys("« Depuis ici. » Ensuite ailleurs ! Toujours ailleurs ? Encore ailleurs."))
+    }
+
     private val epoch = Instant.parse("2026-10-18T01:29:00Z").toEpochMilli()
     private suspend fun populate(dao: Store, count: Int) {
         repeat(count) { i -> dao.propose("Question$i", "ref$i", "faux", "Nombre$i 42", "synthetic") }
+    }
+
+    @Test fun askConcurrentDoesNotWaitForReplay() = runBlocking {
+        val dao = Store(); populate(dao, 1)
+        val replayEntered = CompletableDeferred<Unit>()
+        val releaseReplay = CompletableDeferred<Unit>()
+        val exam = launch {
+            CorrectionExamEngine(dao, { false }, { false }, { row, _ ->
+                replayEntered.complete(Unit)
+                releaseReplay.await()
+                row.fact
+            }, { epoch }).run()
+        }
+        try {
+            withTimeout(5000) { replayEntered.await() }
+            // This is the production entry mutex of JadeCore.ask, without an Android fixture.
+            val ask = async { CorrectionGate.mutex.withLock { CorrectionStore(dao).relevant("Question0") } }
+            assertEquals(1, withTimeout(5000) { ask.await() }.size)
+            assertFalse(exam.isCompleted)
+        } finally {
+            releaseReplay.complete(Unit)
+            withTimeout(5000) { exam.join() }
+        }
+    }
+
+    @Test fun forgetConflictOrReplacementDuringReplayCannotCountAnObsoleteResult() = runBlocking {
+        for (mutation in listOf("forget", "pending", "replace")) {
+            val dao = Store(); populate(dao, 1)
+            CorrectionExamEngine(dao, { false }, { false }, { row, _ ->
+                CorrectionGate.mutex.withLock {
+                    if (mutation == "forget") dao.forget(row.id) else {
+                        val proposal = dao.propose(row.question, "new-ref", "wrong", "Nouvelle 84", "synthetic")
+                        if (mutation == "replace") assertTrue(dao.confirm(proposal.id, "synthetic"))
+                    }
+                }
+                row.fact
+            }, { epoch }).let { engine -> withTimeout(5000) { engine.run() } }
+            val stats = dao.examNight("2026-10-18")!!
+            assertEquals(1, stats.attempts)
+            assertEquals(90000L, stats.usedMs)
+            assertEquals(0, stats.replayed)
+            assertEquals(0, stats.evaluable)
+            assertEquals(0, stats.repeated)
+            assertEquals(1, stats.unavailable)
+        }
+    }
+
+    @Test fun concurrentExamsDoNotReplayOrChargeTwice() = runBlocking {
+        val dao = Store(); populate(dao, 1)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        fun engine() = CorrectionExamEngine(dao, { false }, { false }, { row, _ ->
+            calls++
+            entered.complete(Unit)
+            release.await()
+            row.fact
+        }, { epoch })
+        val first = launch { engine().run() }
+        withTimeout(5000) { entered.await() }
+        val second = launch { engine().run() }
+        release.complete(Unit)
+        withTimeout(5000) { first.join(); second.join() }
+        assertEquals(1, calls)
+        assertEquals(1, dao.examNight("2026-10-18")?.attempts)
+        assertEquals(90000L, dao.examNight("2026-10-18")?.usedMs)
     }
 
     @Test fun emptyNightDoesNotCheckHaltOrCallModel() = runBlocking {

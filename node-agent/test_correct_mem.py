@@ -150,6 +150,8 @@ class CorrectMemTest(unittest.TestCase):
         self.assertTrue(result["partial"])
         report = jade_progress.generate_report(self.root, now_ms=1001)
         self.assertEqual(result, report["corrections"])
+        self.assertEqual("latest_snapshot_only_lexical_indicator_with_correction_in_context", result["coverage"])
+        self.assertIn("correction fournie dans le contexte", jade_progress.format_text(report))
         self.assertNotIn("PRIVATE", json.dumps(report))
         self.assertEqual(before, path.read_bytes())
         self.assertEqual([path], list(self.root.iterdir()))

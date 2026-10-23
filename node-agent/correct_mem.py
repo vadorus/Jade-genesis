@@ -49,7 +49,7 @@ def correction_metrics(root: Path, now: int) -> dict[str, Any] | None:
                                  if result["replayed"] and result["evaluable"] == result["replayed"] else None)
         result["partial"] = result["evaluable"] != result["replayed"] or result["unavailable"] > 0 or result["interrupted"] > 0
         result["stale"] = now - result["observed_at"] > 86400000
-        result["coverage"] = "latest_snapshot_only_lexical_indicator"
+        result["coverage"] = "latest_snapshot_only_lexical_indicator_with_correction_in_context"
         return result
     except (OSError, UnicodeError, ValueError, TypeError):
         return None

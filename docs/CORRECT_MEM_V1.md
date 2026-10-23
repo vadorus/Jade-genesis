@@ -85,6 +85,10 @@ Le transport privé distant est synchrone, sans file ni erreurs contenant
 les textes privés. Aucun contenu réel n'est publié dans les diagnostics.
 
 Le verrou commun sérialise conversation et mutations des corrections.
+L'examen ne le prend que pour les accès base : sélection, débit persistant
+du budget et enregistrement du résultat. Il ne le garde jamais pendant
+le rejeu ni pendant la lecture réseau HALT. Un verrou distinct sérialise
+uniquement les examens ; il ne bloque pas `ask()`.
 Il est **non réentrant** : une question longue retarde correction/oubli ;
 aucun appel à ask, proposeCorrection, confirmCorrection ou forgetCorrection
 ne doit être ajouté à l'intérieur de askWithCorrections, sous peine de blocage.
@@ -117,6 +121,18 @@ contrôle également HALT avant/après appel. État indisponible, périmé ou in
 → arrêt. Le bouton local d'arrêt d'examen est durable et coopératif, sans
 halt/rearm du VPS ; il empêche les appels suivants et invalide le résultat en cours.
 
+Le contrôle de fraîcheur compare `captured_at` du VPS à l'heure du Pixel :
+**un écart absolu > 10 secondes fait traiter le nœud comme arrêté pour
+l'examen**. Un décalage d'horloge Pixel/VPS peut provoquer cet arrêt de sécurité
+sans qu'un HALT réel soit activé ; le délai de transport contribue aussi à
+l'âge observé. Aucun halt/rearm distant n'est effectué pour corriger cet écart.
+
+Après l'appel, la correction est à nouveau vérifiée active sous le verrou
+base avant tout comptage. Si elle a été oubliée, remplacée ou bloquée par un
+conflit en attente, la réponse est jetée, sans compter de rejeu ni d'erreur
+répétée. La tentative et son budget restent débités ; l'indisponibilité est
+comptée. Attendre le verrou base consomme également le budget de l'appel.
+
 Le transport Android coupe sa connexion à l'échéance absolue. Le serveur
 rend la main à son échéance même si le modèle ignore le timeout. Un seul
 appel modèle d'examen peut rester en vol ; son créneau reste occupé jusqu'à
@@ -126,7 +142,11 @@ du calcul Ollama. Un échec ou timeout n'est pas compté comme répétition.
 ## Indicateur lexical et rapport #76
 
 Extraction déterministe de nombres, unités, dates et mots capitalisés du fait,
-visible dans la liste. Correspondances exactes NFC, sensibles à la casse pour
+visible dans la liste. Le mot capitalisé initial de chaque phrase est ignoré,
+sauf s'il apparaît aussi capitalisé ailleurs dans le fait ; les sigles tout
+en majuscules sont exclus de cette heuristique des noms. Ainsi « Depuis 2024,
+Jade tourne sur le VPS » produit seulement `2024` et `Jade`.
+Correspondances exactes NFC, sensibles à la casse pour
 les noms et avec frontières numériques : 12 ne vaut ni 112, ni -12, ni 12.5.
 Aucun élément extractible → non évaluable. Les mots capitalisés peuvent être
 des faux positifs et les paraphrases sont limitées. **La présence textuelle
@@ -141,6 +161,13 @@ couverture hebdomadaire inventée. Taux = reprises/rejoués seulement si tous
 les rejoués sont évaluables ; sinon inconnu/partiel. Zéro rejeu reste inconnu.
 Les endpoints d'examen n'utilisent ni file de tâches ni journal de texte.
 
+**Le rejeu fournit la correction elle-même dans le contexte.** L'indicateur
+mesure lexicalement le respect d'une **correction fournie dans le contexte**,
+pas une acquisition autonome ni un apprentissage sans cette aide. Le JSON
+du rapport le précise :
+`coverage = "latest_snapshot_only_lexical_indicator_with_correction_in_context"`.
+Le libellé du rapport texte le mentionne également.
+
 ## Migrations et validation
 
 V1a apporte la migration v2→v3. V1b ajoute v3→v4 : colonne lastExamAt
@@ -149,7 +176,7 @@ Test SQLite synthétique de conservation d'une correction V1a durant v3→v4.
 Les corrections V1a restent présentes : pertinence à deux termes distincts
 ou question identique, et réponse normale du prototype avant son rappel.
 
-V1b : **versionCode 50 > main 49**, versionName 0.1.32. Candidat initial
+V1b : **versionCode 51 > précédente V1b 50 > main 49**, versionName 0.1.33. Candidat initial
 préservé sur `jade/correct-mem-v1-candidate` ; version V1b avant rebase
 conservée localement pour la résolution et la traçabilité.
 La CI doit exécuter les tests JVM, KSP/Room et compiler les APK debug et

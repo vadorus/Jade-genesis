@@ -6,6 +6,7 @@ import com.jadegenesis.mobile.model.NodeStatus
 import com.jadegenesis.mobile.model.SelfModel
 import com.jadegenesis.mobile.node.NodeManager
 import org.json.JSONObject
+import kotlinx.coroutines.sync.withLock
 
 class CorrectionExamRunner(context: Context, private val dao: CorrectionDao, private val nodes: NodeManager) {
     private val prefs = context.applicationContext.getSharedPreferences("jade_correction_exam", Context.MODE_PRIVATE)
@@ -19,13 +20,22 @@ class CorrectionExamRunner(context: Context, private val dao: CorrectionDao, pri
             halted = { !nodes.correctionHaltRunning(node.nodeId) },
             stopped = { prefs.getBoolean("stopped", false) },
             replay = { current, budget ->
-                val facts = CorrectionStore(dao).relevant(current.question)
+                val started = System.nanoTime()
+                val facts = CorrectionGate.mutex.withLock {
+                    val store = CorrectionStore(dao)
+                    check(store.active().any { it.id == current.id && it.fact == current.fact }) {
+                        "correction_exam_inactive"
+                    }
+                    store.relevant(current.question)
+                }
+                val remaining = budget - (System.nanoTime() - started) / 1000000
+                check(remaining >= 100) { "correction_exam_budget" }
                 val payload = JSONObject().apply {
                     put("user_input", current.question)
-                    put("budget_ms", budget)
+                    put("budget_ms", remaining)
                     put("corrections", CorrectionContextPayload.encode(facts))
                 }
-                nodes.correctionExam(node.nodeId, payload, budget.toInt())
+                nodes.correctionExam(node.nodeId, payload, remaining.toInt())
             }).run()
     }
 }

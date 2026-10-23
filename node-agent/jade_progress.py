@@ -380,7 +380,7 @@ def format_text(report: dict[str, Any]) -> str:
     ]
     current = report["current"]["metrics"]
     correction = report.get("corrections")
-    lines.append("CORRECTIONS (dernier snapshot, indicateur lexical seulement)")
+    lines.append("CORRECTIONS (dernier snapshot, indicateur lexical, correction fournie dans le contexte)")
     if correction is None:
         lines.append("  inconnu : snapshot absent ou invalide")
     else:

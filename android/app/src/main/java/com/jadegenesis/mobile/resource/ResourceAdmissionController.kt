@@ -101,7 +101,8 @@ class ResourceAdmissionController(
         val vramGb = when {
             request.taskKind == "brain_chat" && node.gpuVramTotalGb > 0.0 -> {
                 if (node.brainLoaded) {
-                    SafetyPolicy.MIN_BRAIN_VRAM_HEADROOM_GB
+                    // Ollama manages VRAM for the model that is already resident.
+                    0.0
                 } else if (node.brainModelVramGb > 0.0) {
                     node.brainModelVramGb +
                         SafetyPolicy.MIN_BRAIN_VRAM_HEADROOM_GB

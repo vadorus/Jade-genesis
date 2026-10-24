@@ -88,6 +88,40 @@ class ResourceAdmissionControllerTest {
     }
 
     @Test
+    fun loadedBrainIsAdmittedWithOnlyPointThreeGbFreeVram() {
+        val controller = isolatedController()
+        val decision = controller.tryAcquire(
+            request = DistributedTaskRequest(
+                taskId = "loaded-brain-test",
+                taskKind = "brain_chat",
+                payload = "bonjour",
+                requiredCapability = "brain_chat",
+                workload = TaskWorkload.HEAVY,
+                createdAt = 1L
+            ),
+            node = remoteNode(
+                gpuVramTotalGb = 8.0,
+                gpuVramFreeGb = 0.3,
+                brainReady = true,
+                brainLoaded = true,
+                brainModelVramGb = 6.0,
+                capabilities = listOf(
+                    "task_execution_v3",
+                    "brain_chat",
+                    "local_brain"
+                )
+            ),
+            budget = budget()
+        )
+
+        assertEquals(ResourceAdmissionAction.REMOTE, decision.action)
+        assertTrue(decision.admitted)
+        assertNotNull(decision.lease)
+        assertEquals(0.0, decision.estimate.vramGb, 0.0)
+        assertEquals(0.0, decision.lease!!.vramGb, 0.0)
+    }
+
+    @Test
     fun unloadedBrainRequiresEnoughKnownVram() {
         val controller = isolatedController()
         val brainRequest = DistributedTaskRequest(
@@ -100,7 +134,7 @@ class ResourceAdmissionControllerTest {
         )
         val node = remoteNode(
             gpuVramTotalGb = 8.0,
-            gpuVramFreeGb = 4.0,
+            gpuVramFreeGb = 0.3,
             brainReady = true,
             brainLoaded = false,
             brainModelVramGb = 6.0,
@@ -118,7 +152,47 @@ class ResourceAdmissionControllerTest {
         )
 
         assertEquals(ResourceAdmissionAction.DEFER, decision.action)
+        assertFalse(decision.admitted)
+        assertEquals(6.5, decision.estimate.vramGb, 0.0)
         assertTrue(decision.reason.contains("VRAM"))
+    }
+
+    @Test
+    fun visionKeepsItsVramRequirementRegardlessOfBrainLoadedState() {
+        for (capability in listOf("vision_analyze", "screen_analyze")) {
+            for (brainLoaded in listOf(false, true)) {
+                for (freeVramGb in listOf(0.3, 1.0)) {
+                    val decision = isolatedController().tryAcquire(
+                        request = DistributedTaskRequest(
+                            taskId = "vision-test",
+                            taskKind = capability,
+                            payload = "synthetic image",
+                            requiredCapability = capability,
+                            workload = TaskWorkload.HEAVY,
+                            createdAt = 1L
+                        ),
+                        node = remoteNode(
+                            gpuVramTotalGb = 8.0,
+                            gpuVramFreeGb = freeVramGb,
+                            brainReady = true,
+                            brainLoaded = brainLoaded,
+                            capabilities = listOf("task_execution_v3", capability)
+                        ),
+                        budget = budget()
+                    )
+                    val expected = if (freeVramGb < 0.5) {
+                        ResourceAdmissionAction.DEFER
+                    } else {
+                        ResourceAdmissionAction.REMOTE
+                    }
+                    val case = "$capability, brainLoaded=$brainLoaded, free=$freeVramGb"
+
+                    assertEquals(case, expected, decision.action)
+                    assertEquals(case, 0.5, decision.estimate.vramGb, 0.0)
+                    assertEquals(case, expected == ResourceAdmissionAction.REMOTE, decision.admitted)
+                }
+            }
+        }
     }
 
     @Test

@@ -79,6 +79,17 @@ jobs:
             sha256 = $hash
           } | ConvertTo-Json | Set-Content "$payload/runtime-manifest.json" -Encoding utf8NoBOM
 
+      - name: Test runtime binding and CORRECT-MEM regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PYTHONUTF8 = "1"
+          Push-Location node-agent
+          try {
+            python -m unittest test_runtime_bind_address test_correct_mem -v
+            if ($LASTEXITCODE -ne 0) { throw "Runtime tests failed." }
+          } finally { Pop-Location }
+
       - name: Smoke-test packaged Node Runtime on loopback
         shell: pwsh
         run: |
@@ -94,7 +105,8 @@ jobs:
           $stderr = Join-Path $env:RUNNER_TEMP "jade-runtime.stderr.log"
           $process = Start-Process `
             -FilePath "windows-node/build/runtime/JadeNodeRuntime.exe" `
-            -ArgumentList @("--node-kind", "PC", "--bind-address", "127.0.0.1", "--port", "$port") `
+            -ArgumentList @("--node-kind", "PC", "--bind-address", "127.0.0.1", "--channel", "stable", "--port", "$port") `
+            -WindowStyle Hidden `
             -RedirectStandardOutput $stdout `
             -RedirectStandardError $stderr `
             -PassThru
@@ -125,6 +137,13 @@ jobs:
             if ($health.agent_version -ne "0.1.9") { throw "Runtime version mismatch." }
             if ($health.bind_address -ne "127.0.0.1") { throw "Explicit bind address was not advertised." }
             if ($health.node_id -notlike "pc-*") { throw "PC identity was not created." }
+            foreach ($capability in @("correct_mem_v1", "correct_mem_exam_v1")) {
+              if ($health.capabilities -notcontains $capability) { throw "Missing $capability." }
+            }
+            $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port)
+            if ($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne "127.0.0.1") {
+              throw "Runtime is not listening exclusively on loopback."
+            }
           } finally {
             if (!$process.HasExited) { Stop-Process -Id $process.Id -Force }
             Get-Content $stdout -ErrorAction SilentlyContinue
@@ -161,7 +180,7 @@ jobs:
           if ($unexpected) {
             throw "Publish is not single-file: $($unexpected.Name -join ', ')"
           }
-          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -PassThru -Wait
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -WindowStyle Hidden -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "Embedded payload self-test failed." }
 
       - name: Package executable and checksums
@@ -175,6 +194,16 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 "$package/JadeNode.exe").Hash.ToLowerInvariant()
           "$hash  JadeNode.exe" | Set-Content "$package/JadeNode.exe.sha256" -Encoding ascii
           Get-ChildItem $package | Format-Table Name, Length
+
+      - name: Upload standalone runtime for separate reviewed deployment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jade-node-runtime-windows-${{ github.sha }}
+          path: |
+            windows-node/build/runtime/JadeNodeRuntime.exe
+            windows-node/JadeNode.Windows/Payload/runtime-manifest.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

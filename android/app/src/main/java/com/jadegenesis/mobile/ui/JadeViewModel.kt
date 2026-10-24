@@ -39,6 +39,7 @@ private data class RefreshBundle(
     val memoryCount: Int,
     val corrections: List<com.jadegenesis.mobile.memory.UserCorrection>,
     val correctionTargets: List<com.jadegenesis.mobile.memory.MemoryEntity>,
+    val correctionExamStopped: Boolean,
     val taskHistory: List<DistributedTaskResult>,
     val taskQueue: List<QueuedTaskSnapshot>,
     val pendingTasks: Int,
@@ -61,6 +62,7 @@ data class JadeUiState(
     val response: String = "",
     val answerRef: String = "",
     val correctionTargets: List<com.jadegenesis.mobile.memory.MemoryEntity> = emptyList(),
+    val correctionExamStopped: Boolean = false,
     val corrections: List<com.jadegenesis.mobile.memory.UserCorrection> = emptyList(),
     val nodeMessage: String = "",
     val taskMessage: String = "",
@@ -409,7 +411,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val row = core.proposeCorrection(question, ref, answer, fact)
                 _state.value = _state.value.copy(corrections = core.correctionRows(),
-                    correctionTargets = core.correctionTargetFacts(),
+                    correctionTargets = core.correctionTargetFacts(), correctionExamStopped = core.correctionExamStopped(),
                     taskMessage = if (row.state == "PENDING") "Conflit en attente : confirmer le remplacement dans Mémoire." else "Correction mémorisée.")
             } catch (_: Exception) {
                 _state.value = _state.value.copy(error = "Correction non enregistrée. Vérifie la cible et la longueur du fait (1500 caractères maximum).")
@@ -417,12 +419,18 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun stopCorrectionExam(stopped: Boolean) {
+        try { core.setCorrectionExamStopped(stopped)
+            _state.value = _state.value.copy(correctionExamStopped = stopped)
+        } catch (_: Exception) { _state.value = _state.value.copy(error = "Arrêt local non enregistré.") }
+    }
+
     fun confirmCorrection(id: String) {
         viewModelScope.launch {
             try {
                 val confirmed = core.confirmCorrection(id)
                 _state.value = _state.value.copy(corrections = core.correctionRows(),
-                    correctionTargets = core.correctionTargetFacts(),
+                    correctionTargets = core.correctionTargetFacts(), correctionExamStopped = core.correctionExamStopped(),
                     taskMessage = if (confirmed) "Remplacement confirmé." else "Cible modifiée : confirmation refusée, recrée la correction.")
             } catch (_: Exception) { _state.value = _state.value.copy(error = "Remplacement non enregistré.") }
         }
@@ -433,7 +441,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 core.forgetCorrection(id)
                 _state.value = _state.value.copy(corrections = core.correctionRows(),
-                    correctionTargets = core.correctionTargetFacts(), taskMessage = "Correction oubliée.")
+                    correctionTargets = core.correctionTargetFacts(), correctionExamStopped = core.correctionExamStopped(), taskMessage = "Correction oubliée.")
             } catch (_: Exception) { _state.value = _state.value.copy(error = "Oubli non effectué.") }
         }
     }
@@ -497,7 +505,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     memories = bundle.memories,
                     memoryCount = bundle.memoryCount,
                     corrections = bundle.corrections,
-                    correctionTargets = bundle.correctionTargets,
+                    correctionTargets = bundle.correctionTargets, correctionExamStopped = bundle.correctionExamStopped,
                     taskHistory = bundle.taskHistory,
                     taskQueue = bundle.taskQueue,
                     pendingTasks = bundle.pendingTasks,
@@ -657,7 +665,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
                     memories = bundle.memories,
                     memoryCount = bundle.memoryCount,
                     corrections = bundle.corrections,
-                    correctionTargets = bundle.correctionTargets,
+                    correctionTargets = bundle.correctionTargets, correctionExamStopped = bundle.correctionExamStopped,
                     learningCandidates = bundle.learningCandidates,
                     diagnostics = bundle.diagnostics,
                     error = null
@@ -778,7 +786,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             memories = core.latestMemories(),
             memoryCount = core.memoryCount(),
             corrections = core.correctionRows(),
-            correctionTargets = core.correctionTargetFacts(),
+            correctionTargets = core.correctionTargetFacts(), correctionExamStopped = core.correctionExamStopped(),
             taskHistory = core.recentTaskHistory(),
             taskQueue = core.recentTaskQueue(),
             pendingTasks = core.pendingTaskCount(),
@@ -800,7 +808,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             memories = bundle.memories,
             memoryCount = bundle.memoryCount,
             corrections = bundle.corrections,
-            correctionTargets = bundle.correctionTargets,
+            correctionTargets = bundle.correctionTargets, correctionExamStopped = bundle.correctionExamStopped,
             taskHistory = bundle.taskHistory,
             taskQueue = bundle.taskQueue,
             pendingTasks = bundle.pendingTasks,
@@ -837,7 +845,7 @@ class JadeViewModel(application: Application) : AndroidViewModel(application) {
             memories = bundle.memories,
             memoryCount = bundle.memoryCount,
             corrections = bundle.corrections,
-            correctionTargets = bundle.correctionTargets,
+            correctionTargets = bundle.correctionTargets, correctionExamStopped = bundle.correctionExamStopped,
             cognitiveTrace = bundle.cognitiveTrace,
             learningCandidates = bundle.learningCandidates,
             diagnostics = bundle.diagnostics,

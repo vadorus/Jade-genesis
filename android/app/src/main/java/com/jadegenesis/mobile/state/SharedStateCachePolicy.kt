@@ -14,6 +14,7 @@ object SharedStateCachePolicy {
         "config_snapshot",
         "phone_node_snapshot",
         "memory_cursor",
+        "correction_metrics",
         "resource_lease_snapshot",
         "runtime_eval_snapshot",
         "evolution_snapshot"

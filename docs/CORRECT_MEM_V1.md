@@ -1,9 +1,9 @@
-# CORRECT-MEM V1a — retenir les corrections, issue #85
+# CORRECT-MEM V1 — retenir (V1a) et mesurer (V1b), issue #85
 
-Auteur : Codex. Relecteur : Claude. Plan validé le 24/10/2026 ; relecture du
-code initial sur PR #100 : trois corrections demandées, appliquées dans cette
-révision et soumises à une nouvelle relecture. Base produit : main
-`c3d6789517c11a9df31a34a85d9b07d7b2891e14`. Aucun essai Pixel ni fusion.
+Auteur : Codex. Relecteur : Claude. V1a #100 a été validée à `694e686`
+et fusionnée dans main `6e8a59f137b92d6a1ddab699b51dbf4ae8e02ab8`.
+V1b #101 est rebasée sur cette base ; son code attend une relecture distincte.
+Réouverture et CI autorisées le 24/10/2026. Aucun essai Pixel ni fusion V1b.
 
 ## Capture et stockage
 
@@ -16,7 +16,7 @@ Le fait juste seul (1500 caractères maximum) est un FACT/USER_CORRECTION de
 confiance 1.0. Une table privée conserve la question, la référence et la copie
 de la réponse fautive, ainsi que les propositions en attente. La confiance
 signifie « fourni explicitement », sans garantie de vérité universelle.
-La migration Room v2→v3 est additive ; le chemin v1→v2 reste conservé,
+Les migrations Room v2→v3 de V1a et v3→v4 de V1b sont additives ; le chemin v1→v2 reste conservé,
 sans réinitialisation destructive.
 
 Une question identique, un fait identique ou au moins deux termes communs
@@ -60,6 +60,20 @@ Sinon toute question liée à une correction écarterait ces anciens nœuds et
 passerait au secours local. Cet ordre est une condition de tout déploiement
 ultérieurement autorisé ; cette PR n'autorise ni n'effectue ce déploiement.
 
+Pour une installation future expressément autorisée, respecter l'ordre
+**VPS sur 8766 (ne pas toucher 8765) → PC Home → Pixel**. Chaque étape
+exige l'accord explicite d'Alexandre. Vérifier `correct_mem_v1` annoncé
+par chaque nœud avant l'étape suivante ; V1b requiert également
+`correct_mem_exam_v1` sur le VPS pour soumettre un examen.
+
+**L'APK du Pixel doit venir du workflow `stable-release`, signé avec la clé
+stable. AVANT toute installation, vérifier que son certificat est identique
+à celui de l'application déjà installée.** En cas de différence, arrêter.
+**Jamais de désinstallation**, afin de conserver `jade_memory.db`.
+Les APK debug et release non signée de la CI ne sont pas des APK à installer
+sur Jade personnelle. Aucune lecture du certificat installé, installation,
+désinstallation ou exécution de stable-release n'est autorisée ici.
+
 ## Oubli et confidentialité
 
 `oublie : <fait exact>` supprime une correspondance unique ; sinon la liste
@@ -71,6 +85,10 @@ Le transport privé distant est synchrone, sans file ni erreurs contenant
 les textes privés. Aucun contenu réel n'est publié dans les diagnostics.
 
 Le verrou commun sérialise conversation et mutations des corrections.
+L'examen ne le prend que pour les accès base : sélection, débit persistant
+du budget et enregistrement du résultat. Il ne le garde jamais pendant
+le rejeu ni pendant la lecture réseau HALT. Un verrou distinct sérialise
+uniquement les examens ; il ne bloque pas `ask()`.
 Il est **non réentrant** : une question longue retarde correction/oubli ;
 aucun appel à ask, proposeCorrection, confirmCorrection ou forgetCorrection
 ne doit être ajouté à l'intérieur de askWithCorrections, sous peine de blocage.
@@ -79,20 +97,90 @@ déjà reçue par un modèle ne peut pas être retirée rétroactivement.
 La suppression SQLite ne promet pas l'effacement forensique des pages libres
 ou des sauvegardes externes.
 
-## Découpage et validation
+## Examen nocturne V1b et HALT
 
-V1a contient uniquement la rétention. Examen nocturne, HALT lecture seule,
-compteurs et rapport #76 restent dans V1b (#101, fermée en attente), avec
-migration additive v3→v4. Le candidat initial est préservé sur
-`jade/correct-mem-v1-candidate`.
+Le Pixel orchestre le rejeu des questions d'origine depuis son stockage privé,
+dans le cycle nocturne. Aucun fait n'est synchronisé durablement individuellement.
+L'inférence utilise uniquement un VPS en ligne annonçant `correct_mem_exam_v1`,
+via un appel dédié authentifié ; `ollama_model` doit être configuré. Sans ce
+protocole ou modèle, aucun examen n'est soumis. Pas de SkillSpec, outil,
+collecte de dataset, promotion ou apprentissage des réponses d'examen.
 
-Cette révision passe au versionCode **49**, supérieur à V1a initiale 47 et
-au candidat V1b 48 ; versionName 0.1.31. V1b devra prendre un versionCode
-supérieur à 49 lors de sa reprise après V1a.
-Tests synthétiques : exclusion à un seul terme, inclusion à deux termes,
-question identique sans terme lexical, quota cinq, remplacement/oubli,
-et réponse normale du prototype conservée avant le rappel, outils inclus.
-La CI exécute les tests JVM et KSP/Room, compile les APK debug et release,
-puis vérifie version et signature. Debug est signé Android Debug ; release
-reste non signée et non debuggable, sans clé stable. Les preuves de la tête
-exacte sont publiées dans la PR. Aucun appareil ni modèle vivant testé.
+Fenêtre Europe/Paris : 00:30–06:30. Au plus dix tentatives par date, une par
+correction et par nuit, même après retry ou redémarrage. Quota et tranche de
+temps conservatrice persistés avant soumission. Budget global 15 minutes,
+tranche maximale 90 secondes, appel modèle au plus 86 secondes avec marge
+pour les contrôles. Les corrections les moins récemment examinées passent
+d'abord. Une nuit sans corrections ne contacte aucun modèle.
+
+`GET /correct-mem/status` projette `jade-halt.json` en lecture seule : absent
+→ RUNNING ; illisible, mauvais schéma ou champs manquants → HALTED. Aucun
+appel à JadeHalt.status(), aucune écriture de journal. Le Pixel exige RUNNING
+frais et valide avant chaque appel et avant d'accepter le résultat. Le serveur
+contrôle également HALT avant/après appel. État indisponible, périmé ou inconnu
+→ arrêt. Le bouton local d'arrêt d'examen est durable et coopératif, sans
+halt/rearm du VPS ; il empêche les appels suivants et invalide le résultat en cours.
+
+Le contrôle de fraîcheur compare `captured_at` du VPS à l'heure du Pixel :
+**un écart absolu > 10 secondes fait traiter le nœud comme arrêté pour
+l'examen**. Un décalage d'horloge Pixel/VPS peut provoquer cet arrêt de sécurité
+sans qu'un HALT réel soit activé ; le délai de transport contribue aussi à
+l'âge observé. Aucun halt/rearm distant n'est effectué pour corriger cet écart.
+
+Après l'appel, la correction est à nouveau vérifiée active sous le verrou
+base avant tout comptage. Si elle a été oubliée, remplacée ou bloquée par un
+conflit en attente, la réponse est jetée, sans compter de rejeu ni d'erreur
+répétée. La tentative et son budget restent débités ; l'indisponibilité est
+comptée. Attendre le verrou base consomme également le budget de l'appel.
+
+Le transport Android coupe sa connexion à l'échéance absolue. Le serveur
+rend la main à son échéance même si le modèle ignore le timeout. Un seul
+appel modèle d'examen peut rester en vol ; son créneau reste occupé jusqu'à
+sa fin, sa réponse tardive est jetée. Cela ne prouve pas l'arrêt immédiat
+du calcul Ollama. Un échec ou timeout n'est pas compté comme répétition.
+
+## Indicateur lexical et rapport #76
+
+Extraction déterministe de nombres, unités, dates et mots capitalisés du fait,
+visible dans la liste. Le mot capitalisé initial de chaque phrase est ignoré,
+sauf s'il apparaît aussi capitalisé ailleurs dans le fait ; les sigles tout
+en majuscules sont exclus de cette heuristique des noms. Ainsi « Depuis 2024,
+Jade tourne sur le VPS » produit seulement `2024` et `Jade`.
+Correspondances exactes NFC, sensibles à la casse pour
+les noms et avec frontières numériques : 12 ne vaut ni 112, ni -12, ni 12.5.
+Aucun élément extractible → non évaluable. Les mots capitalisés peuvent être
+des faux positifs et les paraphrases sont limitées. **La présence textuelle
+ne prouve ni vérité, ni cohérence, ni absence de négation.**
+
+Le snapshot partagé `correction_metrics` contient uniquement comptes et dates :
+actives, conflits, tentatives, rejoués, évaluables, reprises, indisponibilités,
+interruptions. Aucun texte, identifiant de correction ou empreinte de contenu.
+Le cache coalesce le signal ; le rapport #76 affiche le dernier snapshot,
+sa nuit, sa date et sa péremption. Pas d'addition des synchronisations ni de
+couverture hebdomadaire inventée. Taux = reprises/rejoués seulement si tous
+les rejoués sont évaluables ; sinon inconnu/partiel. Zéro rejeu reste inconnu.
+Les endpoints d'examen n'utilisent ni file de tâches ni journal de texte.
+
+**Le rejeu fournit la correction elle-même dans le contexte.** L'indicateur
+mesure lexicalement le respect d'une **correction fournie dans le contexte**,
+pas une acquisition autonome ni un apprentissage sans cette aide. Le JSON
+du rapport le précise :
+`coverage = "latest_snapshot_only_lexical_indicator_with_correction_in_context"`.
+Le libellé du rapport texte le mentionne également.
+
+## Migrations et validation
+
+V1a apporte la migration v2→v3. V1b ajoute v3→v4 : colonne lastExamAt
+initialisée à zéro et table des nuits, sans effacer faits ni corrections.
+Test SQLite synthétique de conservation d'une correction V1a durant v3→v4.
+Les corrections V1a restent présentes : pertinence à deux termes distincts
+ou question identique, et réponse normale du prototype avant son rappel.
+
+V1b : **versionCode 51 > précédente V1b 50 > main 49**, versionName 0.1.33. Candidat initial
+préservé sur `jade/correct-mem-v1-candidate` ; version V1b avant rebase
+conservée localement pour la résolution et la traçabilité.
+La CI doit exécuter les tests JVM, KSP/Room et compiler les APK debug et
+release, puis vérifier version et signature. Debug signé Android Debug ;
+release non signée et non debuggable, sans clé stable. Les preuves de la
+tête exacte sont publiées dans #101. Ces builds ne sont pas ceux d'un
+déploiement Pixel. Aucun appareil, modèle vivant ou nœud réel testé ici.

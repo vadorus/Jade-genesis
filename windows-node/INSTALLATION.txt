@@ -1,0 +1,23 @@
+JADE NODE POUR WINDOWS — INSTALLATION
+
+1. Installe et connecte Tailscale sur le PC.
+2. Double-clique sur JadeNode.exe.
+3. Accepte une seule fois la demande Windows pour la règle pare-feu.
+   Cette règle autorise uniquement JadeNodeRuntime.exe, le port Jade et les
+   adresses Tailscale 100.64.0.0/10.
+4. Dans Jade Node, clique « Copier les infos pour le Pixel ».
+5. Dans Jade sur le Pixel : Nœuds > Ajouter un nœud, puis renseigne l'adresse
+   Tailscale, le port et le jeton copiés.
+
+Jade Node s'installe dans le profil Windows de l'utilisateur et redémarre avec
+Windows. Il conserve l'identité et le jeton déjà présents dans
+%USERPROFILE%\.jade-genesis\node-agent.json.
+
+Le runtime n'écoute que sur l'interface Tailscale. Aucun port de la box Internet
+ne doit être ouvert. Ollama et FFmpeg restent des outils locaux gratuits : ils
+ne sont pas téléchargés automatiquement.
+
+Cette préversion n'est pas encore signée Authenticode. Vérifie l'empreinte du
+fichier avec JadeNode.exe.sha256 avant le premier lancement. Les mises à jour
+intégrées acceptent uniquement l'asset JadeNode.exe du dépôt officiel
+vadorus/Jade-genesis quand GitHub fournit son empreinte SHA-256.

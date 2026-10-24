@@ -14,7 +14,7 @@ class RuntimeBindAddressTest(unittest.TestCase):
         self.assertEqual("0.0.0.0", normalize_bind_address("0.0.0.0"))
 
     def test_explicit_tailscale_ipv4_is_accepted(self) -> None:
-        self.assertEqual("100.98.238.6", normalize_bind_address(" 100.98.238.6 "))
+        self.assertEqual("100.64.0.10", normalize_bind_address(" 100.64.0.10 "))
 
     def test_hostname_ipv6_and_multicast_are_rejected(self) -> None:
         for invalid in ("localhost", "::1", "224.0.0.1"):
@@ -24,10 +24,10 @@ class RuntimeBindAddressTest(unittest.TestCase):
 
     def test_installed_launcher_arguments_are_accepted_exactly(self) -> None:
         with mock.patch("sys.argv", ["JadeNodeRuntime.exe", "--node-kind", "PC",
-                                    "--bind-address", "100.98.238.6", "--channel", "stable"]):
+                                    "--bind-address", "100.64.0.10", "--channel", "stable"]):
             args = core.parse_args()
         self.assertEqual("PC", args.node_kind)
-        self.assertEqual("100.98.238.6", args.bind_address)
+        self.assertEqual("100.64.0.10", args.bind_address)
         self.assertEqual("stable", args.channel)
 
     def run_main(self, address, server):

@@ -1,0 +1,5 @@
+serial=emulator-5580
+ro.kernel.qemu=1
+airplane_mode_on=1
+routes=10.0.2.0/24 dev wlan0 proto kernel scope link src 10.0.2.16 
+10.0.2.0/24 dev eth0 proto kernel scope link src 10.0.2.15

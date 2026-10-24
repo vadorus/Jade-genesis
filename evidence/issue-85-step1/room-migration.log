@@ -1,0 +1,77 @@
+10-24 14:31:50.881  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA page_size" took 0.000 ms
+10-24 14:31:50.881  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_keys" took 0.000 ms
+10-24 14:31:50.893  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_mode" took 0.000 ms
+10-24 14:31:50.908  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_mode=TRUNCATE" took 14.000 ms
+10-24 14:31:50.922  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous" took 0.000 ms
+10-24 14:31:50.922  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit" took 0.000 ms
+10-24 14:31:50.922  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit=524288" took 0.000 ms
+10-24 14:31:50.922  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint" took 0.000 ms
+10-24 14:31:50.922  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint=100" took 0.000 ms
+10-24 14:31:50.923  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS android_metadata (locale TEXT)" took 0.000 ms
+10-24 14:31:50.937  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT locale FROM android_metadata UNION SELECT NULL ORDER BY locale DESC LIMIT 1" took 0.000 ms
+10-24 14:31:50.942  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA busy_timeout" took 0.000 ms
+10-24 14:31:50.963  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA busy_timeout = 3000" took 0.000 ms
+10-24 14:31:50.975  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_mode = WAL" took 6.000 ms
+10-24 14:31:50.977  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA page_size" took 0.000 ms
+10-24 14:31:50.977  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_keys" took 0.000 ms
+10-24 14:31:50.977  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_mode" took 0.000 ms
+10-24 14:31:50.977  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous" took 0.000 ms
+10-24 14:31:50.978  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous=NORMAL" took 0.000 ms
+10-24 14:31:50.978  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit" took 0.000 ms
+10-24 14:31:50.978  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit=524288" took 0.000 ms
+10-24 14:31:50.978  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint" took 0.000 ms
+10-24 14:31:50.978  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint=100" took 0.000 ms
+10-24 14:31:50.984  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS android_metadata (locale TEXT)" took 0.000 ms
+10-24 14:31:50.984  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT locale FROM android_metadata UNION SELECT NULL ORDER BY locale DESC LIMIT 1" took 0.000 ms
+10-24 14:31:50.986  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA page_size" took 0.000 ms
+10-24 14:31:50.986  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_keys" took 0.000 ms
+10-24 14:31:50.990  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_mode" took 0.000 ms
+10-24 14:31:50.990  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous" took 0.000 ms
+10-24 14:31:50.990  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous=NORMAL" took 0.000 ms
+10-24 14:31:50.990  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit" took 0.000 ms
+10-24 14:31:50.990  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA journal_size_limit=524288" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA wal_autocheckpoint=100" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS android_metadata (locale TEXT)" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT locale FROM android_metadata UNION SELECT NULL ORDER BY locale DESC LIMIT 1" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA synchronous = NORMAL" took 0.000 ms
+10-24 14:31:50.991  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA user_version" took 0.000 ms
+10-24 14:31:50.992  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "BEGIN EXCLUSIVE;" took 0.000 ms
+10-24 14:31:51.010  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT name FROM sqlite_master WHERE type = 'trigger'" took 0.000 ms
+10-24 14:31:51.039  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS user_corrections (id TEXT NOT NULL PRIMARY KEY, question TEXT NOT NULL, answerRef TEXT NOT NULL, wrongAnswer TEXT NOT NULL, fact TEXT NOT NULL, createdAt INTEGER NOT NULL, state TEXT NOT NULL, targets TEXT NOT NULL)" took 0.000 ms
+10-24 14:31:51.040  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "ALTER TABLE user_corrections ADD COLUMN lastExamAt INTEGER NOT NULL DEFAULT 0" took 0.000 ms
+10-24 14:31:51.040  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS correction_exam_nights (night TEXT NOT NULL PRIMARY KEY, attempts INTEGER NOT NULL, replayed INTEGER NOT NULL, evaluable INTEGER NOT NULL, repeated INTEGER NOT NULL, unavailable INTEGER NOT NULL, interrupted INTEGER NOT NULL, usedMs INTEGER NOT NULL, updatedAt INTEGER NOT NULL)" took 0.000 ms
+10-24 14:31:51.041  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA table_info(`memory_events`)" took 0.000 ms
+10-24 14:31:51.054  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`memory_events`)" took 0.000 ms
+10-24 14:31:51.054  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`memory_events`)" took 0.000 ms
+10-24 14:31:51.054  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_list(`memory_events`)" took 0.000 ms
+10-24 14:31:51.055  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_xinfo(`index_memory_events_supersededBy`)" took 0.000 ms
+10-24 14:31:51.055  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_xinfo(`index_memory_events_lastRecalledAt`)" took 0.000 ms
+10-24 14:31:51.055  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_xinfo(`index_memory_events_source`)" took 0.000 ms
+10-24 14:31:51.056  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_xinfo(`index_memory_events_type`)" took 0.000 ms
+10-24 14:31:51.056  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_xinfo(`index_memory_events_createdAt`)" took 0.000 ms
+10-24 14:31:51.056  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA table_info(`user_corrections`)" took 0.000 ms
+10-24 14:31:51.057  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`user_corrections`)" took 0.000 ms
+10-24 14:31:51.057  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`user_corrections`)" took 0.000 ms
+10-24 14:31:51.057  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_list(`user_corrections`)" took 0.000 ms
+10-24 14:31:51.058  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA table_info(`correction_exam_nights`)" took 0.000 ms
+10-24 14:31:51.058  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`correction_exam_nights`)" took 0.000 ms
+10-24 14:31:51.059  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA foreign_key_list(`correction_exam_nights`)" took 0.000 ms
+10-24 14:31:51.061  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA index_list(`correction_exam_nights`)" took 0.000 ms
+10-24 14:31:51.061  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)" took 0.000 ms
+10-24 14:31:51.062  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7ed5fdb783040d3f0c4ead4ed1cb23e6')" took 0.000 ms
+10-24 14:31:51.062  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA user_version = 4" took 0.000 ms
+10-24 14:31:51.070  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "COMMIT;" took 8.000 ms
+10-24 14:31:51.071  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'room_master_table'" took 0.000 ms
+10-24 14:31:51.071  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'room_master_table'" took 0.000 ms
+10-24 14:31:51.071  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT identity_hash FROM room_master_table WHERE id = 42 LIMIT 1" took 0.000 ms
+10-24 14:31:51.072  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA query_only" took 0.000 ms
+10-24 14:31:51.072  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA temp_store = MEMORY" took 0.000 ms
+10-24 14:31:51.072  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "PRAGMA recursive_triggers = 1" took 0.000 ms
+10-24 14:31:51.072  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "DROP TABLE IF EXISTS room_table_modification_log" took 0.000 ms
+10-24 14:31:51.073  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "CREATE TEMP TABLE IF NOT EXISTS room_table_modification_log (table_id INTEGER PRIMARY KEY, invalidated INTEGER NOT NULL DEFAULT 0)" took 0.000 ms
+10-24 14:31:51.073  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT * FROM memory_events
+10-24 14:31:51.077  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT COUNT(*) FROM memory_events" took 0.000 ms
+10-24 14:31:51.119  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT * FROM memory_events WHERE supersededBy IS NULL AND type = 'FACT'" took 0.000 ms
+10-24 14:31:51.129  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT * FROM user_corrections ORDER BY createdAt DESC, id DESC" took 0.000 ms
+10-24 14:31:51.140  5423  5453 V SQLiteTime: /data/user/0/com.jadegenesis.mobile/databases/jade_memory.db: "SELECT * FROM memory_events WHERE supersededBy IS NULL AND type = 'FACT'" took 0.000 ms

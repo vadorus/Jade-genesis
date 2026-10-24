@@ -1,0 +1,11 @@
+Emulator only: emulator-5580, ro.kernel.qemu=1
+APK46 launch: ActivityManager Status ok, process observed 4066.
+APK51 launch after install -r: ActivityManager Status ok, process observed 5423.
+Collected startup and final logcat inspected locally:
+FATAL EXCEPTION: absent.
+Room "Migration didn't properly handle": absent.
+Memory UI after migration: ORION_851 and VEGA_852 present.
+Correction UI: one active LYRA_853 correction, then zero active after Oublier.
+No physical-device commands, no remote node update.
+Dedicated emulator stopped after evidence capture.
+Extended logcat excluded from publication to avoid system metadata disclosure.

@@ -1,0 +1,14 @@
+[
+  {
+    "label": "stable46",
+    "package": "package: name='com.jadegenesis.mobile' versionCode='46' versionName='0.1.28' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'",
+    "apk_sha256": "311e5a4579d69eea8e87e98591a311e5a1cd38869393b0ee301a8897b5dbb0ea",
+    "certificate_sha256": "0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+  },
+  {
+    "label": "stable51",
+    "package": "package: name='com.jadegenesis.mobile' versionCode='51' versionName='0.1.33' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'",
+    "apk_sha256": "bb63e3889b7537e4c27c03f6f6aa834c6dc50756273851affd7d62155bd69fbc",
+    "certificate_sha256": "0b74e3f3d627ebd7f53454caf8dca65312099de702171af8bfb3a674fd484992"
+  }
+]

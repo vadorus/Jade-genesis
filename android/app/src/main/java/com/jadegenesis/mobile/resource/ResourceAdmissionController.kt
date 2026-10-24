@@ -321,7 +321,10 @@ class ResourceAdmissionController(
             }
         }
 
-        if (estimate.vramGb > 0.0 && node.gpuVramTotalGb > 0.0) {
+        if (
+            node.gpuVramTotalGb > 0.0 &&
+            (estimate.vramGb > 0.0 || request.taskKind == "brain_chat")
+        ) {
             val committedVram = leasesAfterTelemetry.sumOf { it.vramGb }
             val safeVramGb =
                 (node.gpuVramFreeGb - committedVram).coerceAtLeast(0.0)

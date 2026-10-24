@@ -122,6 +122,34 @@ class ResourceAdmissionControllerTest {
     }
 
     @Test
+    fun loadedBrainStillDefersWhenGpuIsSaturated() {
+        val decision = isolatedController().tryAcquire(
+            request = DistributedTaskRequest(
+                taskId = "loaded-brain-busy-gpu",
+                taskKind = "brain_chat",
+                payload = "bonjour",
+                requiredCapability = "brain_chat",
+                workload = TaskWorkload.HEAVY,
+                createdAt = 1L
+            ),
+            node = remoteNode(
+                gpuVramTotalGb = 8.0,
+                gpuVramFreeGb = 0.3,
+                gpuUtilizationPercent = 98.0,
+                brainReady = true,
+                brainLoaded = true,
+                capabilities = listOf("task_execution_v3", "brain_chat")
+            ),
+            budget = budget()
+        )
+
+        assertEquals(0.0, decision.estimate.vramGb, 0.0)
+        assertEquals(ResourceAdmissionAction.DEFER, decision.action)
+        assertFalse(decision.admitted)
+        assertTrue(decision.reason.contains("GPU"))
+    }
+
+    @Test
     fun unloadedBrainRequiresEnoughKnownVram() {
         val controller = isolatedController()
         val brainRequest = DistributedTaskRequest(
@@ -256,6 +284,7 @@ class ResourceAdmissionControllerTest {
         ramAvailableGb: Double = 8.0,
         gpuVramTotalGb: Double = 0.0,
         gpuVramFreeGb: Double = 0.0,
+        gpuUtilizationPercent: Double = -1.0,
         brainReady: Boolean = false,
         brainLoaded: Boolean = false,
         brainModelVramGb: Double = 0.0,
@@ -274,6 +303,7 @@ class ResourceAdmissionControllerTest {
         ramAvailableGb = ramAvailableGb,
         gpuVramTotalGb = gpuVramTotalGb,
         gpuVramFreeGb = gpuVramFreeGb,
+        gpuUtilizationPercent = gpuUtilizationPercent,
         brainReady = brainReady,
         brainLoaded = brainLoaded,
         brainModelVramGb = brainModelVramGb,
